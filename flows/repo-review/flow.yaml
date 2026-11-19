@@ -1,0 +1,35 @@
+# Flow de exemplo: revisão de um repositório (só leitura; o resultado é um rascunho para aprovação).
+version: 1
+name: repo-review
+title: Revisão de repositório (exemplo)
+description: |
+  Explora o workspace, resume a estrutura e prepara uma revisão com riscos e sugestões.
+  Mude o workspace para a pasta do repositório que quer rever.
+task: Faz a revisão do repositório para a execução {input}.
+orchestrator: {prompt_file: prompts/orchestrator.md}
+autonomy: approve
+workspace: {path: ., environment: dev}
+
+start: explorer
+
+agents:
+  explorer:
+    description: Explora o repositório e resume a estrutura, tecnologias e pontos de entrada. Usar primeiro.
+    prompt_file: prompts/explorer.md
+    tools: [workspace.read, workspace.glob, workspace.grep, artifacts.save_artifact]
+    writes:
+    - {name: 01_overview.json}
+  reviewer:
+    description: Revê o código com base no resumo e prepara a revisão (riscos, bugs prováveis, sugestões).
+    prompt_file: prompts/reviewer.md
+    tools: [workspace.read, workspace.grep, artifacts.read_artifact, artifacts.save_artifact]
+    reads: [01_overview.json]
+    writes:
+    - {name: 02_review.md, draft: true}
+
+gates:
+  approve_review: {kind: human, label: Rever e aprovar a revisão}
+
+edges:
+- {from: explorer, to: reviewer}
+- {from: reviewer, to: approve_review, when: a revisão está guardada}

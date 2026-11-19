@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Segredos e configuração desta máquina
+.env
+connections.yaml
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Execuções (artefactos, auditoria, decisões)
+runs/*
+!runs/.gitkeep
+
+# Extensões locais (código interno): só o README é público
+extensions/*
+!extensions/README.md
+
+# Flows: lixo do editor e cópias de segurança
+flows/.trash/
+*.bak
+*.tmp
+
+# Frontend
+editor/node_modules/
+src/agent_flow_studio/editor/static/
