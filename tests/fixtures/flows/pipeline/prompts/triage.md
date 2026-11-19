@@ -1,2 +1,2 @@
-Lê o pedido e extrai os factos principais. Usar primeiro.
-Guarda o resultado como indicado.
+Read the request and extract the main facts. Use first.
+Save the result as instructed.

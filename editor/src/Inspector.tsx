@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { artifactOwners, renameNode, SLUG, nodeNames } from "./model";
+import { useI18n } from "./i18n";
 import type { AgentRaw, ArtifactRaw, Catalog, Doc, FlowRaw, McpRaw, Selection } from "./types";
 
 type Update = (fn: (d: Doc) => void) => void;
@@ -23,14 +24,15 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-/** Campo que só confirma ao sair (Enter ou blur): usado para nomes, que mexem nas ligações. */
+/** Field that only commits on leave (Enter or blur): used for names, which touch the links. */
 function CommitInput({ value, onCommit, pattern }: { value: string; onCommit: (v: string) => string | null; pattern?: RegExp }) {
+  const { t } = useI18n();
   const [v, setV] = useState(value);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setV(value); setErr(null); }, [value]);
   const commit = () => {
     if (v === value) return;
-    if (pattern && !pattern.test(v)) return setErr("minúsculas, dígitos e _ (começa por letra)");
+    if (pattern && !pattern.test(v)) return setErr(t("insp.slugError"));
     const e = onCommit(v);
     setErr(e);
     if (e) setV(value);
@@ -44,9 +46,7 @@ function CommitInput({ value, onCommit, pattern }: { value: string; onCommit: (v
   );
 }
 
-const AUTONOMY: Record<string, string> = {
-  approve: "aprovar cada escrita", approve_prod: "aprovar só em produção", auto: "autónomo (sem aprovação)",
-};
+const AUTONOMY = ["approve", "approve_prod", "auto"] as const;
 
 const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
 const csv = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -58,7 +58,7 @@ const kv = (s: string, sep: string) =>
 const unkv = (o: Record<string, string> | undefined, sep: string) =>
   Object.entries(o ?? {}).map(([k, v]) => `${k}${sep}${v}`).join("\n");
 
-/** Prompt em linha ou num ficheiro prompts/*.md (editado aqui e gravado com o flow). */
+/** Inline prompt or in a prompts/*.md file (edited here and saved with the flow). */
 function PromptEditor({ owner, defaultPath, doc, update, pick }: {
   owner: { prompt?: string | null; prompt_file?: string | null };
   defaultPath: string;
@@ -66,6 +66,7 @@ function PromptEditor({ owner, defaultPath, doc, update, pick }: {
   update: Update;
   pick: (d: Doc) => { prompt?: string | null; prompt_file?: string | null };
 }) {
+  const { t } = useI18n();
   const file = owner.prompt_file ?? null;
   const text = file ? doc.prompts[file] ?? "" : owner.prompt ?? "";
   const missing = file !== null && !(file in doc.prompts);
@@ -77,7 +78,7 @@ function PromptEditor({ owner, defaultPath, doc, update, pick }: {
           if (!o.prompt_file) return;
           o.prompt = d.prompts[o.prompt_file] ?? "";
           delete o.prompt_file;
-        })}>Em linha</button>
+        })}>{t("insp.inline")}</button>
         <button className={file ? "on" : ""} onClick={() => update((d) => {
           const o = pick(d);
           if (o.prompt_file) return;
@@ -85,10 +86,10 @@ function PromptEditor({ owner, defaultPath, doc, update, pick }: {
           if (!(path in d.prompts)) d.prompts[path] = o.prompt ?? "";
           o.prompt_file = path;
           delete o.prompt;
-        })}>Ficheiro</button>
+        })}>{t("insp.file")}</button>
         {file && <code className="path">{file}</code>}
       </div>
-      {missing && <span className="field-err">ficheiro não existe; será criado ao guardar</span>}
+      {missing && <span className="field-err">{t("insp.fileMissing")}</span>}
       <textarea className="mono" rows={14} value={text} spellCheck={false}
         onChange={(e) => {
           const v = e.target.value;
@@ -105,16 +106,17 @@ function PromptEditor({ owner, defaultPath, doc, update, pick }: {
 function ToolPicker({ agent, spec, catalog, set }: {
   agent: AgentRaw; spec: FlowRaw; catalog: Catalog; set: (tools: string[]) => void;
 }) {
+  const { t } = useI18n();
   const chosen = new Set(agent.tools ?? []);
   const groups: [string, { id: string; name: string; description: string; note?: string }[]][] = [];
   for (const s of catalog.servers)
-    groups.push([s, catalog.tools.filter((t) => t.server === s).map((t) => ({
-      ...t, note: t.writes_local_only ? "escreve só em runs/<id>/" : t.kind === "write" ? "escrita" : undefined,
+    groups.push([s, catalog.tools.filter((x) => x.server === s).map((x) => ({
+      ...x, note: x.writes_local_only ? t("insp.writesRunsOnly") : x.kind === "write" ? t("insp.write") : undefined,
     }))]);
   for (const [s, m] of Object.entries(spec.mcp_servers ?? {}))
-    groups.push([`${s} (externo)`, m.tools.map((n) => ({
+    groups.push([t("insp.external", { name: s }), m.tools.map((n) => ({
       id: `${s}.${n}`, name: n, description: m.description ?? "",
-      note: !m.approved ? "MCP não aprovado" : !m.read_only ? "MCP sem read_only" : undefined,
+      note: !m.approved ? t("insp.mcpNotApproved") : !m.read_only ? t("insp.mcpNotReadOnly") : undefined,
     }))]);
   const unknown = [...chosen].filter((t) => !groups.some(([, ts]) => ts.some((x) => x.id === t)));
   const toggle = (id: string) => {
@@ -136,10 +138,10 @@ function ToolPicker({ agent, spec, catalog, set }: {
           ))}
         </details>
       ))}
-      {unknown.map((t) => (
-        <label key={t} className="check bad">
-          <input type="checkbox" checked onChange={() => toggle(t)} /> <span>{t}</span>
-          <span className="small">não existe no catálogo</span>
+      {unknown.map((id) => (
+        <label key={id} className="check bad">
+          <input type="checkbox" checked onChange={() => toggle(id)} /> <span>{id}</span>
+          <span className="small">{t("insp.notInCatalog")}</span>
         </label>
       ))}
     </div>
@@ -147,33 +149,35 @@ function ToolPicker({ agent, spec, catalog, set }: {
 }
 
 function WritesEditor({ writes, catalog, set }: { writes: ArtifactRaw[]; catalog: Catalog; set: (w: ArtifactRaw[]) => void }) {
+  const { t } = useI18n();
   const patch = (i: number, p: Partial<ArtifactRaw>) => set(writes.map((w, j) => (j === i ? { ...w, ...p } : w)));
   return (
     <div className="rows">
       {writes.map((w, i) => (
         <div key={i} className="row">
-          <input value={w.name} placeholder="01_nome.json" onChange={(e) => patch(i, { name: e.target.value })} />
+          <input value={w.name} placeholder="01_name.json" onChange={(e) => patch(i, { name: e.target.value })} />
           {w.name.endsWith(".json") && (
             <select value={w.contract ?? ""} onChange={(e) => patch(i, { contract: e.target.value || undefined })}>
-              <option value="">sem contrato</option>
+              <option value="">{t("insp.noContract")}</option>
               {Object.keys(catalog.contracts).map((c) => <option key={c}>{c}</option>)}
             </select>
           )}
           {w.name.endsWith(".md") && (
-            <label className="check inline" title="Rascunho para aprovação humana (marcado automaticamente)">
+            <label className="check inline" title={t("insp.draftTitle")}>
               <input type="checkbox" checked={!!w.draft} onChange={(e) => patch(i, { draft: e.target.checked || undefined })} />
-              rascunho
+              {t("insp.draft")}
             </label>
           )}
-          <button className="icon" title="Remover" onClick={() => set(writes.filter((_, j) => j !== i))}>×</button>
+          <button className="icon" title={t("insp.remove")} onClick={() => set(writes.filter((_, j) => j !== i))}>×</button>
         </div>
       ))}
-      <button className="small" onClick={() => set([...writes, { name: "" }])}>+ artefacto</button>
+      <button className="small" onClick={() => set([...writes, { name: "" }])}>{t("insp.addArtifact")}</button>
     </div>
   );
 }
 
 function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: string } & Omit<Props, "sel" | "remove">) {
+  const { t } = useI18n();
   const spec = doc.spec;
   const a = spec.agents[id];
   const setA = (fn: (a: AgentRaw) => void) => update((d) => fn(d.spec.agents[id]));
@@ -184,12 +188,12 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
     <>
       {testAgent && (
         <div className="row test-row">
-          <button className="small" onClick={() => testAgent(id)} title="Abre Executar no modo 'só este agente'">▶ Testar este agente</button>
-          <button className="small" onClick={() => testAgent(`until:${id}`)} title="Corre o flow passo a passo até este agente terminar">⏭ Correr até aqui</button>
+          <button className="small" onClick={() => testAgent(id)} title={t("insp.testAgentTitle")}>{t("insp.testAgent")}</button>
+          <button className="small" onClick={() => testAgent(`until:${id}`)} title={t("insp.runUntilTitle")}>{t("insp.runUntil")}</button>
         </div>)}
-      <Field label="Nome" hint="Identificador do subagente (usado na delegação)">
+      <Field label={t("insp.name")} hint={t("insp.nameHint")}>
         <CommitInput value={id} pattern={SLUG} onCommit={(v) => {
-          if (nodeNames(spec).includes(v)) return "já existe um nó com esse nome";
+          if (nodeNames(spec).includes(v)) return t("insp.nameTaken");
           update((d) => renameNode(d.spec, id, v));
           select({ kind: "node", id: v });
           return null;
@@ -198,31 +202,31 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
       <label className="check">
         <input type="checkbox" checked={spec.start === id} disabled={spec.start === id}
           onChange={() => update((d) => { d.spec.start = id; })} />
-        Início do flow
+        {t("insp.isStart")}
       </label>
-      <Field label="Descrição" hint="O orquestrador usa-a para decidir quando delegar">
+      <Field label={t("insp.description")} hint={t("insp.descriptionHint")}>
         <textarea rows={3} value={a.description} onChange={(e) => setA((x) => { x.description = e.target.value; })} />
       </Field>
-      <Field label="Prompt">
+      <Field label={t("insp.prompt")}>
         <PromptEditor owner={a} defaultPath={`prompts/${id}.md`} doc={doc} update={update}
           pick={(d) => d.spec.agents[id]} />
       </Field>
       <div className="grid2">
-        <Field label="Modelo">
-          <input list="models" value={a.model ?? ""} placeholder="o do flow"
+        <Field label={t("insp.model")}>
+          <input list="models" value={a.model ?? ""} placeholder={t("insp.modelFromFlow")}
             onChange={(e) => setA((x) => { x.model = e.target.value || undefined; })} />
         </Field>
-        <Field label="Máx. turnos">
+        <Field label={t("insp.maxTurns")}>
           <input type="number" min={1} max={200} value={a.max_turns ?? ""} placeholder="—"
             onChange={(e) => setA((x) => { x.max_turns = e.target.value ? Number(e.target.value) : undefined; })} />
         </Field>
       </div>
-      <Field label="Ferramentas" hint="Lista fechada: o hook de guarda só deixa este agente usar estas">
+      <Field label={t("insp.tools")} hint={t("insp.toolsHint")}>
         <ToolPicker agent={a} spec={spec} catalog={catalog} set={(t) => setA((x) => { x.tools = t; })} />
       </Field>
-      <Field label="Conectores" hint="Só leitura (GET). Ativar um conector dá ao agente a ferramenta connections.http_get">
+      <Field label={t("insp.connectors")} hint={t("insp.connectorsHint")}>
         <div className="tools">
-          {Object.keys(catalog.connections).length === 0 && <span className="muted small">sem conectores: cria-os no botão Conectores</span>}
+          {Object.keys(catalog.connections).length === 0 && <span className="muted small">{t("insp.noConnectors")}</span>}
           {[...new Set([...Object.keys(catalog.connections), ...(a.connections ?? [])])].map((c) => {
             const info = catalog.connections[c];
             return (
@@ -235,15 +239,15 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
                   if (s.size) tools.add("connections.http_get"); else tools.delete("connections.http_get");
                   x.tools = [...(x.tools ?? []).filter((t) => tools.has(t)), ...[...tools].filter((t) => !(x.tools ?? []).includes(t))];
                 })} />
-                <span>{c}</span><span className="muted small">{info ? `${info.type} · ${info.environment}` : "não configurado nesta máquina"}</span>
+                <span>{c}</span><span className="muted small">{info ? `${info.type} · ${info.environment}` : t("insp.notConfiguredHere")}</span>
               </label>);
           })}
         </div>
       </Field>
-      <Field label="Conectores com escrita" hint="POST/PUT/PATCH/DELETE com connections.http_write, conforme a autonomia">
+      <Field label={t("insp.writeConnectors")} hint={t("insp.writeConnectorsHint")}>
         <div className="tools">
           {Object.entries(catalog.connections).filter(([, i]) => i.access === "write").length === 0 &&
-            <span className="muted small">nenhum conector com acesso de escrita</span>}
+            <span className="muted small">{t("insp.noWriteConnectors")}</span>}
           {[...new Set([...Object.entries(catalog.connections).filter(([, i]) => i.access === "write").map(([n]) => n),
             ...(a.write_connections ?? [])])].map((c) => {
             const info = catalog.connections[c];
@@ -257,20 +261,20 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
                   if (s.size) tools.add("connections.http_write"); else tools.delete("connections.http_write");
                   x.tools = [...(x.tools ?? []).filter((t) => tools.has(t)), ...[...tools].filter((t) => !(x.tools ?? []).includes(t))];
                 })} />
-                <span>{c}</span><span className="muted small">{info ? `${info.type} · ${info.environment}` : "não configurado"}</span>
+                <span>{c}</span><span className="muted small">{info ? `${info.type} · ${info.environment}` : t("insp.notConfigured")}</span>
               </label>);
           })}
         </div>
       </Field>
-      <Field label="Autonomia nas escritas" hint="Vazio = a do flow">
+      <Field label={t("insp.agentAutonomy")} hint={t("insp.agentAutonomyHint")}>
         <select value={a.autonomy ?? ""} onChange={(e) => setA((x) => { x.autonomy = (e.target.value || undefined) as AgentRaw["autonomy"]; })}>
-          <option value="">a do flow ({AUTONOMY[spec.autonomy ?? "approve"]})</option>
-          {Object.entries(AUTONOMY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          <option value="">{t("insp.flowAutonomyOption", { value: t(`autonomy.${spec.autonomy ?? "approve"}`) })}</option>
+          {AUTONOMY.map((k) => <option key={k} value={k}>{t(`autonomy.${k}`)}</option>)}
         </select>
       </Field>
-      <Field label="Lê artefactos">
+      <Field label={t("insp.reads")}>
         <div className="tools">
-          {readable.length === 0 && <span className="muted small">nenhum outro agente escreve artefactos</span>}
+          {readable.length === 0 && <span className="muted small">{t("insp.noOtherWriters")}</span>}
           {[...readable, ...extraReads].map((r) => (
             <label key={r} className={`check${extraReads.includes(r) ? " bad" : ""}`}>
               <input type="checkbox" checked={(a.reads ?? []).includes(r)} onChange={(e) => setA((x) => {
@@ -278,15 +282,15 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
                 if (e.target.checked) s.add(r); else s.delete(r);
                 x.reads = [...readable, ...extraReads].filter((n) => s.has(n));
               })} />
-              <span>{r}</span><span className="muted small">{owners.get(r) ?? "ninguém o escreve"}</span>
+              <span>{r}</span><span className="muted small">{owners.get(r) ?? t("insp.nobodyWrites")}</span>
             </label>
           ))}
         </div>
       </Field>
-      <Field label="Escreve artefactos" hint="JSON com contrato é validado ao guardar; .md de rascunho fica marcado para aprovação">
+      <Field label={t("insp.writes")} hint={t("insp.writesHint")}>
         <WritesEditor writes={a.writes ?? []} catalog={catalog} set={(w) => setA((x) => { x.writes = w; })} />
       </Field>
-      <Field label="Skills" hint="Separadas por vírgulas (experimental)">
+      <Field label={t("insp.skills")} hint={t("insp.skillsHint")}>
         <input value={(a.skills ?? []).join(", ")} onChange={(e) => setA((x) => { x.skills = csv(e.target.value); })} />
       </Field>
     </>
@@ -294,24 +298,25 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
 }
 
 function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "sel" | "remove" | "catalog">) {
+  const { t } = useI18n();
   const g = doc.spec.gates![id];
   return (
     <>
-      <Field label="Nome">
+      <Field label={t("insp.name")}>
         <CommitInput value={id} pattern={SLUG} onCommit={(v) => {
-          if (nodeNames(doc.spec).includes(v)) return "já existe um nó com esse nome";
+          if (nodeNames(doc.spec).includes(v)) return t("insp.nameTaken");
           update((d) => renameNode(d.spec, id, v));
           select({ kind: "node", id: v });
           return null;
         }} />
       </Field>
-      <Field label="Tipo" hint="Aprovação humana: o flow pára e pode ser retomado. Paragem: termina.">
+      <Field label={t("insp.gateKind")} hint={t("insp.gateKindHint")}>
         <select value={g.kind} onChange={(e) => update((d) => { d.spec.gates![id].kind = e.target.value as "human" | "stop"; })}>
-          <option value="human">Aprovação humana</option>
-          <option value="stop">Paragem</option>
+          <option value="human">{t("node.human")}</option>
+          <option value="stop">{t("node.stop")}</option>
         </select>
       </Field>
-      <Field label="Texto mostrado">
+      <Field label={t("insp.gateLabel")}>
         <input value={g.label} onChange={(e) => update((d) => { d.spec.gates![id].label = e.target.value; })} />
       </Field>
     </>
@@ -319,12 +324,13 @@ function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "se
 }
 
 function EdgePanel({ index, doc, update }: { index: number; doc: Doc; update: Update }) {
+  const { t } = useI18n();
   const e = doc.spec.edges![index];
   if (!e) return null;
   return (
     <>
       <p className="edge-title"><code>{e.from}</code> → <code>{e.to}</code></p>
-      <Field label="Condição" hint="Em linguagem natural; vazio = segue sempre. Vai para o prompt do orquestrador.">
+      <Field label={t("insp.condition")} hint={t("insp.conditionHint")}>
         <textarea rows={3} value={e.when ?? ""} onChange={(ev) => update((d) => { d.spec.edges![index].when = ev.target.value; })} />
       </Field>
     </>
@@ -332,129 +338,131 @@ function EdgePanel({ index, doc, update }: { index: number; doc: Doc; update: Up
 }
 
 function McpEditor({ name, m, update }: { name: string; m: McpRaw; update: Update }) {
+  const { t } = useI18n();
   const set = (fn: (m: McpRaw) => void) => update((d) => fn(d.spec.mcp_servers![name]));
   const remote = m.type !== "stdio";
   return (
     <details className="mcp" open>
       <summary>
         <b>{name}</b> <span className="muted">{m.type}</span>
-        {!(m.approved && m.read_only) && <span className="badge warn">bloqueado</span>}
+        {!(m.approved && m.read_only) && <span className="badge warn">{t("insp.blocked")}</span>}
       </summary>
       <div className="grid2">
-        <Field label="Tipo">
+        <Field label={t("insp.mcpType")}>
           <select value={m.type} onChange={(e) => set((x) => { x.type = e.target.value as McpRaw["type"]; })}>
             <option>stdio</option><option>http</option><option>sse</option>
           </select>
         </Field>
-        <Field label="Descrição">
+        <Field label={t("insp.description")}>
           <input value={m.description ?? ""} onChange={(e) => set((x) => { x.description = e.target.value; })} />
         </Field>
       </div>
       {remote ? (
         <>
-          <Field label="URL (https)"><input value={m.url ?? ""} onChange={(e) => set((x) => { x.url = e.target.value; })} /></Field>
-          <Field label="Cabeçalhos" hint="Um por linha, Nome: valor. Segredos só como ${VAR}">
+          <Field label={t("insp.url")}><input value={m.url ?? ""} onChange={(e) => set((x) => { x.url = e.target.value; })} /></Field>
+          <Field label={t("insp.headers")} hint={t("insp.headersHint")}>
             <textarea className="mono" rows={2} defaultValue={unkv(m.headers, ": ")}
               onBlur={(e) => set((x) => { x.headers = kv(e.target.value, ":"); })} />
           </Field>
         </>
       ) : (
         <>
-          <Field label="Comando"><input value={m.command ?? ""} onChange={(e) => set((x) => { x.command = e.target.value; })} /></Field>
-          <Field label="Argumentos" hint="Um por linha">
+          <Field label={t("insp.command")}><input value={m.command ?? ""} onChange={(e) => set((x) => { x.command = e.target.value; })} /></Field>
+          <Field label={t("insp.args")} hint={t("insp.argsHint")}>
             <textarea className="mono" rows={2} defaultValue={(m.args ?? []).join("\n")}
               onBlur={(e) => set((x) => { x.args = lines(e.target.value); })} />
           </Field>
-          <Field label="Ambiente" hint="Um por linha, NOME=${VAR}. Os valores ficam no .env, nunca aqui">
+          <Field label={t("insp.env")} hint={t("insp.envHint")}>
             <textarea className="mono" rows={2} defaultValue={unkv(m.env, "=")}
               onBlur={(e) => set((x) => { x.env = kv(e.target.value, "="); })} />
           </Field>
         </>
       )}
-      <Field label="Ferramentas permitidas" hint="Nomes exatos, separados por vírgulas (sem *)">
+      <Field label={t("insp.allowedTools")} hint={t("insp.allowedToolsHint")}>
         <input defaultValue={m.tools.join(", ")} onBlur={(e) => set((x) => { x.tools = csv(e.target.value); })} />
       </Field>
       <label className="check"><input type="checkbox" checked={!!m.read_only}
-        onChange={(e) => set((x) => { x.read_only = e.target.checked; })} /> As ferramentas listadas só leem</label>
+        onChange={(e) => set((x) => { x.read_only = e.target.checked; })} /> {t("insp.readOnly")}</label>
       <label className="check"><input type="checkbox" checked={!!m.approved}
-        onChange={(e) => set((x) => { x.approved = e.target.checked; })} /> Aprovado para uso neste flow</label>
+        onChange={(e) => set((x) => { x.approved = e.target.checked; })} /> {t("insp.approved")}</label>
       <button className="danger small" onClick={() => update((d) => {
         delete d.spec.mcp_servers![name];
         for (const a of Object.values(d.spec.agents)) a.tools = (a.tools ?? []).filter((t) => !t.startsWith(name + "."));
-      })}>Remover MCP</button>
+      })}>{t("insp.removeMcp")}</button>
     </details>
   );
 }
 
 function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; update: Update }) {
+  const { t } = useI18n();
   const s = doc.spec;
   const [newMcp, setNewMcp] = useState("");
   const set = (fn: (s: FlowRaw) => void) => update((d) => fn(d.spec));
   const reserved = new Set(catalog.servers);
   return (
     <>
-      <Field label="Título"><input value={s.title} onChange={(e) => set((x) => { x.title = e.target.value; })} /></Field>
-      <Field label="Descrição">
+      <Field label={t("insp.title")}><input value={s.title} onChange={(e) => set((x) => { x.title = e.target.value; })} /></Field>
+      <Field label={t("insp.description")}>
         <textarea rows={3} value={s.description ?? ""} onChange={(e) => set((x) => { x.description = e.target.value; })} />
       </Field>
       <div className="grid2">
-        <Field label="Modelo"><input list="models" value={s.model ?? ""} placeholder="por defeito"
+        <Field label={t("insp.model")}><input list="models" value={s.model ?? ""} placeholder={t("insp.modelDefault")}
           onChange={(e) => set((x) => { x.model = e.target.value || undefined; })} /></Field>
-        <Field label="Máx. turnos"><input type="number" min={1} max={500} value={s.max_turns ?? 60}
+        <Field label={t("insp.maxTurns")}><input type="number" min={1} max={500} value={s.max_turns ?? 60}
           onChange={(e) => set((x) => { x.max_turns = Number(e.target.value) || undefined; })} /></Field>
       </div>
       <div className="grid2">
-        <Field label="Entrada"><input value={s.input?.label ?? "Entrada"}
+        <Field label={t("insp.input")}><input value={s.input?.label ?? t("insp.inputDefault")}
           onChange={(e) => set((x) => { x.input = { ...x.input, label: e.target.value }; })} /></Field>
-        <Field label="Padrão da entrada" hint="Regex; é também o id da pasta em runs/">
+        <Field label={t("insp.inputPattern")} hint={t("insp.inputPatternHint")}>
           <input className="mono" value={s.input?.pattern ?? "^[A-Za-z0-9_-]{1,40}$"}
             onChange={(e) => set((x) => { x.input = { ...x.input, pattern: e.target.value }; })} /></Field>
       </div>
-      <Field label="Tarefa" hint="Mensagem inicial; {input} é substituído pela entrada">
+      <Field label={t("insp.task")} hint={t("insp.taskHint")}>
         <textarea rows={3} value={s.task ?? ""} onChange={(e) => set((x) => { x.task = e.target.value; })} />
       </Field>
-      <Field label="Início">
+      <Field label={t("insp.start")}>
         <select value={s.start} onChange={(e) => set((x) => { x.start = e.target.value; })}>
           {Object.keys(s.agents).map((a) => <option key={a}>{a}</option>)}
         </select>
       </Field>
-      <Field label="Prompt do orquestrador" hint="A secção “Fluxo” é gerada a partir do grafo e acrescentada a este texto">
+      <Field label={t("insp.orchestratorPrompt")} hint={t("insp.orchestratorPromptHint")}>
         <PromptEditor owner={s.orchestrator ?? {}} defaultPath="prompts/orchestrator.md" doc={doc} update={update}
           pick={(d) => (d.spec.orchestrator = d.spec.orchestrator ?? {})} />
       </Field>
-      <h3>Escrita</h3>
-      <Field label="Autonomia" hint="Edit/Write/Bash no workspace e http_write nos conectores. Os agentes podem sobrepor.">
+      <h3>{t("insp.writing")}</h3>
+      <Field label={t("insp.autonomy")} hint={t("insp.autonomyHint")}>
         <select value={s.autonomy ?? "approve"} onChange={(e) => set((x) => { x.autonomy = e.target.value as FlowRaw["autonomy"]; })}>
-          {Object.entries(AUTONOMY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {AUTONOMY.map((k) => <option key={k} value={k}>{t(`autonomy.${k}`)}</option>)}
         </select>
       </Field>
-      {s.autonomy === "auto" && <p className="field-err">Autónomo: as escritas correm sem te perguntar (ficam no audit). O hook continua a recusar comandos perigosos e caminhos fora do workspace.</p>}
+      {s.autonomy === "auto" && <p className="field-err">{t("insp.autoWarning")}</p>}
       <label className="check">
         <input type="checkbox" checked={!!s.workspace} onChange={(e) => set((x) => {
           if (e.target.checked) x.workspace = { path: "", environment: "dev" }; else delete x.workspace;
-        })} /> Workspace (repositório onde os agentes trabalham com ficheiros, git, testes)
+        })} /> {t("insp.workspace")}
       </label>
       {s.workspace && <>
-        <Field label="Pasta" hint="Absoluta (ex.: D:\repos\app). Ferramentas workspace.* só funcionam aqui dentro.">
+        <Field label={t("insp.folder")} hint={t("insp.folderHint")}>
           <input className="mono" value={s.workspace.path} onChange={(e) => set((x) => { x.workspace = { ...x.workspace!, path: e.target.value }; })} />
         </Field>
         <div className="grid2">
-          <Field label="Ambiente">
+          <Field label={t("insp.environment")}>
             <select value={s.workspace.environment ?? "dev"} onChange={(e) => set((x) => { x.workspace = { ...x.workspace!, environment: e.target.value as "dev" }; })}>
               <option>dev</option><option>staging</option><option>prod</option>
             </select>
           </Field>
-          <Field label="Branches protegidas" hint="Sem push direto">
+          <Field label={t("insp.protectedBranches")} hint={t("insp.protectedBranchesHint")}>
             <input value={(s.workspace.protected_branches ?? ["main", "master"]).join(", ")}
               onChange={(e) => set((x) => { x.workspace = { ...x.workspace!, protected_branches: csv(e.target.value) }; })} />
           </Field>
         </div>
       </>}
-      <h3>MCPs externos</h3>
-      <p className="muted small">Só ficam disponíveis com aprovação, só leitura e lista fechada de ferramentas.</p>
+      <h3>{t("insp.externalMcps")}</h3>
+      <p className="muted small">{t("insp.externalMcpsHint")}</p>
       {Object.entries(s.mcp_servers ?? {}).map(([n, m]) => <McpEditor key={n} name={n} m={m} update={update} />)}
       <div className="row">
-        <input placeholder="nome_do_servidor" value={newMcp} onChange={(e) => setNewMcp(e.target.value)} />
+        <input placeholder={t("insp.serverName")} value={newMcp} onChange={(e) => setNewMcp(e.target.value)} />
         <button className="small" disabled={!SLUG.test(newMcp) || reserved.has(newMcp) || newMcp in (s.mcp_servers ?? {})}
           onClick={() => { set((x) => { x.mcp_servers = { ...x.mcp_servers, [newMcp]: { type: "stdio", command: "", tools: [] } }; }); setNewMcp(""); }}>
           + MCP</button>
@@ -464,16 +472,17 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
 }
 
 export function Inspector(p: Props) {
+  const { t } = useI18n();
   const { doc, sel } = p;
-  let title = "Flow", body: ReactNode = <FlowPanel doc={doc} catalog={p.catalog} update={p.update} />;
+  let title = t("insp.flow"), body: ReactNode = <FlowPanel doc={doc} catalog={p.catalog} update={p.update} />;
   if (sel?.kind === "node" && sel.id in doc.spec.agents) {
-    title = "Agente";
+    title = t("insp.agent");
     body = <AgentPanel key={sel.id} id={sel.id} {...p} />;
   } else if (sel?.kind === "node" && sel.id in (doc.spec.gates ?? {})) {
-    title = "Gate";
+    title = t("insp.gate");
     body = <GatePanel key={sel.id} id={sel.id} {...p} />;
   } else if (sel?.kind === "edge" && doc.spec.edges?.[sel.index]) {
-    title = "Ligação";
+    title = t("insp.edge");
     body = <EdgePanel index={sel.index} doc={doc} update={p.update} />;
   }
   return (
@@ -481,10 +490,10 @@ export function Inspector(p: Props) {
       <div className="panel-head">
         <h2>{title}</h2>
         {sel && <>
-          <button className="small" onClick={() => p.select(null)}>Flow</button>
+          <button className="small" onClick={() => p.select(null)}>{t("insp.flow")}</button>
           <button className="danger small" disabled={sel.kind === "node" && sel.id === doc.spec.start}
-            title={sel.kind === "node" && sel.id === doc.spec.start ? "Muda o início antes de apagar" : "Apagar (Delete)"}
-            onClick={() => p.remove(sel)}>Apagar</button>
+            title={sel.kind === "node" && sel.id === doc.spec.start ? t("insp.changeStartFirst") : t("insp.deleteTitle")}
+            onClick={() => p.remove(sel)}>{t("insp.delete")}</button>
         </>}
       </div>
       <div className="panel-body">{body}</div>

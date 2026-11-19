@@ -1,4 +1,4 @@
-"""Escrita de flow.yaml legível: chaves pela ordem do formato, listas/dicts curtos em linha."""
+"""Readable flow.yaml output: keys in format order, short lists/dicts inline."""
 from __future__ import annotations
 
 from typing import Any
@@ -9,7 +9,7 @@ from ..builder.spec import FlowSpec
 
 _HEADER = (
     "# Flow: {title}\n"
-    "# Editável à mão ou no editor visual. Validar com:  agent-flow-studio-flows validate {name}\n"
+    "# Edit by hand or in the visual editor. Check with: agent-flow-studio-flows validate {name}\n"
 )
 
 
@@ -43,7 +43,7 @@ def _repr_str(d: _Dumper, s: str) -> yaml.Node:
 
 
 class _Block(dict):
-    """Mapa de topo: sempre em bloco."""
+    """Top-level mapping: always in block style."""
 
 
 _Dumper.add_representer(_Block, lambda d, data: d.represent_mapping(
@@ -54,7 +54,7 @@ _Dumper.add_representer(str, _repr_str)
 
 
 def spec_to_data(spec: FlowSpec) -> dict[str, Any]:
-    """Forma mínima (sem valores por defeito), com `version` sempre presente."""
+    """Minimal form (no default values), with `version` always present."""
     data = spec.model_dump(mode="json", by_alias=True, exclude_defaults=True)
     data = {"version": spec.version, **data}
     if "layout" in data:
@@ -66,7 +66,7 @@ def spec_to_data(spec: FlowSpec) -> dict[str, Any]:
 def dump_flow(spec: FlowSpec) -> str:
     data = spec_to_data(spec)
     parts = [_HEADER.format(title=spec.title.replace("\n", " "), name=spec.name)]
-    # blocos de topo separados por uma linha em branco, para leitura e diffs
+    # top-level blocks separated by a blank line, for reading and diffs
     for key, value in data.items():
         chunk = yaml.dump(_Block({key: value}), Dumper=_Dumper, allow_unicode=True, sort_keys=False,
                           width=100)

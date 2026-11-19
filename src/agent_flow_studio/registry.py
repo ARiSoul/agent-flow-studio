@@ -1,4 +1,4 @@
-"""Monta os servidores MCP em processo (núcleo + extensões) e a lista de ferramentas."""
+"""Builds the in-process MCP servers (core + extensions) and the list of tools."""
 from claude_agent_sdk import create_sdk_mcp_server
 
 from .extensions import LOADED
@@ -17,7 +17,7 @@ MCP_SERVERS = {
 
 
 def t(server: str, tool_name: str) -> str:
-    """Nome completo da ferramenta, como o SDK a expõe."""
+    """Full tool name, as the SDK exposes it."""
     return f"mcp__{server}__{tool_name}"
 
 

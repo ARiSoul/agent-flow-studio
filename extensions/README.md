@@ -1,22 +1,23 @@
-# Extensões locais
+# Local extensions
 
-Cada subpasta com `__init__.py` é carregada no arranque (`AFS_EXTENSIONS_DIR` muda a pasta;
-`AFS_NO_EXTENSIONS=1` desliga). O conteúdo desta pasta **não vai para o git** (só este README):
-serve para ferramentas e regras internas de uma empresa ou cliente.
+Each subfolder with an `__init__.py` is loaded at startup (`AFS_EXTENSIONS_DIR` changes the folder;
+`AFS_NO_EXTENSIONS=1` turns them off). The contents of this folder **do not go into git** (only this
+README): it holds the internal tools and rules of a company or client.
 
-Um pacote de extensão pode expor:
+An extension package can expose:
 
 ```python
-# extensions/minha_empresa/__init__.py
+# extensions/my_company/__init__.py
 from pydantic import TypeAdapter
-from .tools import crm            # ferramentas @tool do claude_agent_sdk
+from .tools import crm            # @tool tools from claude_agent_sdk
 from . import models
 
-TOOL_GROUPS = {"crm": [crm.get_customer]}             # "servidor" -> ferramentas (ids "crm.get_customer")
-CONTRACTS = {"Customer": TypeAdapter(models.Customer)}  # contratos para artefactos JSON
-REPORTS = {"o-meu-flow": lambda run_id: ...}            # relatório opcional no fim de uma execução (CLI)
+TOOL_GROUPS = {"crm": [crm.get_customer]}             # "server" -> tools (ids "crm.get_customer")
+CONTRACTS = {"Customer": TypeAdapter(models.Customer)}  # contracts for JSON artifacts
+REPORTS = {"my-flow": lambda run_id: ...}               # optional report at the end of a run (CLI)
 ```
 
-Regras: nomes de servidores não podem colidir com os do núcleo (`artifacts`, `connections`,
-`flow_control`, `workspace`) nem entre extensões; ferramentas devolvem `ok(...)`/`err(...)` de
-`agent_flow_studio.tools.common`; testes em `extensions/<nome>/tests/` (o `pytest` da raiz apanha-os).
+Rules: server names must not collide with the core ones (`artifacts`, `connections`,
+`flow_control`, `workspace`) or between extensions; tools return `ok(...)`/`err(...)` from
+`agent_flow_studio.tools.common`; tests go in `extensions/<name>/tests/` (the root `pytest` picks
+them up).

@@ -1,5 +1,5 @@
-"""Testar enquanto se monta: passo a passo, até um agente e agente isolado (SDK falso que passa
-as delegações pelo hook real, como o CLI faz)."""
+"""Test while building: step by step, until an agent and isolated agent (fake SDK that passes
+the delegations through the real hook, as the CLI does)."""
 import asyncio
 import shutil
 from dataclasses import replace
@@ -35,7 +35,7 @@ def env(tmp_path: Path, monkeypatch):
 
 
 def make_query(state: dict):
-    """Orquestrador falso: tenta delegar nos agentes que faltam, pela ordem, até ser travado."""
+    """Fake orchestrator: tries to delegate to the missing agents, in order, until it is blocked."""
     state.setdefault("calls", [])
 
     async def q(prompt, options):
@@ -78,7 +78,7 @@ def test_step_mode_pauses_after_each_agent(env):
         await wait(r)
         assert r.status == "paused" and r.done_agents == {"triage"}
         assert any(e["type"] == "agent_blocked" and e["agent"] == "identity" for e in r.events)
-        assert "passo a passo" in st["calls"][0]["prompt"]
+        assert "Step-by-step test mode" in st["calls"][0]["prompt"]
         rn.continue_(r.id, "step")
         await wait(r)
         assert r.status == "paused" and r.done_agents == {"triage", "identity"}
@@ -88,7 +88,7 @@ def test_step_mode_pauses_after_each_agent(env):
 
     r = asyncio.run(scenario())
     assert r.status == "done" and r.done_agents == set(ORDER)
-    assert all(c["prompt"].startswith("Continua o flow") for c in st["calls"][1:])
+    assert all(c["prompt"].startswith("Continue the flow") for c in st["calls"][1:])
 
 
 def test_until_agent_runs_steps_automatically(env):
@@ -102,9 +102,9 @@ def test_until_agent_runs_steps_automatically(env):
 
     r = asyncio.run(scenario())
     assert r.status == "paused" and r.done_agents == {"triage", "identity", "current_state"}
-    assert len(st["calls"]) == 3  # um segmento por agente
+    assert len(st["calls"]) == 3  # one segment per agent
     with pytest.raises(RunError):
-        rn.decide(r.id, "approve", "")  # pausa não é um gate
+        rn.decide(r.id, "approve", "")  # a pause is not a gate
 
 
 def test_agent_mode_runs_only_target(env):
@@ -113,27 +113,27 @@ def test_agent_mode_runs_only_target(env):
 
     async def scenario():
         r = rn.start("pipeline", "INC3", mode="agent", target="diagnostician",
-                     instruction="Diagnostica com o que houver.")
+                     instruction="Diagnose with what there is.")
         await wait(r)
         return r
 
     r = asyncio.run(scenario())
     call = st["calls"][0]
-    assert call["agents"] == ["diagnostician"] and "orquestrador de TESTE" in call["system"]
-    assert call["prompt"] == "Diagnostica com o que houver."
+    assert call["agents"] == ["diagnostician"] and "TEST orchestrator" in call["system"]
+    assert call["prompt"] == "Diagnose with what there is."
     assert r.done_agents == {"diagnostician"} and r.status == "done"
 
 
 def test_bad_target_and_continue_rules(env):
     rn = Runner(env / "flows", make_query({}))
     with pytest.raises(RunError):
-        rn.start("pipeline", "INC4", mode="until", target="fantasma")
+        rn.start("pipeline", "INC4", mode="until", target="ghost")
 
     async def scenario():
-        r = rn.start("pipeline", "INC5")  # completo
+        r = rn.start("pipeline", "INC5")  # full
         await wait(r)
         with pytest.raises(RunError):
-            rn.continue_(r.id, "step")  # não está em pausa
+            rn.continue_(r.id, "step")  # not paused
         return r
 
     assert asyncio.run(scenario()).status == "done"

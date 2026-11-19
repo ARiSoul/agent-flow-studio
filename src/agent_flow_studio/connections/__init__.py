@@ -1,1 +1,1 @@
-"""Conectores configuráveis (Azure, Azure DevOps, GitHub, APIs HTTP) — perfis em connections.yaml."""
+"""Configurable connectors (Azure, Azure DevOps, GitHub, HTTP APIs) from connections.yaml."""

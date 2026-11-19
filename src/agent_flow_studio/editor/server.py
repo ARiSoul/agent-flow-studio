@@ -1,9 +1,9 @@
-"""agent-flow-studio-editor: editor visual local de flows (FastAPI + canvas React Flow).
+"""agent-flow-studio-editor: local visual flow editor (FastAPI + React Flow canvas).
 
-Só edita ficheiros em flows/<nome>/ (flow.yaml e prompts/*.md). Não executa flows, não lê `.env`
-e nunca expande `${VAR}`: os segredos continuam fora dos flows. Escuta em 127.0.0.1 por defeito,
-aceita só Hosts locais e exige o cabeçalho X-Flow-Editor nos pedidos que alteram ficheiros
-(um site externo no browser não o consegue enviar sem preflight CORS, que aqui não é aceite).
+It only edits files in flows/<name>/ (flow.yaml and prompts/*.md). It does not read `.env` and
+never expands `${VAR}`: secrets stay out of the flows. It listens on 127.0.0.1 by default, accepts
+only local Hosts and requires the X-Flow-Editor header on requests that change files (an external
+site in the browser cannot send it without a CORS preflight, which is not accepted here).
 """
 from __future__ import annotations
 
@@ -54,6 +54,7 @@ class AssistBody(BaseModel):
     spec: dict[str, Any]
     prompts: dict[str, str] = Field(default_factory=dict)
     session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9-]{1,80}$")
+    lang: str | None = Field(default=None, max_length=10)  # "pt" | "en" | "es"; else English
 
 
 class RunBody(BaseModel):
@@ -79,8 +80,8 @@ class ApprovalBody(BaseModel):
 
 
 class SecretBody(BaseModel):
-    value: str | None = Field(default=None, min_length=1, max_length=10_000)  # vai para o keyring
-    env: str | None = Field(default=None, pattern=r"^[A-Z_][A-Z0-9_]*$")  # ou ${VAR}
+    value: str | None = Field(default=None, min_length=1, max_length=10_000)  # goes to the keyring
+    env: str | None = Field(default=None, pattern=r"^[A-Z_][A-Z0-9_]*$")  # or ${VAR}
 
 
 class NewFlow(BaseModel):
@@ -91,24 +92,24 @@ class NewFlow(BaseModel):
 
 def _blank(name: str, title: str) -> dict[str, Any]:
     return {
-        "version": 1, "name": name, "title": title, "task": "Executa o flow para {input}.",
-        "start": "primeiro",
-        "agents": {"primeiro": {"description": "Primeiro passo do flow.",
-                                "prompt": "Descreve aqui o que este agente faz.",
-                                "tools": ["artifacts.read_artifact"]}},
-        "gates": {"fim": {"kind": "human", "label": "Revisão humana"}},
-        "edges": [{"from": "primeiro", "to": "fim", "when": "terminou"}],
-        "layout": {"primeiro": {"x": 0, "y": 0}, "fim": {"x": 0, "y": 160}},
+        "version": 1, "name": name, "title": title, "task": "Run the flow for {input}.",
+        "start": "first",
+        "agents": {"first": {"description": "First step of the flow.",
+                             "prompt": "Describe here what this agent does.",
+                             "tools": ["artifacts.read_artifact"]}},
+        "gates": {"end": {"kind": "human", "label": "Human review"}},
+        "edges": [{"from": "first", "to": "end", "when": "finished"}],
+        "layout": {"first": {"x": 0, "y": 0}, "end": {"x": 0, "y": 160}},
     }
 
 
-# --- ficheiros -----------------------------------------------------------------------------------
+# --- files ---------------------------------------------------------------------------------------
 def _flow_dir(base: Path, name: str, must_exist: bool = True) -> Path:
     if not FLOW_NAME.fullmatch(name):
-        raise HTTPException(400, "nome de flow inválido")
+        raise HTTPException(400, "invalid flow name")
     d = base / name
     if must_exist and not (d / "flow.yaml").is_file():
-        raise HTTPException(404, f"flow {name!r} não existe")
+        raise HTTPException(404, f"flow {name!r} does not exist")
     return d
 
 
@@ -123,21 +124,21 @@ def _disk_prompts(d: Path) -> dict[str, str]:
 def _check_prompts(prompts: dict[str, str]) -> None:
     for k, v in prompts.items():
         if not PROMPT_PATH.fullmatch(k):
-            raise HTTPException(400, f"caminho de prompt inválido: {k!r} (use prompts/<nome>.md)")
+            raise HTTPException(400, f"invalid prompt path: {k!r} (use prompts/<name>.md)")
         if len(v) > MAX_PROMPT:
-            raise HTTPException(400, f"{k}: prompt demasiado longo")
+            raise HTTPException(400, f"{k}: prompt too long")
 
 
-# --- aplicação -----------------------------------------------------------------------------------
+# --- application --------------------------------------------------------------------------------
 def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None) -> FastAPI:
     base = (base or flows_dir()).resolve()
-    app = FastAPI(title="Editor de flows", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Flow editor", docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware,
                        allowed_hosts=allowed_hosts or ["localhost", "127.0.0.1"])
 
     def csrf(request: Request) -> None:
         if request.headers.get(CSRF_HEADER) != "1":
-            raise HTTPException(403, "pedido sem cabeçalho X-Flow-Editor")
+            raise HTTPException(403, "request without the X-Flow-Editor header")
 
     @app.middleware("http")
     async def headers(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -181,10 +182,10 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
 
     def _conn_name(name: str) -> str:
         if not CONN_SLUG.fullmatch(name):
-            raise HTTPException(400, "nome de conector inválido")
+            raise HTTPException(400, "invalid connector name")
         return name
 
-    # --- conectores ---------------------------------------------------------------------------
+    # --- connectors ---------------------------------------------------------------------------
     @app.get("/api/connections")
     def connections() -> dict[str, Any]:
         conns = _conns()
@@ -197,7 +198,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         conns = _conns()
         old = conns.get(_conn_name(name))
         body.pop("secret", None)
-        if old:  # as referências aos segredos não vêm da UI: mantêm-se
+        if old:  # secret references do not come from the UI: keep them
             body["secrets"] = dict(old.secrets)
         else:
             body["secrets"] = {}
@@ -213,12 +214,12 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         conns = _conns()
         c = conns.get(_conn_name(name))
         if c is None:
-            raise HTTPException(404, "conector não existe")
+            raise HTTPException(404, "connector does not exist")
         field = c.secret_field
         if field is None:
-            raise HTTPException(400, "este método de autenticação não usa segredo")
+            raise HTTPException(400, "this authentication method does not use a secret")
         if bool(body.value) == bool(body.env):
-            raise HTTPException(400, "indica 'value' (guardado no keyring) ou 'env'")
+            raise HTTPException(400, "give 'value' (stored in the keyring) or 'env'")
         if body.value:
             conn_store.set_secret(name, field, body.value)
             ref = "keyring"
@@ -233,7 +234,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         conns = _conns()
         c = conns.pop(_conn_name(name), None)
         if c is None:
-            raise HTTPException(404, "conector não existe")
+            raise HTTPException(404, "connector does not exist")
         conn_store.delete_secrets(name, c)
         conn_store.save(conns)
         return {"deleted": name}
@@ -266,9 +267,9 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         try:
             raw = yaml.safe_load((d / "flow.yaml").read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as e:
-            raise HTTPException(422, f"flow.yaml não é YAML válido: {e}") from e
+            raise HTTPException(422, f"flow.yaml is not valid YAML: {e}") from e
         if not isinstance(raw, dict):
-            raise HTTPException(422, "flow.yaml tem de ser um mapa")
+            raise HTTPException(422, "flow.yaml must be a mapping")
         prompts = _disk_prompts(d)
         return {"spec": raw, "prompts": prompts, **_public(_validate(raw, prompts))}
 
@@ -283,7 +284,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         d = _flow_dir(base, name)
         _check_prompts(body.prompts)
         if body.spec.get("name") != name:
-            raise HTTPException(400, "o nome do flow não pode mudar (duplica para renomear)")
+            raise HTTPException(400, "the flow name cannot change (duplicate it to rename)")
         disk = _disk_prompts(d)
         result = _validate(body.spec, {**disk, **body.prompts})
         if not result["ok"]:
@@ -299,19 +300,19 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
 
     @app.post("/api/assist", dependencies=[Depends(csrf)])
     def assist(body: AssistBody) -> StreamingResponse:
-        """Chat com o assistente: devolve eventos NDJSON; nunca grava (o editor aplica o rascunho)."""
+        """Assistant chat: returns NDJSON events; never saves (the editor applies the draft)."""
         d = _flow_dir(base, body.flow)
         _check_prompts(body.prompts)
         prompts = {**_disk_prompts(d), **body.prompts}
 
         async def events():  # type: ignore[no-untyped-def]
             async for ev in assistant.chat(body.message, body.flow, body.spec, prompts,
-                                           body.session_id):
+                                           body.session_id, lang=body.lang):
                 yield assistant.encode(ev)
 
         return StreamingResponse(events(), media_type="application/x-ndjson")
 
-    # --- execuções (fase 3) -----------------------------------------------------------------
+    # --- runs -----------------------------------------------------------------------------
     runner = Runner(base)
     app.state.runner = runner
 
@@ -376,13 +377,13 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         except FileNotFoundError as e:
-            raise HTTPException(404, "artefacto não existe") from e
+            raise HTTPException(404, "artifact does not exist") from e
 
     @app.post("/api/flows", dependencies=[Depends(csrf)], status_code=201)
     def create(body: NewFlow) -> dict[str, Any]:
         d = _flow_dir(base, body.name, must_exist=False)
         if d.exists():
-            raise HTTPException(409, f"já existe um flow {body.name!r}")
+            raise HTTPException(409, f"a flow {body.name!r} already exists")
         if body.copy_from:
             src = _flow_dir(base, body.copy_from)
             shutil.copytree(src, d, ignore=shutil.ignore_patterns("*.bak", "*.tmp"))
@@ -404,7 +405,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         trash = base / ".trash"
         trash.mkdir(exist_ok=True)
         dest = trash / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.move(str(d), dest)  # recuperável: nada é apagado em definitivo
+        shutil.move(str(d), dest)  # recoverable: nothing is deleted for good
         return {"trashed": str(dest.relative_to(base))}
 
     if (STATIC / "index.html").is_file():
@@ -412,8 +413,8 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     else:
         @app.get("/", response_class=HTMLResponse)
         def no_build() -> str:
-            return ("<h1>Editor por compilar</h1><p>Corre <code>npm install && npm run build</code>"
-                    " na pasta <code>editor/</code>.</p>")
+            return ("<h1>Editor not built</h1><p>Run <code>npm install && npm run build</code>"
+                    " in the <code>editor/</code> folder.</p>")
 
     return app
 
@@ -422,7 +423,7 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="agent-flow-studio-editor")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
-    p.add_argument("--flows", type=Path, help="pasta dos flows (por defeito FLOWS_DIR ou flows/)")
+    p.add_argument("--flows", type=Path, help="flows folder (default: FLOWS_DIR or flows/)")
     p.add_argument("--no-browser", action="store_true")
     a = p.parse_args()
     import uvicorn
@@ -431,7 +432,7 @@ def main() -> None:
     base = (a.flows or flows_dir()).resolve()
     app = create_app(base, allowed_hosts=hosts)
     url = f"http://127.0.0.1:{a.port}/"
-    print(f"Editor de flows em {url}  (flows: {base})")
+    print(f"Flow editor at {url}  (flows: {base})")
     if not a.no_browser:
         webbrowser.open(url)
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")

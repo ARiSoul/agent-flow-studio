@@ -1,10 +1,10 @@
-"""Assistente de construção de flows (chat no editor).
+"""Flow-building assistant (chat in the editor).
 
-O modelo só tem as ferramentas `flow_builder`, que alteram um **rascunho em memória** do flow aberto
-(nunca o disco). O editor recebe o rascunho no fim de cada mensagem; a pessoa revê e grava.
-Mesma rede de segurança do runtime: sem ferramentas nativas, `dontAsk`, `setting_sources=[]` e
-hook com lista fechada. O assistente não aprova MCPs externos: qualquer MCP que crie ou altere
-fica com `approved: false` e `read_only: false` até a pessoa os marcar no painel.
+The model only has the `flow_builder` tools, which change an **in-memory draft** of the open flow
+(never the disk). The editor receives the draft at the end of each message; the user reviews and
+saves it. Same safety net as the runtime: no built-in tools, `dontAsk`, `setting_sources=[]` and a
+hook with a closed list. The assistant does not approve external MCPs: any MCP it creates or changes
+gets `approved: false` and `read_only: false` until the user ticks them in the panel.
 """
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ SERVER = "flow_builder"
 PROMPT = (Path(__file__).parent / "assistant.md").read_text(encoding="utf-8")
 SLUG = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 MAX_TURNS = 40
+LANGS = {"pt": "European Portuguese (pt-PT)", "en": "English", "es": "Spanish"}
+DEFAULT_LANG = "en"
 
 _STR = {"type": "string"}
 _STRS = {"type": "array", "items": _STR}
@@ -53,8 +55,8 @@ def _contract_fields(name: str) -> dict[str, Any]:
     if s.get("type") == "array":
         ref = s["items"].get("$ref", "").rsplit("/", 1)[-1]
         s = s.get("$defs", {}).get(ref, s["items"])
-        return {"lista_de": sorted(s.get("properties", {}))}
-    return {"campos": sorted(s.get("properties", {}))}
+        return {"list_of": sorted(s.get("properties", {}))}
+    return {"fields": sorted(s.get("properties", {}))}
 
 
 def _connections_info() -> dict[str, Any]:
@@ -64,31 +66,31 @@ def _connections_info() -> dict[str, Any]:
         return {n: f"{c.type} · {c.environment} · {c.description}".strip(" ·")
                 for n, c in store.load().items()}
     except store.ConnectorConfigError as e:
-        return {"erro": str(e)}
+        return {"error": str(e)}
 
 
 class Draft:
-    """Rascunho do flow ({spec, prompts}) e as ferramentas que o alteram."""
+    """Flow draft ({spec, prompts}) and the tools that change it."""
 
     def __init__(self, spec: dict[str, Any], prompts: dict[str, str]):
         self.spec = copy.deepcopy(spec)
         self.prompts = dict(prompts)
         self.changed = False
 
-    # --- utilitários
+    # --- helpers
     def doc(self) -> dict[str, Any]:
         return {"spec": self.spec, "prompts": self.prompts}
 
     def validation(self) -> dict[str, Any]:
         r = _validate(self.spec, self.prompts)
-        return {"ok": r["ok"], "errors": r["errors"], "fluxo": r.get("fluxo"),
+        return {"ok": r["ok"], "errors": r["errors"], "flow_section": r.get("flow_section"),
                 "allowed_tools": r.get("allowed_tools")}
 
     def _summary(self, what: str) -> dict:
         self.changed = True
         v = self.validation()
-        state = "flow válido" if v["ok"] else "problemas: " + "; ".join(e["msg"] for e in v["errors"])
-        return ok(f"{what}. Estado: {state}")
+        state = "flow valid" if v["ok"] else "problems: " + "; ".join(e["msg"] for e in v["errors"])
+        return ok(f"{what}. State: {state}")
 
     def _nodes(self) -> set[str]:
         return set(self.spec.get("agents") or {}) | set(self.spec.get("gates") or {})
@@ -96,47 +98,47 @@ class Draft:
     def _edges(self) -> list[dict[str, Any]]:
         return self.spec.setdefault("edges", [])
 
-    # --- ferramentas
+    # --- tools
     def tools(self) -> list[Any]:
         d = self
 
-        @tool("ver_flow", "Mostra o flow aberto (rascunho atual) e os problemas de validação.",
+        @tool("view_flow", "Shows the open flow (current draft) and its validation problems.",
               _schema({}))
-        async def ver_flow(_: dict) -> dict:
+        async def view_flow(_: dict) -> dict:
             v = d.validation()
-            return ok({"flow": d.spec, "ficheiros_de_prompt": sorted(d.prompts),
-                       "valido": v["ok"], "problemas": [e["msg"] for e in v["errors"]]})
+            return ok({"flow": d.spec, "prompt_files": sorted(d.prompts),
+                       "valid": v["ok"], "problems": [e["msg"] for e in v["errors"]]})
 
-        @tool("ver_catalogo", "Ferramentas internas, contratos (com campos) e modelos disponíveis.",
+        @tool("view_catalog", "Built-in tools, contracts (with fields) and available models.",
               _schema({}))
-        async def ver_catalogo(_: dict) -> dict:
+        async def view_catalog(_: dict) -> dict:
             return ok({
-                "ferramentas": {t.id: t.description for t in BUILTIN_TOOLS.values()},
-                "contratos": {c: _contract_fields(c) for c in CONTRACTS},
-                "modelos": ["inherit", "sonnet", "opus", "haiku"],
-                "conectores_configurados": _connections_info(),
-                "mcps_externos_do_flow": {n: m.get("tools", [])
-                                          for n, m in (d.spec.get("mcp_servers") or {}).items()},
+                "tools": {t.id: t.description for t in BUILTIN_TOOLS.values()},
+                "contracts": {c: _contract_fields(c) for c in CONTRACTS},
+                "models": ["inherit", "sonnet", "opus", "haiku"],
+                "configured_connections": _connections_info(),
+                "flow_external_mcps": {n: m.get("tools", [])
+                                       for n, m in (d.spec.get("mcp_servers") or {}).items()},
             })
 
-        @tool("ver_prompt", "Lê o prompt de um agente ou do orquestrador (node='orchestrator').",
+        @tool("view_prompt", "Reads an agent's prompt or the orchestrator's (node='orchestrator').",
               _schema({"node": _STR}, ["node"]))
-        async def ver_prompt(a: dict) -> dict:
+        async def view_prompt(a: dict) -> dict:
             owner = (d.spec.get("orchestrator") or {}) if a["node"] == "orchestrator" \
                 else (d.spec.get("agents") or {}).get(a["node"])
             if owner is None:
-                return err(f"agente {a['node']!r} não existe")
+                return err(f"agent {a['node']!r} does not exist")
             if owner.get("prompt_file"):
-                return ok(d.prompts.get(owner["prompt_file"], "(ficheiro vazio)"))
-            return ok(owner.get("prompt") or "(sem prompt)")
+                return ok(d.prompts.get(owner["prompt_file"], "(empty file)"))
+            return ok(owner.get("prompt") or "(no prompt)")
 
-        @tool("alterar_flow", "Altera campos gerais do flow: title, description, model, max_turns, "
-              "task (tem de conter {input}), input_label, input_pattern, start.",
+        @tool("update_flow", "Changes general flow fields: title, description, model, max_turns, "
+              "task (must contain {input}), input_label, input_pattern, start.",
               _schema({"title": _STR, "description": _STR, "model": _STR,
                        "max_turns": {"type": "integer"}, "task": _STR, "input_label": _STR,
                        "input_pattern": _STR, "start": _STR,
                        "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}}))
-        async def alterar_flow(a: dict) -> dict:
+        async def update_flow(a: dict) -> dict:
             for k in ("title", "description", "model", "max_turns", "task", "start", "autonomy"):
                 if k in a:
                     d.spec[k] = a[k]
@@ -146,41 +148,41 @@ class Draft:
                     inp["label"] = a["input_label"]
                 if "input_pattern" in a:
                     inp["pattern"] = a["input_pattern"]
-            return d._summary("Flow atualizado")
+            return d._summary("Flow updated")
 
-        @tool("definir_agente",
-              "Cria ou atualiza um agente. Só os campos indicados mudam. tools: ids do catálogo "
-              "('servidor.ferramenta'); writes: [{name, contract?, draft?}]; reads: nomes de "
-              "artefactos escritos por outros agentes; connections: conectores configurados que o "
-              "agente pode ler (GET). O prompt de um agente novo fica em prompts/<nome>.md.",
+        @tool("set_agent",
+              "Creates or updates an agent. Only the given fields change. tools: catalog ids "
+              "('server.tool'); writes: [{name, contract?, draft?}]; reads: names of artifacts "
+              "written by other agents; connections: configured connectors the agent can read "
+              "(GET). The prompt of a new agent goes to prompts/<name>.md.",
               _schema({"name": _STR, "description": _STR, "prompt": _STR, "tools": _STRS,
                        "model": _STR, "max_turns": {"type": "integer"}, "skills": _STRS,
                        "reads": _STRS, "writes": _WRITES, "connections": _STRS,
                        "write_connections": _STRS,
                        "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}},
                       ["name"]))
-        async def definir_agente(a: dict) -> dict:
+        async def set_agent(a: dict) -> dict:
             name = a["name"]
             if not SLUG.fullmatch(name):
-                return err("nome inválido: minúsculas, dígitos e _, a começar por letra")
+                return err("invalid name: lowercase letters, digits and _, starting with a letter")
             agents = d.spec.setdefault("agents", {})
             if name in (d.spec.get("gates") or {}):
-                return err(f"já existe um gate {name!r}")
+                return err(f"a gate {name!r} already exists")
             new = name not in agents
             if new and not a.get("description"):
-                return err("um agente novo precisa de description")
+                return err("a new agent needs a description")
             ag = agents.setdefault(name, {})
             if new:
                 ag["prompt_file"] = f"prompts/{name}.md"
                 d.prompts.setdefault(ag["prompt_file"], a.get("prompt") or "")
-            if "connections" in a:  # conectores implicam a ferramenta de leitura
+            if "connections" in a:  # connectors imply the read tool
                 tools = list(a.get("tools", ag.get("tools", [])))
                 if a["connections"] and "connections.http_get" not in tools:
                     tools.append("connections.http_get")
                 if not a["connections"]:
                     tools = [t for t in tools if t != "connections.http_get"]
                 a = {**a, "tools": tools}
-            if "write_connections" in a:  # escrita implica a ferramenta http_write
+            if "write_connections" in a:  # write access implies the http_write tool
                 tools = list(a.get("tools", ag.get("tools", [])))
                 if a["write_connections"] and "connections.http_write" not in tools:
                     tools.append("connections.http_write")
@@ -196,52 +198,52 @@ class Draft:
                     d.prompts[ag["prompt_file"]] = a["prompt"]
                 else:
                     ag["prompt"] = a["prompt"]
-            return d._summary(f"Agente {name} {'criado' if new else 'atualizado'}")
+            return d._summary(f"Agent {name} {'created' if new else 'updated'}")
 
-        @tool("definir_gate", "Cria ou atualiza um gate: kind 'human' (aprovação humana, retomável) "
-              "ou 'stop' (paragem); label é o texto mostrado.",
+        @tool("set_gate", "Creates or updates a gate: kind 'human' (human approval, resumable) "
+              "or 'stop' (halt); label is the text shown.",
               _schema({"name": _STR, "kind": {"type": "string", "enum": ["human", "stop"]},
                        "label": _STR}, ["name", "kind", "label"]))
-        async def definir_gate(a: dict) -> dict:
+        async def set_gate(a: dict) -> dict:
             if not SLUG.fullmatch(a["name"]):
-                return err("nome inválido: minúsculas, dígitos e _, a começar por letra")
+                return err("invalid name: lowercase letters, digits and _, starting with a letter")
             if a["name"] in (d.spec.get("agents") or {}):
-                return err(f"já existe um agente {a['name']!r}")
+                return err(f"an agent {a['name']!r} already exists")
             d.spec.setdefault("gates", {})[a["name"]] = {"kind": a["kind"], "label": a["label"]}
-            return d._summary(f"Gate {a['name']} definido")
+            return d._summary(f"Gate {a['name']} defined")
 
-        @tool("ligar", "Liga dois nós (agente ou gate). 'when' é a condição em linguagem natural; "
-              "se a ligação já existir, atualiza a condição.",
+        @tool("add_edge", "Connects two nodes (agent or gate). 'when' is the condition in natural "
+              "language; if the edge already exists, it updates the condition.",
               _schema({"from": _STR, "to": _STR, "when": _STR}, ["from", "to"]))
-        async def ligar(a: dict) -> dict:
+        async def add_edge(a: dict) -> dict:
             missing = [n for n in (a["from"], a["to"]) if n not in d._nodes()]
             if missing:
-                return err(f"nós inexistentes: {missing}")
+                return err(f"nodes that do not exist: {missing}")
             for e in d._edges():
                 if e["from"] == a["from"] and e["to"] == a["to"]:
                     e["when"] = a.get("when", e.get("when", ""))
-                    return d._summary("Condição atualizada")
+                    return d._summary("Condition updated")
             d._edges().append({"from": a["from"], "to": a["to"], "when": a.get("when", "")})
-            return d._summary(f"Ligação {a['from']} → {a['to']} criada")
+            return d._summary(f"Edge {a['from']} → {a['to']} created")
 
-        @tool("desligar", "Remove a ligação entre dois nós.",
+        @tool("remove_edge", "Removes the edge between two nodes.",
               _schema({"from": _STR, "to": _STR}, ["from", "to"]))
-        async def desligar(a: dict) -> dict:
+        async def remove_edge(a: dict) -> dict:
             before = len(d._edges())
             d.spec["edges"] = [e for e in d._edges()
                                if not (e["from"] == a["from"] and e["to"] == a["to"])]
             if len(d.spec["edges"]) == before:
-                return err("essa ligação não existe")
-            return d._summary("Ligação removida")
+                return err("that edge does not exist")
+            return d._summary("Edge removed")
 
-        @tool("renomear_no", "Renomeia um agente ou gate (atualiza ligações, início e posições).",
+        @tool("rename_node", "Renames an agent or gate (updates edges, start and positions).",
               _schema({"old": _STR, "new": _STR}, ["old", "new"]))
-        async def renomear_no(a: dict) -> dict:
+        async def rename_node(a: dict) -> dict:
             old, new = a["old"], a["new"]
             if old not in d._nodes():
-                return err(f"{old!r} não existe")
+                return err(f"{old!r} does not exist")
             if not SLUG.fullmatch(new) or new in d._nodes():
-                return err(f"nome {new!r} inválido ou já usado")
+                return err(f"name {new!r} is invalid or already used")
             for key in ("agents", "gates", "layout"):
                 if d.spec.get(key) and old in d.spec[key]:
                     d.spec[key] = {(new if k == old else k): v for k, v in d.spec[key].items()}
@@ -250,70 +252,86 @@ class Draft:
             for e in d._edges():
                 e["from"] = new if e["from"] == old else e["from"]
                 e["to"] = new if e["to"] == old else e["to"]
-            return d._summary(f"{old} renomeado para {new}")
+            return d._summary(f"{old} renamed to {new}")
 
-        @tool("remover_no", "Remove um agente ou gate e as suas ligações.",
+        @tool("remove_node", "Removes an agent or gate and its edges.",
               _schema({"name": _STR}, ["name"]))
-        async def remover_no(a: dict) -> dict:
+        async def remove_node(a: dict) -> dict:
             n = a["name"]
             if n not in d._nodes():
-                return err(f"{n!r} não existe")
+                return err(f"{n!r} does not exist")
             if n == d.spec.get("start"):
-                return err("é o nó de início; muda o início (alterar_flow start) primeiro")
+                return err("it is the start node; change the start (update_flow start) first")
             for key in ("agents", "gates", "layout"):
                 (d.spec.get(key) or {}).pop(n, None)
             d.spec["edges"] = [e for e in d._edges() if n not in (e["from"], e["to"])]
-            return d._summary(f"{n} removido")
+            return d._summary(f"{n} removed")
 
-        @tool("definir_prompt_orquestrador", "Substitui o prompt do orquestrador (papel e regras; "
-              "a secção Fluxo é gerada automaticamente).", _schema({"prompt": _STR}, ["prompt"]))
-        async def definir_prompt_orquestrador(a: dict) -> dict:
+        @tool("set_orchestrator_prompt", "Replaces the orchestrator prompt (role and rules; "
+              "the flow section is generated).", _schema({"prompt": _STR}, ["prompt"]))
+        async def set_orchestrator_prompt(a: dict) -> dict:
             orch = d.spec.setdefault("orchestrator", {})
             if orch.get("prompt_file"):
                 d.prompts[orch["prompt_file"]] = a["prompt"]
             else:
                 orch["prompt"] = a["prompt"]
-            return d._summary("Prompt do orquestrador atualizado")
+            return d._summary("Orchestrator prompt updated")
 
-        @tool("definir_mcp",
-              "Declara ou altera um MCP externo. type stdio (command, args, env) ou http/sse (url "
-              "https, headers). env/headers só com ${VAR}. tools: nomes exatos das ferramentas de "
-              "leitura permitidas. Fica por aprovar: a pessoa marca Aprovado e Só leitura no painel.",
+        @tool("set_mcp",
+              "Declares or changes an external MCP. type stdio (command, args, env) or http/sse "
+              "(https url, headers). env/headers only with ${VAR}. tools: exact names of the "
+              "allowed read tools. It stays unapproved: the user ticks Approved and Read-only in "
+              "the panel.",
               _schema({"name": _STR, "type": {"type": "string", "enum": ["stdio", "http", "sse"]},
                        "description": _STR, "command": _STR, "args": _STRS,
                        "env": {"type": "object", "additionalProperties": _STR}, "url": _STR,
                        "headers": {"type": "object", "additionalProperties": _STR},
                        "tools": _STRS}, ["name", "type", "tools"]))
-        async def definir_mcp(a: dict) -> dict:
+        async def set_mcp(a: dict) -> dict:
             if not SLUG.fullmatch(a["name"]):
-                return err("nome inválido: minúsculas, dígitos e _, a começar por letra")
+                return err("invalid name: lowercase letters, digits and _, starting with a letter")
             cfg = {k: a[k] for k in ("type", "description", "command", "args", "env", "url",
                                      "headers", "tools") if k in a}
-            # aprovação é sempre humana: qualquer alteração volta a exigir revisão
+            # approval is always human: any change requires a new review
             cfg |= {"approved": False, "read_only": False}
             d.spec.setdefault("mcp_servers", {})[a["name"]] = cfg
-            return d._summary(f"MCP {a['name']} declarado (por aprovar no painel do flow)")
+            return d._summary(f"MCP {a['name']} declared (to be approved in the flow panel)")
 
-        @tool("validar", "Valida o rascunho com as regras do runtime e devolve os problemas.",
+        @tool("validate", "Validates the draft with the runtime rules and returns the problems.",
               _schema({}))
-        async def validar(_: dict) -> dict:
+        async def validate(_: dict) -> dict:
             v = d.validation()
-            return ok({"valido": v["ok"], "problemas": [e["msg"] for e in v["errors"]]})
+            return ok({"valid": v["ok"], "problems": [e["msg"] for e in v["errors"]]})
 
-        return [ver_flow, ver_catalogo, ver_prompt, alterar_flow, definir_agente, definir_gate,
-                ligar, desligar, renomear_no, remover_no, definir_prompt_orquestrador,
-                definir_mcp, validar]
-
-
-READ_ONLY_TOOLS = {"ver_flow", "ver_catalogo", "ver_prompt", "validar"}
+        return [view_flow, view_catalog, view_prompt, update_flow, set_agent, set_gate,
+                add_edge, remove_edge, rename_node, remove_node, set_orchestrator_prompt,
+                set_mcp, validate]
 
 
-def build_options(draft: Draft, session_id: str | None) -> ClaudeAgentOptions:
+READ_ONLY_TOOLS = {"view_flow", "view_catalog", "view_prompt", "validate"}
+
+
+def normalize_lang(lang: str | None) -> str:
+    """UI language code ("pt" | "en" | "es"); anything else falls back to English."""
+    return lang if lang in LANGS else DEFAULT_LANG
+
+
+def system_prompt(lang: str | None = None) -> str:
+    """The assistant prompt, ending with the language to use with the user."""
+    name = LANGS[normalize_lang(lang)]
+    return (f"{PROMPT.rstrip()}\n\n## Language\n"
+            f"Reply to the user in {name}. Flow content that you write (prompts, descriptions, "
+            "labels, conditions) follows what the user asks; if the user does not say, keep the "
+            "language that the flow already uses.\n")
+
+
+def build_options(draft: Draft, session_id: str | None,
+                  lang: str | None = None) -> ClaudeAgentOptions:
     tools = draft.tools()
     allowed = [f"mcp__{SERVER}__{t.name}" for t in tools]
     return ClaudeAgentOptions(
-        system_prompt=PROMPT,
-        tools=[],  # nenhuma ferramenta nativa (nem delegação)
+        system_prompt=system_prompt(lang),
+        tools=[],  # no built-in tools (no delegation either)
         mcp_servers={SERVER: create_sdk_mcp_server(name=SERVER, version="0.1.0", tools=tools)},
         allowed_tools=allowed,
         disallowed_tools=[*DISALLOWED, *DELEGATION_TOOLS],
@@ -327,12 +345,13 @@ def build_options(draft: Draft, session_id: str | None) -> ClaudeAgentOptions:
 
 
 async def chat(message: str, flow: str, spec: dict[str, Any], prompts: dict[str, str],
-               session_id: str | None = None) -> AsyncIterator[dict[str, Any]]:
-    """Eventos: text, tool, done (com o rascunho e a validação) ou error."""
+               session_id: str | None = None,
+               lang: str | None = None) -> AsyncIterator[dict[str, Any]]:
+    """Events: text, tool, done (with the draft and the validation) or error."""
     draft = Draft(spec, prompts)
-    prompt = f"[Flow aberto no editor: {flow}]\n\n{message}"
+    prompt = f"[Flow open in the editor: {flow}]\n\n{message}"
     try:
-        async for msg in query(prompt=prompt, options=build_options(draft, session_id)):
+        async for msg in query(prompt=prompt, options=build_options(draft, session_id, lang)):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
@@ -349,7 +368,7 @@ async def chat(message: str, flow: str, spec: dict[str, Any], prompts: dict[str,
                        "turns": msg.num_turns, "is_error": msg.is_error,
                        "changed": draft.changed, "doc": draft.doc() if draft.changed else None,
                        "validation": draft.validation()}
-    except Exception as e:  # noqa: BLE001 — o editor mostra o erro; não deixar o stream pendurado
+    except Exception as e:  # noqa: BLE001 — the editor shows the error; do not hang the stream
         yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
 
 

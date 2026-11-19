@@ -1,4 +1,4 @@
-"""Executa um flow (flows/<nome>/flow.yaml) compilado para o Claude Agent SDK."""
+"""Runs a flow (flows/<name>/flow.yaml) compiled for the Claude Agent SDK."""
 from collections.abc import AsyncIterator
 
 from claude_agent_sdk import ClaudeAgentOptions, Message, query

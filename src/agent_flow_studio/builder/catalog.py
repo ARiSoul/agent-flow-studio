@@ -1,8 +1,8 @@
-"""Catálogo do construtor: o que um flow pode usar.
+"""Builder catalog: what a flow can use.
 
-- Ferramentas internas: as dos servidores MCP em processo de `registry.py` (id "servidor.ferramenta").
-- Contratos: modelos pydantic fornecidos pelas extensões (ver extensions.py).
-Os MCPs externos não estão aqui: são declarados em cada flow (ver spec.ExternalMcp).
+- Built-in tools: those of the in-process MCP servers in `registry.py` (id "server.tool").
+- Contracts: pydantic models provided by the extensions (see extensions.py).
+External MCPs are not here: each flow declares them (see spec.ExternalMcp).
 """
 from __future__ import annotations
 
@@ -17,13 +17,13 @@ from ..registry import _GROUPS, MCP_SERVERS
 
 @dataclass(frozen=True)
 class ToolInfo:
-    id: str  # "servidor.ferramenta"
+    id: str  # "server.tool"
     server: str
     name: str
     description: str
-    writes_local_only: bool = False  # escreve, mas só em runs/<id>/ (artefactos)
-    native: str | None = None  # ferramenta nativa do Claude Code (workspace.*)
-    kind: str = "read"  # read · write_local (runs/) · write (efeito fora do projeto)
+    writes_local_only: bool = False  # writes, but only in runs/<id>/ (artifacts)
+    native: str | None = None  # native Claude Code tool (workspace.*)
+    kind: str = "read"  # read · write_local (runs/) · write (effect outside the project)
 
     @property
     def sdk_name(self) -> str:
@@ -38,18 +38,18 @@ BUILTIN_TOOLS: dict[str, ToolInfo] = {
     for server, tools in _GROUPS.items()
     for t in tools
 }
-for _t in BUILTIN_TOOLS.values():  # classificação de escrita
+for _t in BUILTIN_TOOLS.values():  # write classification
     object.__setattr__(_t, "kind", "write_local" if _t.writes_local_only
                        else "write" if _t.id == "connections.http_write" else "read")
 
-# Ferramentas nativas, só dentro do workspace do flow (o hook confina os caminhos).
+# Native tools, only inside the flow workspace (the hook confines the paths).
 _WORKSPACE = {
-    "read": ("Read", "Lê um ficheiro do workspace do flow.", "read"),
-    "glob": ("Glob", "Procura ficheiros por padrão no workspace.", "read"),
-    "grep": ("Grep", "Procura texto nos ficheiros do workspace.", "read"),
-    "edit": ("Edit", "Edita um ficheiro do workspace (escrita).", "write"),
-    "write": ("Write", "Cria ou substitui um ficheiro do workspace (escrita).", "write"),
-    "bash": ("Bash", "Corre um comando na pasta do workspace: git, testes, gh, az (escrita).",
+    "read": ("Read", "Reads a file from the flow workspace.", "read"),
+    "glob": ("Glob", "Finds files by pattern in the workspace.", "read"),
+    "grep": ("Grep", "Searches text in the workspace files.", "read"),
+    "edit": ("Edit", "Edits a workspace file (write).", "write"),
+    "write": ("Write", "Creates or replaces a workspace file (write).", "write"),
+    "bash": ("Bash", "Runs a command in the workspace folder: git, tests, gh, az (write).",
              "write"),
 }
 for _n, (_native, _desc, _kind) in _WORKSPACE.items():
@@ -63,7 +63,7 @@ CONTRACTS: dict[str, TypeAdapter[Any]] = dict(LOADED.contracts)
 
 
 def catalog_dict() -> dict[str, Any]:
-    """Forma serializável (para o editor)."""
+    """Serializable form (for the editor)."""
     return {
         "tools": [t.__dict__ | {"sdk_name": t.sdk_name} for t in BUILTIN_TOOLS.values()],
         "contracts": {k: v.json_schema() for k, v in CONTRACTS.items()},

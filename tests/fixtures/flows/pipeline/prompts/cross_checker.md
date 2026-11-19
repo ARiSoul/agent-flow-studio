@@ -1,2 +1,2 @@
-Confronta as fontes para detetar inconsistências.
-Guarda o resultado como indicado.
+Cross-check the sources to find inconsistencies.
+Save the result as instructed.

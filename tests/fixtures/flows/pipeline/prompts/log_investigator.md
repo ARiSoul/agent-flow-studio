@@ -1,2 +1,2 @@
-Reconstrói a linha temporal a partir dos registos.
-Guarda o resultado como indicado.
+Rebuild the timeline from the logs.
+Save the result as instructed.

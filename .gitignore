@@ -6,21 +6,21 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
-# Segredos e configuração desta máquina
+# Secrets and configuration of this machine
 .env
 connections.yaml
 CLAUDE.local.md
 .claude/settings.local.json
 
-# Execuções (artefactos, auditoria, decisões)
+# Runs (artifacts, audit, decisions)
 runs/*
 !runs/.gitkeep
 
-# Extensões locais (código interno): só o README é público
+# Local extensions (internal code): only the README is public
 extensions/*
 !extensions/README.md
 
-# Flows: lixo do editor e cópias de segurança
+# Flows: editor trash and backups
 flows/.trash/
 *.bak
 *.tmp

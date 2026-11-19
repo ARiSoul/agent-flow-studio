@@ -1,4 +1,4 @@
-"""Escrita com autonomia: workspace confinado, Bash vigiado, aprovação por nível e no runner."""
+"""Writes with autonomy: confined workspace, guarded Bash, approval per level and in the runner."""
 import asyncio
 import copy
 import json
@@ -23,9 +23,9 @@ from agent_flow_studio.editor.runner import Runner
 
 def _flow(ws: Path, **changes) -> dict:
     d = {
-        "name": "dev", "title": "Dev", "task": "Faz {input}.", "start": "coder",
+        "name": "dev", "title": "Dev", "task": "Do {input}.", "start": "coder",
         "workspace": {"path": str(ws), "environment": "dev"},
-        "agents": {"coder": {"description": "código", "prompt": "Programa.",
+        "agents": {"coder": {"description": "code", "prompt": "Write code.",
                              "tools": ["workspace.read", "workspace.edit", "workspace.write",
                                        "workspace.bash", "workspace.grep"]}},
     }
@@ -62,28 +62,28 @@ def test_compile_enables_native_tools_in_workspace(ws: Path, tmp_path: Path):
     assert cf.options.cwd == str(ws.resolve())
     assert "Bash" not in cf.options.disallowed_tools and "WebFetch" in cf.options.disallowed_tools
     assert cf.agent_tools["coder"] == ["Read", "Edit", "Write", "Bash", "Grep"]
-    assert "## Escrita" in cf.options.agents["coder"].prompt
+    assert "## Writes" in cf.options.agents["coder"].prompt
     assert cf.options.permission_mode == "dontAsk" and cf.options.setting_sources == []
 
 
 def test_workspace_rules(ws: Path, tmp_path: Path):
     d = _flow(ws)
     del d["workspace"]
-    with pytest.raises(ValueError, match="não tem workspace"):
+    with pytest.raises(ValueError, match="has no workspace"):
         FlowSpec.model_validate(d)
-    with pytest.raises(FlowError, match="workspace não existe"):
-        compile_flow(FlowSpec.model_validate(_flow(tmp_path / "nao_existe")), tmp_path)
+    with pytest.raises(FlowError, match="workspace does not exist"):
+        compile_flow(FlowSpec.model_validate(_flow(tmp_path / "missing")), tmp_path)
 
 
 def test_paths_confined_to_workspace(ws: Path, tmp_path: Path):
     cf = compile_flow(FlowSpec.model_validate(_flow(ws, autonomy="auto")), tmp_path)
     assert call(cf, "Read", file_path=str(ws / "a.py")) is None
-    assert call(cf, "Read", file_path="sub/a.py") is None  # relativo ao workspace
-    assert "fora do workspace" in call(cf, "Read", file_path=str(tmp_path / "x"))
-    assert "fora do workspace" in call(cf, "Write", file_path="../fora.txt", content="x")
-    assert "fora do workspace" in call(cf, "Grep", pattern="x", path="C:/Windows")
-    assert "orquestrador" in call(cf, "Read", agent=None, file_path=str(ws / "a.py"))
-    assert "não permitida" in call(cf, "Glob", pattern="*")  # não está nas ferramentas do flow
+    assert call(cf, "Read", file_path="sub/a.py") is None  # relative to the workspace
+    assert "outside the workspace" in call(cf, "Read", file_path=str(tmp_path / "x"))
+    assert "outside the workspace" in call(cf, "Write", file_path="../outside.txt", content="x")
+    assert "outside the workspace" in call(cf, "Grep", pattern="x", path="C:/Windows")
+    assert "orchestrator" in call(cf, "Read", agent=None, file_path=str(ws / "a.py"))
+    assert "not allowed" in call(cf, "Glob", pattern="*")  # not among the flow tools
 
 
 @pytest.mark.parametrize("cmd", [
@@ -93,7 +93,7 @@ def test_paths_confined_to_workspace(ws: Path, tmp_path: Path):
 ])
 def test_dangerous_bash_denied_even_in_auto(ws, tmp_path, cmd):
     cf = compile_flow(FlowSpec.model_validate(_flow(ws, autonomy="auto")), tmp_path)
-    assert "recusado" in call(cf, "Bash", command=cmd)
+    assert "denied" in call(cf, "Bash", command=cmd)
 
 
 def test_safe_bash_in_auto(ws, tmp_path):
@@ -103,9 +103,9 @@ def test_safe_bash_in_auto(ws, tmp_path):
 
 
 def test_approve_without_approver_denies_writes_not_reads(ws, tmp_path):
-    cf = compile_flow(FlowSpec.model_validate(_flow(ws)), tmp_path)  # autonomia approve
+    cf = compile_flow(FlowSpec.model_validate(_flow(ws)), tmp_path)  # approve autonomy
     assert call(cf, "Read", file_path="a.py") is None
-    assert "requer aprovação" in call(cf, "Edit", file_path="a.py", old_string="a", new_string="b")
+    assert "human approval" in call(cf, "Edit", file_path="a.py", old_string="a", new_string="b")
 
 
 def test_approver_decides(ws, tmp_path):
@@ -114,12 +114,12 @@ def test_approver_decides(ws, tmp_path):
 
     async def approver(req):
         seen.append(req)
-        return (req.tool == "Write", "não mexas nisso")
+        return (req.tool == "Write", "leave that alone")
 
     cf.policy.approver = approver
     assert call(cf, "Write", file_path="n.py", content="print(1)") is None
-    assert "recusado pelo humano: não mexas nisso" in call(cf, "Bash", command="make")
-    assert seen[0].summary.startswith("Criar/substituir n.py") and seen[0].environment == "dev"
+    assert "denied by the human: leave that alone" in call(cf, "Bash", command="make")
+    assert seen[0].summary.startswith("Create/replace n.py") and seen[0].environment == "dev"
     assert seen[0].detail["content"] == "print(1)"
 
 
@@ -129,7 +129,7 @@ def test_approve_prod_only_asks_in_prod(ws, tmp_path):
     assert call(cf, "Edit", file_path="a.py", old_string="a", new_string="b") is None
     d["workspace"]["environment"] = "prod"
     cf = compile_flow(FlowSpec.model_validate(d), tmp_path)
-    assert "requer aprovação" in call(cf, "Edit", file_path="a.py", old_string="a", new_string="b")
+    assert "human approval" in call(cf, "Edit", file_path="a.py", old_string="a", new_string="b")
 
 
 def test_agent_autonomy_overrides_flow(ws, tmp_path):
@@ -141,12 +141,12 @@ def test_agent_autonomy_overrides_flow(ws, tmp_path):
 
 def test_audit_omits_file_contents(ws, tmp_path):
     cf = compile_flow(FlowSpec.model_validate(_flow(ws, autonomy="auto")), tmp_path)
-    call(cf, "Write", file_path="a.py", content="SEGREDO_NO_CODIGO")
+    call(cf, "Write", file_path="a.py", content="SECRET_IN_THE_CODE")
     text = (tmp_path / "runs/audit.jsonl").read_text(encoding="utf-8")
-    assert "SEGREDO_NO_CODIGO" not in text and '"chars": 17' in text
+    assert "SECRET_IN_THE_CODE" not in text and '"chars": 18' in text
 
 
-# --- conectores com escrita ------------------------------------------------------------------
+# --- connectors with write access ------------------------------------------------------------
 GH = {"type": "github", "auth": {"method": "pat"}, "secrets": {"token": "${GH_TOKEN}"},
       "access": "write", "environment": "prod", "allowed_paths": ["/repos/acme/app"]}
 
@@ -154,7 +154,7 @@ GH = {"type": "github", "auth": {"method": "pat"}, "secrets": {"token": "${GH_TO
 def _conn_flow(**agent):
     a = {"description": "prs", "prompt": "PR.", "tools": ["connections.http_write"],
          "write_connections": ["gh"], **agent}
-    return {"name": "prs", "title": "PRs", "task": "Faz {input}.", "start": "pr",
+    return {"name": "prs", "title": "PRs", "task": "Do {input}.", "start": "pr",
             "autonomy": "approve_prod", "agents": {"pr": a}}
 
 
@@ -163,12 +163,12 @@ def test_http_write_rules(tmp_path, monkeypatch):
     store.save({"gh": Connection.model_validate(GH)})
     cf = compile_flow(FlowSpec.model_validate(_conn_flow()), tmp_path)
     args = {"connection": "gh", "method": "POST", "path": "/repos/acme/app/pulls"}
-    assert "requer aprovação" in call(cf, "mcp__connections__http_write", agent="pr", **args)  # prod
-    assert "sem escrita atribuída" in call(cf, "mcp__connections__http_write", agent="pr",
-                                           **{**args, "connection": "outro"})
+    assert "human approval" in call(cf, "mcp__connections__http_write", agent="pr", **args)  # prod
+    assert "has no write access assigned" in call(cf, "mcp__connections__http_write", agent="pr",
+                                           **{**args, "connection": "other"})
     d = _conn_flow()
     d["agents"]["pr"]["write_connections"] = []
-    with pytest.raises(ValueError, match="nenhum conector de escrita"):
+    with pytest.raises(ValueError, match="no write connector"):
         FlowSpec.model_validate(d)
 
 
@@ -178,7 +178,7 @@ def test_http_write_requires_write_access(monkeypatch):
     monkeypatch.setattr(client, "_transport", httpx.MockTransport(
         lambda r: seen.append(r) or httpx.Response(201, json={"number": 7})))
     ro = {"gh": Connection.model_validate({**GH, "access": "read"})}
-    with pytest.raises(client.ConnectorError, match="só de leitura"):
+    with pytest.raises(client.ConnectorError, match="read-only"):
         asyncio.run(client.write("gh", "POST", "/repos/acme/app/pulls", {"title": "x"}, conns=ro))
     rw = {"gh": Connection.model_validate(GH)}
     r = asyncio.run(client.write("gh", "POST", "/repos/acme/app/pulls", {"title": "x"}, conns=rw))
@@ -187,10 +187,10 @@ def test_http_write_requires_write_access(monkeypatch):
     with pytest.raises(client.ConnectorError):
         asyncio.run(client.write("gh", "GET", "/repos/acme/app", conns=rw))
     with pytest.raises(client.ConnectorError):
-        asyncio.run(client.write("gh", "POST", "/orgs/outra", conns=rw))
+        asyncio.run(client.write("gh", "POST", "/orgs/other", conns=rw))
 
 
-# --- runner: aprovação ao vivo ---------------------------------------------------------------
+# --- runner: live approval -------------------------------------------------------------------
 def test_runner_pauses_for_write_approval(tmp_path, ws, monkeypatch):
     flows = tmp_path / "flows/dev"
     flows.mkdir(parents=True)
@@ -216,7 +216,7 @@ def test_runner_pauses_for_write_approval(tmp_path, ws, monkeypatch):
                 break
             await asyncio.sleep(0.01)
         ev = next(e for e in r.events if e["type"] == "approval")
-        assert ev["summary"].startswith("Criar/substituir a.py") and ev["detail"]["content"] == "x = 1"
+        assert ev["summary"].startswith("Create/replace a.py") and ev["detail"]["content"] == "x = 1"
         rn.approve(r.id, ev["id"], True, "ok")
         while not r.task.done():
             await asyncio.sleep(0.01)

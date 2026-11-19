@@ -1,20 +1,20 @@
 version: 1
 name: pipeline
-title: Pipeline de exemplo (testes)
-task: Processa o pedido {input} seguindo o fluxo.
+title: Example pipeline (tests)
+task: Process request {input} following the flow.
 orchestrator:
   prompt_file: prompts/orchestrator.md
 start: triage
 agents:
   triage:
-    description: Lê o pedido e extrai os factos principais. Usar primeiro.
+    description: Reads the request and extracts the main facts. Use first.
     prompt_file: prompts/triage.md
     tools:
     - artifacts.save_artifact
     writes:
     - name: 01_triage.json
   identity:
-    description: Confirma que o sujeito do pedido existe.
+    description: Confirms that the subject of the request exists.
     prompt_file: prompts/identity.md
     tools:
     - artifacts.read_artifact
@@ -24,7 +24,7 @@ agents:
     reads:
     - 01_triage.json
   current_state:
-    description: Recolhe o estado atual e compara com o pedido.
+    description: Collects the current state and compares it with the request.
     prompt_file: prompts/current_state.md
     tools:
     - artifacts.read_artifact
@@ -35,7 +35,7 @@ agents:
     - 01_triage.json
     - 02_identity.json
   log_investigator:
-    description: Reconstrói a linha temporal a partir dos registos.
+    description: Rebuilds the timeline from the logs.
     prompt_file: prompts/log_investigator.md
     tools:
     - artifacts.read_artifact
@@ -47,7 +47,7 @@ agents:
     - 02_identity.json
     - 03_current_state.json
   cross_checker:
-    description: Confronta as fontes para detetar inconsistências.
+    description: Cross-checks the sources to find inconsistencies.
     prompt_file: prompts/cross_checker.md
     tools:
     - artifacts.read_artifact
@@ -60,7 +60,7 @@ agents:
     - 03_current_state.json
     - 04_log_investigator.json
   diagnostician:
-    description: Classifica a causa provável, a confiança e o próximo passo.
+    description: Classifies the likely cause, the confidence and the next step.
     prompt_file: prompts/diagnostician.md
     tools:
     - artifacts.read_artifact
@@ -74,7 +74,7 @@ agents:
     - 04_log_investigator.json
     - 05_cross_checker.json
   responder:
-    description: Prepara os rascunhos de resposta para aprovação.
+    description: Prepares the reply drafts for approval.
     prompt_file: prompts/responder.md
     tools:
     - artifacts.read_artifact
@@ -94,44 +94,44 @@ agents:
 gates:
   analyst_answers:
     kind: human
-    label: Analista responde às perguntas
+    label: Analyst answers the questions
   user_not_found:
     kind: stop
-    label: Sujeito não encontrado
+    label: Subject not found
   approve_fix:
     kind: human
-    label: Aprovar correção
+    label: Approve fix
   approve_export:
     kind: human
-    label: Aprovar pedido de exportação
+    label: Approve export request
   approve_dev_ticket:
     kind: human
-    label: Aprovar pedido de desenvolvimento
+    label: Approve development request
   approve_reply:
     kind: human
-    label: Aprovar resposta
+    label: Approve reply
 edges:
 - from: triage
   to: analyst_answers
-  when: faltam dados
+  when: data is missing
 - from: triage
   to: identity
-  when: a triagem está completa
+  when: the triage is complete
 - from: analyst_answers
   to: triage
-  when: o analista respondeu
+  when: the analyst answered
 - from: identity
   to: user_not_found
-  when: não existe
+  when: it does not exist
 - from: identity
   to: current_state
-  when: existe
+  when: it exists
 - from: current_state
   to: log_investigator
-  when: há diferenças
+  when: there are differences
 - from: current_state
   to: responder
-  when: está tudo como esperado
+  when: everything is as expected
 - from: log_investigator
   to: cross_checker
 - from: cross_checker
@@ -140,13 +140,13 @@ edges:
   to: responder
 - from: responder
   to: approve_fix
-  when: próximo passo = fix
+  when: next step = fix
 - from: responder
   to: approve_export
-  when: próximo passo = export
+  when: next step = export
 - from: responder
   to: approve_dev_ticket
-  when: próximo passo = dev
+  when: next step = dev
 - from: responder
   to: approve_reply
-  when: próximo passo = reply
+  when: next step = reply

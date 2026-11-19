@@ -1,14 +1,14 @@
-"""Extensões locais: ferramentas, contratos e relatórios específicos de um domínio/empresa.
+"""Local extensions: tools, contracts and reports specific to a domain/company.
 
-Cada extensão é um pacote Python em `extensions/<nome>/` (ou na pasta de `AFS_EXTENSIONS_DIR`) que
-pode expor:
+Each extension is a Python package in `extensions/<name>/` (or in the `AFS_EXTENSIONS_DIR` folder)
+that can expose:
 
-- `TOOL_GROUPS: dict[str, list[SdkMcpTool]]` — servidores MCP em processo ("servidor" → ferramentas);
-- `CONTRACTS: dict[str, TypeAdapter]` — contratos que os artefactos JSON podem exigir;
-- `REPORTS: dict[str, Callable[[str], Path]]` — flow → função que gera um relatório no fim da execução.
+- `TOOL_GROUPS: dict[str, list[SdkMcpTool]]` — in-process MCP servers ("server" → tools);
+- `CONTRACTS: dict[str, TypeAdapter]` — contracts that JSON artifacts can require;
+- `REPORTS: dict[str, Callable[[str], Path]]` — flow → function that writes a run report.
 
-As extensões não vão para o repositório público (ver `.gitignore`): servem para código interno.
-Os nomes não podem colidir com os do núcleo nem entre extensões.
+Extensions do not go into the public repository (see `.gitignore`): they hold internal code.
+Names cannot collide with the core names or between extensions.
 """
 from __future__ import annotations
 
@@ -47,11 +47,11 @@ def _load() -> Loaded:
         out.names.append(d.name)
         for server, tools in (getattr(mod, "TOOL_GROUPS", None) or {}).items():
             if server in CORE_SERVERS or server in out.tool_groups:
-                raise RuntimeError(f"extensão {d.name}: servidor {server!r} já existe")
+                raise RuntimeError(f"extension {d.name}: server {server!r} already exists")
             out.tool_groups[server] = list(tools)
         for name, adapter in (getattr(mod, "CONTRACTS", None) or {}).items():
             if name in out.contracts:
-                raise RuntimeError(f"extensão {d.name}: contrato {name!r} repetido")
+                raise RuntimeError(f"extension {d.name}: duplicate contract {name!r}")
             out.contracts[name] = adapter
         out.reports.update(getattr(mod, "REPORTS", None) or {})
     return out

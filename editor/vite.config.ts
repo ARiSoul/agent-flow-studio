@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// `npm run dev` serve o editor em :5173 e encaminha /api para o servidor Python (:8765).
-// `npm run build` gera o editor em src/investigator/editor/static (servido pelo agent-flow-studio-editor).
+// `npm run dev` serves the editor on :5173 and forwards /api to the Python server (:8765).
+// `npm run build` writes the editor to src/agent_flow_studio/editor/static (served by agent-flow-studio-editor).
 export default defineConfig({
   plugins: [react()],
   base: "./",

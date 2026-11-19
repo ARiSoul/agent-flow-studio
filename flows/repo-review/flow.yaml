@@ -1,11 +1,11 @@
-# Flow de exemplo: revisão de um repositório (só leitura; o resultado é um rascunho para aprovação).
+# Example flow: review of a repository (read-only; the result is a draft for approval).
 version: 1
 name: repo-review
-title: Revisão de repositório (exemplo)
+title: Repository review (example)
 description: |
-  Explora o workspace, resume a estrutura e prepara uma revisão com riscos e sugestões.
-  Mude o workspace para a pasta do repositório que quer rever.
-task: Faz a revisão do repositório para a execução {input}.
+  Explores the workspace, summarizes the structure and prepares a review with risks and suggestions.
+  Change the workspace to the folder of the repository you want to review.
+task: Review the repository for run {input}.
 orchestrator: {prompt_file: prompts/orchestrator.md}
 autonomy: approve
 workspace: {path: ., environment: dev}
@@ -14,13 +14,13 @@ start: explorer
 
 agents:
   explorer:
-    description: Explora o repositório e resume a estrutura, tecnologias e pontos de entrada. Usar primeiro.
+    description: Explores the repository and summarizes its structure, technologies and entry points. Use first.
     prompt_file: prompts/explorer.md
     tools: [workspace.read, workspace.glob, workspace.grep, artifacts.save_artifact]
     writes:
     - {name: 01_overview.json}
   reviewer:
-    description: Revê o código com base no resumo e prepara a revisão (riscos, bugs prováveis, sugestões).
+    description: Reviews the code based on the overview and prepares the review (risks, likely bugs, suggestions).
     prompt_file: prompts/reviewer.md
     tools: [workspace.read, workspace.grep, artifacts.read_artifact, artifacts.save_artifact]
     reads: [01_overview.json]
@@ -28,8 +28,8 @@ agents:
     - {name: 02_review.md, draft: true}
 
 gates:
-  approve_review: {kind: human, label: Rever e aprovar a revisão}
+  approve_review: {kind: human, label: Check and approve the review}
 
 edges:
 - {from: explorer, to: reviewer}
-- {from: reviewer, to: approve_review, when: a revisão está guardada}
+- {from: reviewer, to: approve_review, when: the review is saved}

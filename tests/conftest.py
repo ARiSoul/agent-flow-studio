@@ -1,4 +1,4 @@
-"""Os testes do núcleo usam o flow genérico tests/fixtures/flows/pipeline (sem extensões)."""
+"""Core tests use the generic flow tests/fixtures/flows/pipeline (no extensions)."""
 from pathlib import Path
 
 import pytest

@@ -1,2 +1,2 @@
-Recolhe o estado atual e compara com o pedido.
-Guarda o resultado como indicado.
+Collect the current state and compare it with the request.
+Save the result as instructed.

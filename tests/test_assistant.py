@@ -1,4 +1,4 @@
-"""Assistente do editor: ferramentas sobre o rascunho, regras de segurança e endpoint de chat."""
+"""Editor assistant: tools over the draft, safety rules and chat endpoint."""
 import asyncio
 import json
 import shutil
@@ -36,56 +36,56 @@ def call(d: Draft, tool_name: str, /, **args) -> tuple[bool, str]:
 
 
 def test_add_agent_and_connect(draft: Draft):
-    ok, text = call(draft, "definir_agente", name="resumo", description="Resume o ticket.",
-                    prompt="Resume.", tools=["artifacts.read_artifact"], reads=["01_triage.json"])
-    assert ok and "sem ligação" in text  # ainda solto
-    assert draft.spec["agents"]["resumo"]["prompt_file"] == "prompts/resumo.md"
-    assert draft.prompts["prompts/resumo.md"] == "Resume."
-    ok, text = call(draft, "ligar", **{"from": "diagnostician", "to": "resumo", "when": "sempre"})
-    assert ok and "flow válido" in text and draft.changed
+    ok, text = call(draft, "set_agent", name="summary", description="Sums up the ticket.",
+                    prompt="Sum up.", tools=["artifacts.read_artifact"], reads=["01_triage.json"])
+    assert ok and "not reachable" in text  # not connected yet
+    assert draft.spec["agents"]["summary"]["prompt_file"] == "prompts/summary.md"
+    assert draft.prompts["prompts/summary.md"] == "Sum up."
+    ok, text = call(draft, "add_edge", **{"from": "diagnostician", "to": "summary", "when": "always"})
+    assert ok and "flow valid" in text and draft.changed
 
 
 def test_update_existing_prompt_goes_to_file(draft: Draft):
-    call(draft, "definir_agente", name="triage", prompt="Novo prompt.")
-    assert draft.prompts["prompts/triage.md"] == "Novo prompt."
-    assert call(draft, "ver_prompt", node="triage")[1] == "Novo prompt."
+    call(draft, "set_agent", name="triage", prompt="New prompt.")
+    assert draft.prompts["prompts/triage.md"] == "New prompt."
+    assert call(draft, "view_prompt", node="triage")[1] == "New prompt."
 
 
 def test_invalid_tool_is_reported(draft: Draft):
-    _, text = call(draft, "definir_agente", name="triage", tools=["fake.drop_table"])
-    assert "não existe no catálogo" in text and not draft.validation()["ok"]
+    _, text = call(draft, "set_agent", name="triage", tools=["fake.drop_table"])
+    assert "does not exist in the catalog" in text and not draft.validation()["ok"]
 
 
 def test_rename_and_remove(draft: Draft):
-    assert call(draft, "renomear_no", old="triage", new="triagem")[0]
-    assert draft.spec["start"] == "triagem"
+    assert call(draft, "rename_node", old="triage", new="triage_step")[0]
+    assert draft.spec["start"] == "triage_step"
     assert all("triage" not in (e["from"], e["to"]) for e in draft.spec["edges"])
-    assert not call(draft, "remover_no", name="triagem")[0]  # início não se remove
-    assert call(draft, "remover_no", name="approve_fix")[0]
+    assert not call(draft, "remove_node", name="triage_step")[0]  # the start node cannot be removed
+    assert call(draft, "remove_node", name="approve_fix")[0]
     assert "approve_fix" not in draft.spec["gates"]
 
 
 def test_mcp_never_approved_by_assistant(draft: Draft):
-    call(draft, "definir_mcp", name="crm", type="stdio", command="npx", tools=["list_items"],
+    call(draft, "set_mcp", name="crm", type="stdio", command="npx", tools=["list_items"],
          env={"TOKEN": "${CRM_TOKEN}"})
     m = draft.spec["mcp_servers"]["crm"]
     assert m["approved"] is False and m["read_only"] is False
-    _, text = call(draft, "definir_agente", name="diagnostician",
+    _, text = call(draft, "set_agent", name="diagnostician",
                    tools=["artifacts.read_artifact", "artifacts.save_artifact", "crm.list_items"])
-    assert "não aprovado" in text
+    assert "not approved" in text
 
 
 def test_mcp_literal_secret_rejected(draft: Draft):
-    _, text = call(draft, "definir_mcp", name="crm", type="stdio", command="npx", tools=["x"],
+    _, text = call(draft, "set_mcp", name="crm", type="stdio", command="npx", tools=["x"],
                    env={"TOKEN": "abc123"})
-    assert "segredos não ficam no flow" in text
+    assert "secrets stay out of the flow" in text
 
 
 def test_read_tools_do_not_mark_changed(draft: Draft):
-    for name in ("ver_flow", "ver_catalogo", "validar"):
+    for name in ("view_flow", "view_catalog", "validate"):
         assert call(draft, name)[0]
     assert not draft.changed
-    assert "artifacts.save_artifact" in call(draft, "ver_catalogo")[1]
+    assert "artifacts.save_artifact" in call(draft, "view_catalog")[1]
 
 
 def test_options_are_locked_down(draft: Draft):
@@ -102,20 +102,38 @@ def test_assist_endpoint_streams_ndjson(tmp_path: Path, monkeypatch):
     before = (tmp_path / "pipeline/flow.yaml").read_text(encoding="utf-8")
     seen = {}
 
-    async def fake_chat(message, flow, spec, prompts, session_id=None):
-        seen.update(message=message, flow=flow, n_prompts=len(prompts), session=session_id)
-        yield {"type": "text", "text": "Olá"}
+    async def fake_chat(message, flow, spec, prompts, session_id=None, lang=None):
+        seen.update(message=message, flow=flow, n_prompts=len(prompts), session=session_id,
+                    lang=lang)
+        yield {"type": "text", "text": "Hello"}
         yield {"type": "done", "changed": False, "doc": None}
 
     monkeypatch.setattr(assistant, "chat", fake_chat)
     c = TestClient(create_app(tmp_path, allowed_hosts=["testserver"]))
     spec, _ = _load()
-    body = {"flow": "pipeline", "message": "oi", "spec": spec, "session_id": "abc-1"}
-    assert c.post("/api/assist", json=body).status_code == 403  # sem cabeçalho
+    body = {"flow": "pipeline", "message": "hi", "spec": spec, "session_id": "abc-1"}
+    assert c.post("/api/assist", json=body).status_code == 403  # no header
     r = c.post("/api/assist", json=body, headers=H)
     events = [json.loads(line) for line in r.text.splitlines()]
     assert [e["type"] for e in events] == ["text", "done"]
-    assert seen == {"message": "oi", "flow": "pipeline", "n_prompts": 8, "session": "abc-1"}
+    assert seen == {"message": "hi", "flow": "pipeline", "n_prompts": 8, "session": "abc-1",
+                    "lang": None}
     assert (tmp_path / "pipeline/flow.yaml").read_text(encoding="utf-8") == before
     bad = {**body, "session_id": "../x"}
     assert c.post("/api/assist", json=bad, headers=H).status_code == 422
+    c.post("/api/assist", json={**body, "lang": "es"}, headers=H)
+    assert seen["lang"] == "es"  # the endpoint passes the UI language to the assistant
+
+
+@pytest.mark.parametrize("lang,expected", [
+    ("pt", "European Portuguese"),
+    ("en", "English"),
+    ("es", "Spanish"),
+    (None, "English"),  # missing → English
+    ("fr", "English"),  # unknown → English
+])
+def test_system_prompt_ends_with_reply_language(draft: Draft, lang, expected):
+    o = build_options(draft, None, lang)
+    tail = o.system_prompt.rstrip().rsplit("## Language", 1)[1]
+    assert f"Reply to the user in {expected}" in tail
+    assert o.system_prompt.startswith(assistant.PROMPT.split("\n", 1)[0])

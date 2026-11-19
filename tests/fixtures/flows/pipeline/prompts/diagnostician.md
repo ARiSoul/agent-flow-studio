@@ -1,2 +1,2 @@
-Classifica a causa provável, a confiança e o próximo passo.
-Guarda o resultado como indicado.
+Classify the likely cause, the confidence and the next step.
+Save the result as instructed.

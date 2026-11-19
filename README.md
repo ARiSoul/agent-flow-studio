@@ -1,76 +1,80 @@
 # Agent Flow Studio
 
-Estúdio local para **montar, testar e correr fluxos de agentes** com o
-[Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview) (Python): flows em YAML, editor
-visual estilo n8n/Langflow, assistente de construção por chat, execução com trace, aprovações
-humanas, conectores e escrita com autonomia controlada.
+A local studio to **build, test and run agent flows** with the
+[Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview) (Python): flows in YAML, an
+n8n/Langflow-style visual editor, a chat-based build assistant, execution with trace, human
+approvals, connectors and writes with controlled autonomy.
 
-> Ponto de situação e próximos passos: [`STATUS.md`](STATUS.md).
+> Current state and next steps: [`STATUS.md`](STATUS.md).
 
-## Conceitos
-- **Flow** (`flows/<nome>/flow.yaml` + `prompts/*.md`): um grafo de **agentes** (subagentes com prompt,
-  ferramentas, modelo, skills, artefactos que lêem/escrevem), **gates** (aprovação humana ou paragem)
-  e **ligações** com condição em linguagem natural. Um orquestrador recebe o grafo como instruções.
-- **Ferramentas**: `artifacts.*` (resultados intermédios em `runs/<id>/`, com contratos opcionais),
-  `connections.http_get|http_write` (conectores), `workspace.read|glob|grep|edit|write|bash`
-  (ficheiros/comandos dentro do workspace do flow), MCPs externos aprovados e ferramentas de extensões.
-- **Segurança** (não depende do modelo): lista fechada de ferramentas por flow e por subagente no
-  hook, sem ferramentas nativas fora do workspace, `dontAsk`, sem settings do utilizador, segredos
-  fora dos ficheiros, auditoria em `runs/audit.jsonl` (sem conteúdos de ficheiros).
+## Concepts
+- **Flow** (`flows/<name>/flow.yaml` + `prompts/*.md`): a graph of **agents** (subagents with a
+  prompt, tools, model, skills, artifacts they read/write), **gates** (human approval or stop) and
+  **links** with a natural-language condition. An orchestrator receives the graph as instructions.
+- **Tools**: `artifacts.*` (intermediate results in `runs/<id>/`, with optional contracts),
+  `connections.http_get|http_write` (connectors), `workspace.read|glob|grep|edit|write|bash`
+  (files/commands inside the flow's workspace), approved external MCPs and extension tools.
+- **Security** (does not depend on the model): closed list of tools per flow and per subagent in the
+  hook, no native tools outside the workspace, `dontAsk`, no user settings, secrets outside files,
+  audit in `runs/audit.jsonl` (no file contents).
 
-## Editor visual
-`agent-flow-studio-editor` abre http://127.0.0.1:8765:
-- **Canvas**: arrastar agentes e gates, ligar nós, organizar, desfazer/refazer; validação ao vivo com
-  as mesmas regras do runtime; só grava flows válidos (cópia `flow.yaml.bak`; apagar → `flows/.trash/`).
-- **Propriedades**: prompts (em linha ou ficheiro), ferramentas, artefactos e contratos, modelo,
-  conectores, autonomia, workspace, MCPs externos.
-- **Assistente**: chat que cria/altera agentes, ligações, prompts, MCPs… num rascunho; tu revês e
-  gravas. Não aprova MCPs nem escolhe autonomia `auto`.
-- **Executar**: corre o flow gravado com uma entrada e mostra o agente ativo, os concluídos e o gate
-  onde parou, o trace, o custo e os artefactos. Modos: *flow completo*, *passo a passo* (pausa depois
-  de cada agente), *até ao agente…* e *só um agente (isolado)*. Gates e escritas pedem decisão ao vivo.
-- **Conectores**: API HTTP (sem auth, chave, bearer, basic, client credentials), Azure Resource
-  Manager (az login, client credentials), Azure DevOps (PAT, az login, client credentials) e GitHub
-  (PAT, gh auth login), com ambiente, caminhos permitidos, acesso leitura/escrita e "Testar ligação".
-  Segredos no Gestor de Credenciais do sistema (keyring) ou como `${VAR}`.
+## Visual editor
+`agent-flow-studio-editor` opens http://127.0.0.1:8765:
+- **Language**: the interface is available in Portuguese, English and Spanish (selector in the
+  toolbar; the choice is saved in the browser).
+- **Canvas**: drag agents and gates, link nodes, arrange, undo/redo; live validation with the same
+  rules as the runtime; only valid flows are saved (copy in `flow.yaml.bak`; delete →
+  `flows/.trash/`).
+- **Properties**: prompts (inline or file), tools, artifacts and contracts, model, connectors,
+  autonomy, workspace, external MCPs.
+- **Assistant**: a chat that creates/changes agents, links, prompts, MCPs… in a draft; you review
+  and save. It does not approve MCPs or choose `auto` autonomy. It replies in the interface language.
+- **Run**: runs the saved flow with an input and shows the active agent, the finished ones and the
+  gate where it stopped, the trace, the cost and the artifacts. Modes: *full flow*, *step by step*
+  (pause after each agent), *until agent…* and *single agent (isolated)*. Gates and writes ask for
+  a live decision.
+- **Connectors**: HTTP API (no auth, key, bearer, basic, client credentials), Azure Resource
+  Manager (az login, client credentials), Azure DevOps (PAT, az login, client credentials) and
+  GitHub (PAT, gh auth login), with environment, allowed paths, read/write access and "Test
+  connection". Secrets in the system Credential Manager (keyring) or as `${VAR}`.
 
-## Escrita com autonomia
-No flow defines a **autonomia** (aprovar cada escrita · aprovar só em produção · autónomo) e o
-**workspace** (pasta/repositório, ambiente, branches protegidas); cada agente pode sobrepor a
-autonomia. Quando uma escrita precisa de aprovação, a execução pára e o editor mostra o ficheiro e
-conteúdo, o comando ou o pedido HTTP. O hook recusa sempre caminhos fora do workspace, push forçado
-ou para branches protegidas e comandos destrutivos.
+## Writes with autonomy
+In the flow you set the **autonomy** (approve each write · approve only in production · autonomous)
+and the **workspace** (folder/repository, environment, protected branches); each agent can override
+the autonomy. When a write needs approval, the run pauses and the editor shows the file and
+content, the command or the HTTP request. The hook always denies paths outside the workspace, force
+pushes or pushes to protected branches, and destructive commands.
 
-## Extensões locais
-Ferramentas, contratos e relatórios de um domínio/empresa ficam em `extensions/<nome>/` (fora do
-git), num pacote Python que expõe `TOOL_GROUPS`, `CONTRACTS` e `REPORTS` (ver
-[`extensions/README.md`](extensions/README.md) e `src/agent_flow_studio/extensions.py`).
+## Local extensions
+Tools, contracts and reports for a domain/company live in `extensions/<name>/` (outside git), in a
+Python package that exposes `TOOL_GROUPS`, `CONTRACTS` and `REPORTS` (see
+[`extensions/README.md`](extensions/README.md) and `src/agent_flow_studio/extensions.py`).
 
-## Arranque
+## Getting started
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 cd editor && npm install && npm run build && cd ..      # frontend (Node 20+)
 pytest
-agent-flow-studio-editor                                # editor em http://127.0.0.1:8765
+agent-flow-studio-editor                                # editor at http://127.0.0.1:8765
 agent-flow-studio-flows list | validate <flow> | show <flow> | catalog
-agent-flow-studio teste-001 --flow repo-review          # pela CLI (escritas com aprovação são recusadas)
+agent-flow-studio test-001 --flow repo-review           # from the CLI (writes that need approval are denied)
 ```
-Autenticação: login do Claude Code na máquina ou `ANTHROPIC_API_KEY`. Desenvolvimento do frontend:
-`cd editor && npm run dev` (porta 5173, encaminha `/api` para 8765).
+Authentication: Claude Code login on the machine or `ANTHROPIC_API_KEY`. Frontend development:
+`cd editor && npm run dev` (port 5173, forwards `/api` to 8765).
 
-## Estrutura
+## Layout
 ```
 src/agent_flow_studio/
-  builder/        spec.py (formato + validação), catalog.py, compile.py
+  builder/        spec.py (format + validation), catalog.py, compile.py
   editor/         server.py (API), assistant.py, runner.py, validation.py, yaml_io.py, static/ (build)
   connections/    model.py, store.py (keyring/${VAR}), client.py
   tools/          artifacts.py, connections.py, guards.py, common.py
-  hooks.py        guarda (lista fechada) + auditoria · policy.py  escrita, workspace, autonomia
-  extensions.py   carregamento de extensões locais · registry.py  servidores MCP em processo
+  hooks.py        guard (closed list) + audit · policy.py  writes, workspace, autonomy
+  extensions.py   loading of local extensions · registry.py  in-process MCP servers
   main.py · orchestrator.py · flows_cli.py
-editor/           frontend (Vite + React + React Flow)
-flows/            flows (exemplo: repo-review)
-extensions/       extensões locais (fora do git, exceto o README)
-tests/            testes do núcleo (flow genérico em tests/fixtures/flows/pipeline)
+editor/           frontend (Vite + React + React Flow; strings in src/i18n/)
+flows/            flows (example: repo-review)
+extensions/       local extensions (outside git, except the README)
+tests/            core tests (generic flow in tests/fixtures/flows/pipeline)
 ```

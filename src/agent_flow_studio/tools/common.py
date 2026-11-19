@@ -8,8 +8,8 @@ def ok(data: Any) -> dict:
 
 
 def err(message: str) -> dict:
-    return {"content": [{"type": "text", "text": f"ERRO: {message}"}], "is_error": True}
+    return {"content": [{"type": "text", "text": f"ERROR: {message}"}], "is_error": True}
 
 
 def not_implemented(what: str) -> dict:
-    return err(f"{what} ainda não implementado. Ver TODO em CLAUDE.md (ou ative AFS_MOCK=1).")
+    return err(f"{what} is not implemented yet. See the TODO in CLAUDE.md (or set AFS_MOCK=1).")

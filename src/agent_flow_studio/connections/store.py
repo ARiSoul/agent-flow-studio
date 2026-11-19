@@ -1,4 +1,4 @@
-"""Leitura/escrita de connections.yaml e dos segredos (keyring ou variáveis de ambiente)."""
+"""Read/write connections.yaml and the secrets (keyring or environment variables)."""
 from __future__ import annotations
 
 import contextlib
@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from .model import SLUG, Connection
 
-SERVICE = "agent-flow-studio"  # nome do serviço no Gestor de Credenciais
+SERVICE = "agent-flow-studio"  # service name in the Credential Manager
 
 
 class ConnectorConfigError(ValueError):
@@ -30,11 +30,11 @@ def load(path: Path | None = None) -> dict[str, Connection]:
     out: dict[str, Connection] = {}
     for name, data in (raw.get("connections") or {}).items():
         if not SLUG.fullmatch(str(name)):
-            raise ConnectorConfigError(f"conector {name!r}: nome inválido")
+            raise ConnectorConfigError(f"connector {name!r}: invalid name")
         try:
             out[name] = Connection.model_validate(data)
         except ValidationError as e:
-            raise ConnectorConfigError(f"conector {name!r}: {e}") from e
+            raise ConnectorConfigError(f"connector {name!r}: {e}") from e
     return out
 
 
@@ -43,7 +43,7 @@ def save(conns: dict[str, Connection], path: Path | None = None) -> None:
     data = {"version": 1, "connections": {
         n: {"type": c.type, **c.model_dump(mode="json", exclude_defaults=True)}
         for n, c in sorted(conns.items())}}
-    text = ("# Conectores desta máquina. Sem segredos: só referências ${VAR} ou 'keyring'.\n"
+    text = ("# Connectors on this machine. No secrets: only ${VAR} or 'keyring' references.\n"
             + yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
     tmp = path.with_suffix(".tmp")
     tmp.write_text(text, encoding="utf-8")
@@ -51,7 +51,7 @@ def save(conns: dict[str, Connection], path: Path | None = None) -> None:
 
 
 def _keyring():  # type: ignore[no-untyped-def]
-    import keyring  # import tardio: só quando há segredos no keyring
+    import keyring  # late import: only when there are secrets in the keyring
 
     return keyring
 
@@ -72,12 +72,12 @@ def set_secret(name: str, field: str, value: str) -> None:
 def delete_secrets(name: str, conn: Connection) -> None:
     for field, ref in conn.secrets.items():
         if ref == "keyring":
-            with contextlib.suppress(Exception):  # já não existe
+            with contextlib.suppress(Exception):  # already gone
                 _keyring().delete_password(SERVICE, f"{name}/{field}")
 
 
 def secret_status(name: str, conn: Connection) -> dict[str, Any]:
-    """Diz se o segredo necessário está definido, sem nunca o devolver."""
+    """Says whether the required secret is set, without ever returning it."""
     field = conn.secret_field
     if field is None:
         return {"field": None, "source": None, "set": True}

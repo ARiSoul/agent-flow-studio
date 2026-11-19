@@ -8,19 +8,21 @@ import { Chat } from "./Chat";
 import { Connections } from "./Connections";
 import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
 import { Inspector } from "./Inspector";
+import { LANGS, useI18n, type Lang } from "./i18n";
 import { autoLayout, clone, ensureLayout, newAgent, newGate, removeNode, tidy, uniqueName } from "./model";
 import { nodeTypes } from "./nodes";
 import type { Catalog, Doc, FlowSummary, Selection, Validation } from "./types";
 
 const PALETTE = [
-  { kind: "agent", label: "Agente", hint: "Subagente com prompt e ferramentas" },
-  { kind: "human", label: "Aprovação humana", hint: "O flow pára até alguém aprovar" },
-  { kind: "stop", label: "Paragem", hint: "O flow termina e reporta" },
+  { kind: "agent", label: "palette.agent", hint: "palette.agentHint", base: "agent" },
+  { kind: "human", label: "palette.human", hint: "palette.humanHint", base: "approval" },
+  { kind: "stop", label: "palette.stop", hint: "palette.stopHint", base: "stop" },
 ] as const;
 type PaletteKind = (typeof PALETTE)[number]["kind"];
 
 function Editor() {
   const rf = useReactFlow();
+  const { t, tn, lang, setLang } = useI18n();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
@@ -28,7 +30,7 @@ function Editor() {
   const [saved, setSaved] = useState<string>("");
   const [sel, setSel] = useState<Selection>(null);
   const [val, setVal] = useState<Validation | null>(null);
-  const [tab, setTab] = useState<"problems" | "fluxo">("problems");
+  const [tab, setTab] = useState<"problems" | "flow">("problems");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [right, setRight] = useState<"props" | "chat" | "run">("props");
   const [trace, setTrace] = useState<Record<string, NodeRun>>({});
@@ -42,7 +44,7 @@ function Editor() {
   const dirty = doc !== null && JSON.stringify(doc) !== saved;
   const flash = (text: string, bad = false) => { setMsg({ text, bad }); setTimeout(() => setMsg(null), 4000); };
 
-  // ---- carregar
+  // ---- load
   const refreshFlows = useCallback(() => api.flows().then(setFlows), []);
   useEffect(() => {
     api.catalog().then(setCatalog).catch((e) => flash(String(e), true));
@@ -65,14 +67,14 @@ function Editor() {
     }).catch((e) => flash(String(e), true));
   }, [current, rf]);
 
-  // ---- validar (debounce) a cada alteração
+  // ---- validate (debounced) on every change
   useEffect(() => {
     if (!doc || !current) return;
     const t = setTimeout(() => api.validate(current, tidy(doc)).then(setVal).catch(() => undefined), 400);
     return () => clearTimeout(t);
   }, [doc, current]);
 
-  // ---- alterações com histórico
+  // ---- changes with history
   const update = useCallback((fn: (d: Doc) => void, record = true) => {
     setDoc((prev) => {
       if (!prev) return prev;
@@ -88,23 +90,23 @@ function Editor() {
   const remove = useCallback((s: Selection) => {
     if (!s || !doc) return;
     if (s.kind === "node") {
-      if (s.id === doc.spec.start) return flash("Não podes apagar o nó de início; muda o início primeiro.", true);
+      if (s.id === doc.spec.start) return flash(t("app.cantDeleteStart"), true);
       update((d) => removeNode(d.spec, s.id));
     } else update((d) => { d.spec.edges = (d.spec.edges ?? []).filter((_, i) => i !== s.index); });
     setSel(null);
-  }, [doc, update]);
+  }, [doc, update, t]);
 
   const save = useCallback(async () => {
     if (!doc || !current) return;
     try {
       const r = await api.save(current, tidy(doc));
       setVal(r);
-      if (r.saved) { setSaved(JSON.stringify(doc)); flash("Guardado em flows/" + current + "/flow.yaml"); refreshFlows(); }
-      else { setTab("problems"); flash("Não guardado: o flow tem problemas.", true); }
+      if (r.saved) { setSaved(JSON.stringify(doc)); flash(t("app.savedTo", { name: current })); refreshFlows(); }
+      else { setTab("problems"); flash(t("app.notSaved"), true); }
     } catch (e) { flash(String(e), true); }
-  }, [doc, current, refreshFlows]);
+  }, [doc, current, refreshFlows, t]);
 
-  // ---- atalhos
+  // ---- shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -119,7 +121,7 @@ function Editor() {
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("beforeunload", onUnload); };
   });
 
-  // ---- grafo React Flow (derivado do flow; o flow é a única fonte de verdade)
+  // ---- React Flow graph (derived from the flow; the flow is the single source of truth)
   const errNodes = useMemo(() => new Set((val?.errors ?? []).flatMap((e) => e.nodes)), [val]);
   const nodes: Node[] = useMemo(() => {
     if (!doc) return [];
@@ -165,11 +167,11 @@ function Editor() {
       if (c.type === "select" && c.selected) setSel({ kind: "edge", index: Number(c.id.slice(1)) });
     }
   }, []);
-  // Delete no canvas: uma única alteração (um passo de desfazer) para nós e ligações
+  // Delete on the canvas: one single change (one undo step) for nodes and links
   const onDelete = useCallback(({ nodes: ns, edges: es }: { nodes: Node[]; edges: Edge[] }) => {
     if (!doc) return;
     const ids = ns.map((n) => n.id).filter((id) => id !== doc.spec.start);
-    if (ids.length < ns.length) flash("O nó de início não é apagado; muda o início primeiro.", true);
+    if (ids.length < ns.length) flash(t("app.startNotDeleted"), true);
     const drop = new Set(es.map((e) => Number(e.id.slice(1))));
     if (!ids.length && !drop.size) return;
     update((d) => {
@@ -177,23 +179,23 @@ function Editor() {
       for (const id of ids) removeNode(d.spec, id);
     });
     setSel(null);
-  }, [doc, update]);
+  }, [doc, update, t]);
   const onConnect = useCallback((c: Connection) => {
     if (!doc || !c.source || !c.target || c.source === c.target) return;
-    if ((doc.spec.edges ?? []).some((e) => e.from === c.source && e.to === c.target)) return flash("Essa ligação já existe.", true);
+    if ((doc.spec.edges ?? []).some((e) => e.from === c.source && e.to === c.target)) return flash(t("app.edgeExists"), true);
     const index = (doc.spec.edges ?? []).length;
     update((d) => { d.spec.edges = [...(d.spec.edges ?? []), { from: c.source!, to: c.target!, when: "" }]; });
     setSel({ kind: "edge", index });
-  }, [doc, update]);
+  }, [doc, update, t]);
 
-  // ---- paleta
+  // ---- palette
   const addNode = (kind: PaletteKind, at?: { x: number; y: number }) => {
     if (!doc) return;
-    const id = uniqueName(doc.spec, kind === "agent" ? "agente" : kind === "human" ? "aprovacao" : "paragem");
+    const id = uniqueName(doc.spec, PALETTE.find((p) => p.kind === kind)!.base);
     const p = at ?? rf.screenToFlowPosition({ x: window.innerWidth / 2 - 120, y: window.innerHeight / 2 - 50 });
     update((d) => {
-      if (kind === "agent") d.spec.agents[id] = newAgent();
-      else d.spec.gates = { ...d.spec.gates, [id]: newGate(kind) };
+      if (kind === "agent") d.spec.agents[id] = newAgent(t("default.agentDescription"), t("default.agentPrompt"));
+      else d.spec.gates = { ...d.spec.gates, [id]: newGate(kind, t(kind === "human" ? "node.human" : "node.stop")) };
       d.spec.layout = { ...d.spec.layout, [id]: { x: Math.round(p.x), y: Math.round(p.y) } };
     });
     setSel({ kind: "node", id });
@@ -204,65 +206,69 @@ function Editor() {
     if (kind) addNode(kind, rf.screenToFlowPosition({ x: e.clientX - 120, y: e.clientY - 40 }));
   };
 
-  // ---- gestão de flows
-  const confirmDiscard = () => !dirty || confirm("Há alterações por guardar. Descartar?");
+  // ---- flow management
+  const confirmDiscard = () => !dirty || confirm(t("app.discard"));
   const switchFlow = (name: string) => { if (confirmDiscard()) setCurrent(name); };
   const createFlow = async (copyFrom?: string) => {
     if (!confirmDiscard()) return;
-    const name = prompt(copyFrom ? `Nome do novo flow (cópia de ${copyFrom}):` : "Nome do novo flow (minúsculas, - ou _):", "");
+    const name = prompt(copyFrom ? t("app.newFlowCopy", { name: copyFrom }) : t("app.newFlowName"), "");
     if (!name) return;
-    const title = prompt("Título:", copyFrom ? `${doc?.spec.title} (cópia)` : name) || name;
-    try { await api.create(name, title, copyFrom); await refreshFlows(); setCurrent(name); flash(`Flow ${name} criado.`); }
+    const title = prompt(t("app.title"), copyFrom ? t("app.copySuffix", { title: doc?.spec.title ?? copyFrom }) : name) || name;
+    try { await api.create(name, title, copyFrom); await refreshFlows(); setCurrent(name); flash(t("app.created", { name })); }
     catch (e) { flash(String(e), true); }
   };
   const deleteFlow = async () => {
-    if (!current || !confirm(`Mover o flow "${current}" para flows/.trash? (recuperável)`)) return;
+    if (!current || !confirm(t("app.confirmDelete", { name: current }))) return;
     try {
       const r = await api.remove(current);
-      flash(`Movido para flows/${r.trashed}`);
+      flash(t("app.trashed", { path: r.trashed }));
       setCurrent(null); setDoc(null);
       await refreshFlows();
     } catch (e) { flash(String(e), true); }
   };
 
-  if (!catalog) return <div className="loading">A carregar…</div>;
+  if (!catalog) return <div className="loading">{t("app.loading")}</div>;
   const errors = val?.errors ?? [];
   return (
     <div className="app">
       <header className="topbar">
-        <span className="brand">Flows</span>
+        <span className="brand">{t("app.brand")}</span>
         <select value={current ?? ""} onChange={(e) => switchFlow(e.target.value)}>
           {flows.map((f) => <option key={f.name} value={f.name}>{f.title} ({f.name}){f.valid ? "" : " ⚠"}</option>)}
         </select>
-        <button onClick={() => createFlow()}>Novo</button>
-        <button onClick={() => current && createFlow(current)} disabled={!current}>Duplicar</button>
-        <button className="danger" onClick={deleteFlow} disabled={!current}>Apagar</button>
+        <button onClick={() => createFlow()}>{t("app.new")}</button>
+        <button onClick={() => current && createFlow(current)} disabled={!current}>{t("app.duplicate")}</button>
+        <button className="danger" onClick={deleteFlow} disabled={!current}>{t("app.delete")}</button>
         <span className="sep" />
-        <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">Desfazer</button>
-        <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">Refazer</button>
-        <button onClick={() => { update((d) => autoLayout(d.spec)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); }}>Organizar</button>
-        <button onClick={() => setShowConns(true)}>Conectores</button>
+        <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">{t("app.undo")}</button>
+        <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">{t("app.redo")}</button>
+        <button onClick={() => { update((d) => autoLayout(d.spec)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); }}>{t("app.arrange")}</button>
+        <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
         <span className="grow" />
         {msg && <span className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</span>}
         <span className={`status ${val?.ok ? "ok" : "bad"}`} onClick={() => setTab("problems")}>
-          {val?.ok ? "✓ válido" : `${errors.length} problema${errors.length === 1 ? "" : "s"}`}
+          {val?.ok ? t("app.valid") : tn("app.problems", errors.length)}
         </span>
+        <select className="lang" value={lang} title={t("app.language")} aria-label={t("app.language")}
+          onChange={(e) => setLang(e.target.value as Lang)}>
+          {Object.entries(LANGS).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
+        </select>
         <button className="primary" onClick={save} disabled={!dirty} title="Ctrl+S">
-          {dirty ? "Guardar" : "Guardado"}
+          {dirty ? t("app.save") : t("app.saved")}
         </button>
       </header>
 
       <aside className="palette">
-        <h2>Adicionar</h2>
+        <h2>{t("palette.add")}</h2>
         {PALETTE.map((p) => (
-          <div key={p.kind} className={`pal ${p.kind}`} draggable title={p.hint}
+          <div key={p.kind} className={`pal ${p.kind}`} draggable title={t(p.hint)}
             onDragStart={(e) => { e.dataTransfer.setData("application/x-flow-node", p.kind); e.dataTransfer.effectAllowed = "move"; }}
             onClick={() => addNode(p.kind)}>
-            <b>{p.label}</b><span>{p.hint}</span>
+            <b>{t(p.label)}</b><span>{t(p.hint)}</span>
           </div>
         ))}
-        <p className="muted small">Arrasta para o canvas ou clica. Liga nós arrastando da pega de baixo para a de cima. Delete apaga a seleção.</p>
-        <h2>Ferramentas internas</h2>
+        <p className="muted small">{t("palette.help")}</p>
+        <h2>{t("palette.tools")}</h2>
         <ul className="catalog">
           {catalog.servers.map((s) => (
             <li key={s}><b>{s}</b>
@@ -289,10 +295,10 @@ function Editor() {
 
       <aside className="right">
         <div className="right-tabs">
-          <button className={right === "props" ? "on" : ""} onClick={() => setRight("props")}>Propriedades</button>
+          <button className={right === "props" ? "on" : ""} onClick={() => setRight("props")}>{t("tabs.properties")}</button>
           <button className={right === "chat" ? "on" : ""} onClick={() => setRight("chat")}>
-            Assistente{assistBusy ? " ●" : ""}</button>
-          <button className={right === "run" ? "on" : ""} onClick={() => setRight("run")}>Executar</button>
+            {t("tabs.assistant")}{assistBusy ? " ●" : ""}</button>
+          <button className={right === "run" ? "on" : ""} onClick={() => setRight("run")}>{t("tabs.run")}</button>
         </div>
         {doc && <div className="right-body" hidden={right !== "props"}>
           <Inspector doc={doc} sel={sel} catalog={catalog} update={update} select={setSel} remove={remove}
@@ -303,7 +309,7 @@ function Editor() {
             }} />
         </div>}
         {doc && current && <div className="right-body" hidden={right !== "chat"}>
-          <Chat key={current} flow={current} doc={doc} onBusy={setAssistBusy} apply={(d) => {
+          <Chat key={current} flow={current} lang={lang} doc={doc} onBusy={setAssistBusy} apply={(d) => {
             const n = ensureLayout(d);
             update((x) => { x.spec = n.spec; x.prompts = n.prompts; });
           }} />
@@ -315,18 +321,18 @@ function Editor() {
 
       <footer className="bottom">
         <div className="tabs">
-          <button className={tab === "problems" ? "on" : ""} onClick={() => setTab("problems")}>Problemas ({errors.length})</button>
-          <button className={tab === "fluxo" ? "on" : ""} onClick={() => setTab("fluxo")}>Fluxo gerado para o orquestrador</button>
-          {val?.allowed_tools && <span className="muted small">{val.allowed_tools.length} ferramentas permitidas pelo hook</span>}
+          <button className={tab === "problems" ? "on" : ""} onClick={() => setTab("problems")}>{t("bottom.problems", { n: errors.length })}</button>
+          <button className={tab === "flow" ? "on" : ""} onClick={() => setTab("flow")}>{t("bottom.flow")}</button>
+          {val?.allowed_tools && <span className="muted small">{t("bottom.allowedTools", { n: val.allowed_tools.length })}</span>}
         </div>
         <div className="tab-body">
           {tab === "problems" && (errors.length === 0
-            ? <p className="muted">Sem problemas. O flow compila com as mesmas regras de <code>agent-flow-studio-flows validate</code>.</p>
+            ? <p className="muted">{t("bottom.noProblems")} <code>agent-flow-studio-flows validate</code>.</p>
             : <ul className="problems">{errors.map((e, i) => (
               <li key={i} onClick={() => e.nodes[0] && setSel({ kind: "node", id: e.nodes[0] })} className={e.nodes.length ? "link" : ""}>
                 {e.loc && <code>{e.loc}</code>} {e.msg}
               </li>))}</ul>)}
-          {tab === "fluxo" && <pre className="mono">{val?.fluxo ?? "(disponível quando o flow for válido)"}</pre>}
+          {tab === "flow" && <pre className="mono">{val?.flow_section ?? t("bottom.flowPending")}</pre>}
         </div>
       </footer>
       {showConns && <Connections onClose={() => {

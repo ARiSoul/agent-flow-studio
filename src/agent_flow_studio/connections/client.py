@@ -1,7 +1,7 @@
-"""Autenticação por tipo e pedidos GET (só leitura) através de um conector.
+"""Authentication per type and GET requests (read-only) through a connector.
 
-Os segredos e tokens só existem em memória durante o pedido (tokens OAuth ficam em cache até
-expirarem). Mensagens de erro nunca incluem cabeçalhos nem segredos.
+Secrets and tokens exist in memory only during the request (OAuth tokens stay cached until they
+expire). Error messages never include headers or secrets.
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from .model import Connection
 
 MAX_BODY = 100_000
 TIMEOUT = 30.0
-_tokens: dict[str, tuple[str, float]] = {}  # chave → (token, expira em)
-_transport: httpx.AsyncBaseTransport | None = None  # testes: httpx.MockTransport
+_tokens: dict[str, tuple[str, float]] = {}  # key → (token, expires at)
+_transport: httpx.AsyncBaseTransport | None = None  # tests: httpx.MockTransport
 
 
 class ConnectorError(Exception):
@@ -30,13 +30,13 @@ class ConnectorError(Exception):
 async def _cli(*args: str) -> str:
     exe = shutil.which(args[0])
     if not exe:
-        raise ConnectorError(f"'{args[0]}' não está instalado ou não está no PATH")
+        raise ConnectorError(f"'{args[0]}' is not installed or not on PATH")
     proc = await asyncio.create_subprocess_exec(exe, *args[1:], stdout=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.PIPE)
     out, errb = await asyncio.wait_for(proc.communicate(), timeout=60)
     if proc.returncode != 0:
-        msg = errb.decode("utf-8", "replace").strip().splitlines()[-1:] or ["erro"]
-        raise ConnectorError(f"{args[0]} falhou: {msg[0][:200]}")
+        msg = errb.decode("utf-8", "replace").strip().splitlines()[-1:] or ["error"]
+        raise ConnectorError(f"{args[0]} failed: {msg[0][:200]}")
     return out.decode("utf-8").strip()
 
 
@@ -44,7 +44,7 @@ def _secret(name: str, conn: Connection) -> str:
     field = conn.secret_field
     value = store.get_secret(name, conn, field) if field else None
     if not value:
-        raise ConnectorError(f"segredo '{field}' não definido para o conector {name!r}")
+        raise ConnectorError(f"secret '{field}' is not set for connector {name!r}")
     return value
 
 
@@ -62,7 +62,7 @@ async def _client_credentials(name: str, conn: Connection) -> str:
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, transport=_transport) as c:
         r = await c.post(url, data=data)
     if r.status_code != 200:
-        raise ConnectorError(f"obter token falhou (HTTP {r.status_code})")
+        raise ConnectorError(f"getting the token failed (HTTP {r.status_code})")
     body = r.json()
     _tokens[key] = (body["access_token"], time.time() + float(body.get("expires_in", 300)))
     return body["access_token"]
@@ -97,16 +97,16 @@ async def auth_headers(name: str, conn: Connection) -> dict[str, str]:
         return {"Authorization": f"Bearer {await _azure_cli(conn)}"}
     if m == "gh_cli":
         return {"Authorization": f"Bearer {await _cli('gh', 'auth', 'token')}"}
-    raise ConnectorError(f"método {m!r} desconhecido")
+    raise ConnectorError(f"unknown method {m!r}")
 
 
 def check_path(conn: Connection, path: str) -> None:
     if not path.startswith("/") or ".." in path or "://" in path or "\\" in path or "@" in path:
-        raise ConnectorError("caminho inválido: relativo à URL base, a começar por /")
+        raise ConnectorError("invalid path: must be relative to the base URL and start with /")
     bare = path.split("?", 1)[0]
     if conn.allowed_paths and not any(bare.startswith(p.split("?", 1)[0])
                                       for p in conn.allowed_paths):
-        raise ConnectorError(f"caminho fora dos permitidos: {', '.join(conn.allowed_paths)}")
+        raise ConnectorError(f"path not allowed; allowed: {', '.join(conn.allowed_paths)}")
 
 
 async def get(name: str, path: str, query: dict[str, Any] | None = None,
@@ -114,7 +114,7 @@ async def get(name: str, path: str, query: dict[str, Any] | None = None,
     conns = store.load() if conns is None else conns
     conn = conns.get(name)
     if conn is None:
-        raise ConnectorError(f"conector {name!r} não está configurado")
+        raise ConnectorError(f"connector {name!r} is not configured")
     check_path(conn, path)
     headers = {"Accept": "application/json", "User-Agent": "flow-investigator",
                **await auth_headers(name, conn)}
@@ -142,16 +142,16 @@ WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 async def write(name: str, method: str, path: str, body: Any = None,
                 query: dict[str, Any] | None = None,
                 conns: dict[str, Connection] | None = None) -> dict[str, Any]:
-    """Pedido de escrita. Só em conectores com access: write; a aprovação é feita pelo hook."""
+    """Write request. Only on connectors with access: write; the hook handles approval."""
     conns = store.load() if conns is None else conns
     conn = conns.get(name)
     if conn is None:
-        raise ConnectorError(f"conector {name!r} não está configurado")
+        raise ConnectorError(f"connector {name!r} is not configured")
     if conn.access != "write":
-        raise ConnectorError(f"o conector {name!r} é só de leitura (access: read)")
+        raise ConnectorError(f"connector {name!r} is read-only (access: read)")
     method = method.upper()
     if method not in WRITE_METHODS:
-        raise ConnectorError(f"método {method!r} inválido; use {', '.join(WRITE_METHODS)}")
+        raise ConnectorError(f"invalid method {method!r}; use {', '.join(WRITE_METHODS)}")
     check_path(conn, path)
     headers = {"Accept": "application/json", "User-Agent": "flow-investigator",
                **await auth_headers(name, conn)}
@@ -177,11 +177,11 @@ async def test(name: str, conns: dict[str, Connection] | None = None) -> dict[st
     conns = store.load() if conns is None else conns
     conn = conns.get(name)
     if conn is None:
-        return {"ok": False, "detail": "conector não existe"}
+        return {"ok": False, "detail": "connector does not exist"}
     try:
         r = await get(name, conn.resolved_test_path(), conns=conns)
     except (ConnectorError, httpx.HTTPError) as e:
         return {"ok": False, "detail": f"{type(e).__name__}: {e}"[:300]}
     ok = 200 <= r["status"] < 300
     return {"ok": ok, "status": r["status"], "elapsed_ms": r["elapsed_ms"],
-            "detail": "ligação OK" if ok else r["body"][:300]}
+            "detail": "connection OK" if ok else r["body"][:300]}

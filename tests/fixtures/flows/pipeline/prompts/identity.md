@@ -1,2 +1,2 @@
-Confirma que o sujeito do pedido existe.
-Guarda o resultado como indicado.
+Confirm that the subject of the request exists.
+Save the result as instructed.

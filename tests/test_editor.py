@@ -1,4 +1,4 @@
-"""Servidor do editor visual: leitura, validação, gravação e regras de segurança."""
+"""Visual editor server: reading, validation, saving and safety rules."""
 import copy
 import shutil
 from pathlib import Path
@@ -41,15 +41,15 @@ def test_catalog_and_list(client: TestClient):
     assert "artifacts.read_artifact" in {t["id"] for t in cat["tools"]}
     assert isinstance(cat["contracts"], dict)
     flows = client.get("/api/flows").json()
-    assert flows == [{"name": "pipeline", "title": "Pipeline de exemplo (testes)",
+    assert flows == [{"name": "pipeline", "title": "Example pipeline (tests)",
                       "valid": True, "agents": 7, "gates": 6}]
 
 
-def test_get_flow_returns_prompts_and_fluxo(client: TestClient):
+def test_get_flow_returns_prompts_and_flow_section(client: TestClient):
     r = client.get("/api/flows/pipeline").json()
     assert r["ok"] and r["spec"]["start"] == "triage"
     assert "prompts/triage.md" in r["prompts"]
-    assert "## Fluxo" in r["fluxo"]
+    assert "## Flow" in r["flow_section"]
     assert "mcp__artifacts__read_artifact" in r["allowed_tools"]
 
 
@@ -63,19 +63,19 @@ def test_validate_reports_errors_per_node(client: TestClient):
 
 def test_unreachable_error_points_to_orphan(client: TestClient):
     spec = client.get("/api/flows/pipeline").json()["spec"]
-    spec["agents"]["solto"] = {"description": "x", "prompt": "y"}
+    spec["agents"]["orphan"] = {"description": "x", "prompt": "y"}
     r = client.post("/api/flows/pipeline/validate", json={"spec": spec}).json()
-    assert [e["nodes"] for e in r["errors"]] == [["solto"]]
+    assert [e["nodes"] for e in r["errors"]] == [["orphan"]]
 
 
 def test_validate_missing_prompt_file(client: TestClient):
     spec = client.get("/api/flows/pipeline").json()["spec"]
-    spec["agents"]["identity"]["prompt_file"] = "prompts/nao_existe.md"
+    spec["agents"]["identity"]["prompt_file"] = "prompts/missing.md"
     r = client.post("/api/flows/pipeline/validate", json={"spec": spec}).json()
     assert not r["ok"] and r["errors"][0]["nodes"] == ["identity"]
-    # o mesmo prompt enviado pelo editor torna o flow válido
+    # the same prompt sent by the editor makes the flow valid
     r = client.post("/api/flows/pipeline/validate",
-                    json={"spec": spec, "prompts": {"prompts/nao_existe.md": "Olá"}}).json()
+                    json={"spec": spec, "prompts": {"prompts/missing.md": "Hello"}}).json()
     assert r["ok"]
 
 
@@ -83,12 +83,12 @@ def test_save_writes_yaml_prompts_and_backup(client: TestClient, base: Path):
     data = client.get("/api/flows/pipeline").json()
     spec = data["spec"]
     spec["layout"] = {"triage": {"x": 10.4, "y": 20.6}}
-    spec["agents"]["triage"]["description"] = "Nova descrição."
+    spec["agents"]["triage"]["description"] = "New description."
     prompts = {"prompts/triage.md": data["prompts"]["prompts/triage.md"] + "\nExtra.\n"}
     r = client.put("/api/flows/pipeline", json={"spec": spec, "prompts": prompts}, headers=H)
     assert r.status_code == 200 and r.json()["saved"]
     saved, _ = load_spec("pipeline", base=base)
-    assert saved.agents["triage"].description == "Nova descrição."
+    assert saved.agents["triage"].description == "New description."
     assert saved.layout["triage"].x == 10
     assert (base / "pipeline/prompts/triage.md").read_text(encoding="utf-8").endswith("Extra.\n")
     assert (base / "pipeline/flow.yaml.bak").is_file()
@@ -97,7 +97,7 @@ def test_save_writes_yaml_prompts_and_backup(client: TestClient, base: Path):
 def test_save_invalid_does_not_write(client: TestClient, base: Path):
     before = (base / "pipeline/flow.yaml").read_text(encoding="utf-8")
     spec = client.get("/api/flows/pipeline").json()["spec"]
-    spec["start"] = "fantasma"
+    spec["start"] = "ghost"
     r = client.put("/api/flows/pipeline", json={"spec": spec}, headers=H)
     assert r.status_code == 422 and not r.json()["ok"]
     assert (base / "pipeline/flow.yaml").read_text(encoding="utf-8") == before
@@ -111,7 +111,7 @@ def test_validation_does_not_leak_artifact_config(client: TestClient):
 
 @pytest.mark.parametrize("method,url,body", [
     ("put", "/api/flows/pipeline", {"spec": {}}),
-    ("post", "/api/flows", {"name": "novo", "title": "Novo"}),
+    ("post", "/api/flows", {"name": "new", "title": "New"}),
     ("delete", "/api/flows/pipeline", None),
 ])
 def test_mutations_require_csrf_header(client: TestClient, method, url, body):
@@ -125,8 +125,8 @@ def test_unknown_host_rejected(base: Path):
 
 
 @pytest.mark.parametrize("prompts,status", [
-    ({"../fora.md": "x"}, 400),
-    ({"prompts/../../fora.md": "x"}, 400),
+    ({"../outside.md": "x"}, 400),
+    ({"prompts/../../outside.md": "x"}, 400),
     ({"prompts/a.txt": "x"}, 400),
 ])
 def test_prompt_paths_confined(client: TestClient, prompts, status):
@@ -137,32 +137,32 @@ def test_prompt_paths_confined(client: TestClient, prompts, status):
 
 def test_rename_through_put_rejected(client: TestClient):
     spec = client.get("/api/flows/pipeline").json()["spec"]
-    spec["name"] = "outro"
+    spec["name"] = "other"
     assert client.put("/api/flows/pipeline", json={"spec": spec}, headers=H).status_code == 400
 
 
 def test_bad_flow_names(client: TestClient):
     assert client.get("/api/flows/..%2F..%2Fetc").status_code in (400, 404)
-    assert client.get("/api/flows/Mau").status_code == 400
+    assert client.get("/api/flows/Bad").status_code == 400
 
 
 def test_create_blank_duplicate_and_trash(client: TestClient, base: Path):
-    assert client.post("/api/flows", json={"name": "novo", "title": "Novo"}, headers=H).status_code == 201
-    assert client.get("/api/flows/novo").json()["ok"]
-    r = client.post("/api/flows", json={"name": "copia", "title": "Cópia",
+    assert client.post("/api/flows", json={"name": "new", "title": "New"}, headers=H).status_code == 201
+    assert client.get("/api/flows/new").json()["ok"]
+    r = client.post("/api/flows", json={"name": "copy", "title": "Copy",
                                         "copy_from": "pipeline"}, headers=H)
     assert r.status_code == 201
-    copia = client.get("/api/flows/copia").json()
-    assert copia["ok"] and copia["spec"]["title"] == "Cópia" and copia["spec"]["name"] == "copia"
-    assert client.post("/api/flows", json={"name": "novo", "title": "x"}, headers=H).status_code == 409
-    r = client.delete("/api/flows/novo", headers=H)
+    copied = client.get("/api/flows/copy").json()
+    assert copied["ok"] and copied["spec"]["title"] == "Copy" and copied["spec"]["name"] == "copy"
+    assert client.post("/api/flows", json={"name": "new", "title": "x"}, headers=H).status_code == 409
+    r = client.delete("/api/flows/new", headers=H)
     assert r.status_code == 200 and r.json()["trashed"].startswith(".trash")
-    assert not (base / "novo").exists() and any((base / ".trash").iterdir())
-    assert [f["name"] for f in client.get("/api/flows").json()] == ["copia", "pipeline"]
+    assert not (base / "new").exists() and any((base / ".trash").iterdir())
+    assert [f["name"] for f in client.get("/api/flows").json()] == ["copy", "pipeline"]
 
 
 def test_secrets_never_expanded(client: TestClient, base: Path, monkeypatch):
-    monkeypatch.setenv("EXT_TOKEN", "segredo-real")
+    monkeypatch.setenv("EXT_TOKEN", "real-secret")
     spec = client.get("/api/flows/pipeline").json()["spec"]
     spec = copy.deepcopy(spec)
     spec["mcp_servers"] = {"crm": {"type": "stdio", "command": "npx", "tools": ["list_items"],
@@ -172,5 +172,5 @@ def test_secrets_never_expanded(client: TestClient, base: Path, monkeypatch):
     r = client.put("/api/flows/pipeline", json={"spec": spec}, headers=H)
     assert r.status_code == 200
     text = (base / "pipeline/flow.yaml").read_text(encoding="utf-8")
-    assert "${EXT_TOKEN}" in text and "segredo-real" not in text
-    assert "segredo-real" not in r.text
+    assert "${EXT_TOKEN}" in text and "real-secret" not in text
+    assert "real-secret" not in r.text

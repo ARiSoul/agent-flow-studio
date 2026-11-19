@@ -1,7 +1,7 @@
-Explora o repositório do workspace (só leitura) e guarda `01_overview.json` com:
-- `languages`: linguagens e frameworks principais;
-- `entry_points`: ficheiros de arranque, comandos e configuração;
-- `structure`: pastas principais e o papel de cada uma;
-- `tests`: como os testes estão organizados e como correm;
-- `notes`: dúvidas ou partes que não conseguiste perceber.
-Cita sempre os caminhos dos ficheiros em que te baseias. Não inventes.
+Explore the workspace repository (read-only) and save `01_overview.json` with:
+- `languages`: main languages and frameworks;
+- `entry_points`: startup files, commands and configuration;
+- `structure`: main folders and the role of each one;
+- `tests`: how the tests are organized and how they run;
+- `notes`: doubts or parts you could not understand.
+Always cite the paths of the files you base your findings on. Do not make things up.

@@ -1,4 +1,4 @@
-// Operações puras sobre o flow (cada uma recebe uma cópia e altera-a).
+// Pure operations on the flow (each one receives a copy and changes it).
 import dagre from "@dagrejs/dagre";
 import type { AgentRaw, Doc, FlowRaw, GateRaw } from "./types";
 
@@ -17,7 +17,7 @@ export function uniqueName(spec: FlowRaw, base: string): string {
   for (let i = 1; ; i++) if (!used.has(`${base}_${i}`)) return `${base}_${i}`;
 }
 
-/** Renomeia mantendo a ordem das chaves e atualizando ligações, start e layout. */
+/** Renames while keeping the key order and updating links, start and layout. */
 export function renameNode(spec: FlowRaw, from: string, to: string): void {
   const rekey = <V,>(obj: Record<string, V> | undefined) =>
     obj && Object.fromEntries(Object.entries(obj).map(([k, v]) => [k === from ? to : k, v]));
@@ -38,15 +38,15 @@ export function removeNode(spec: FlowRaw, id: string): void {
   spec.edges = (spec.edges ?? []).filter((e) => e.from !== id && e.to !== id);
 }
 
-export function newAgent(): AgentRaw {
-  return { description: "Novo agente.", prompt: "Descreve aqui o que este agente faz.", tools: [] };
+export function newAgent(description: string, prompt: string): AgentRaw {
+  return { description, prompt, tools: [] };
 }
 
-export function newGate(kind: GateRaw["kind"]): GateRaw {
-  return { kind, label: kind === "human" ? "Aprovação humana" : "Paragem" };
+export function newGate(kind: GateRaw["kind"], label: string): GateRaw {
+  return { kind, label };
 }
 
-/** Artefactos escritos no flow → agente que os escreve. */
+/** Artifacts written in the flow → agent that writes them. */
 export function artifactOwners(spec: FlowRaw): Map<string, string> {
   const m = new Map<string, string>();
   for (const [an, a] of Object.entries(spec.agents))
@@ -54,7 +54,7 @@ export function artifactOwners(spec: FlowRaw): Map<string, string> {
   return m;
 }
 
-/** Layout automático (de cima para baixo). Só move os nós indicados (por defeito todos). */
+/** Automatic layout (top to bottom). Only moves the given nodes (all by default). */
 export function autoLayout(spec: FlowRaw, only?: Set<string>): void {
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: "TB", nodesep: 50, ranksep: 70 });
@@ -70,7 +70,7 @@ export function autoLayout(spec: FlowRaw, only?: Set<string>): void {
   }
 }
 
-/** Garante posição para todos os nós (os que faltam vêm do layout automático). */
+/** Ensures a position for every node (the missing ones come from the automatic layout). */
 export function ensureLayout(doc: Doc): Doc {
   const missing = nodeNames(doc.spec).filter((n) => !doc.spec.layout?.[n]);
   if (!missing.length) return doc;
@@ -79,7 +79,7 @@ export function ensureLayout(doc: Doc): Doc {
   return d;
 }
 
-/** Remove campos vazios para o YAML ficar limpo (o servidor ignora valores por defeito). */
+/** Removes empty fields so the YAML stays clean (the server ignores default values). */
 export function tidy(doc: Doc): Doc {
   const d = clone(doc);
   for (const a of Object.values(d.spec.agents)) {

@@ -1,15 +1,16 @@
-"""Execuções de flows a partir do editor: trace em eventos e decisões nos gates.
+"""Flow runs from the editor: trace as events and decisions at gates.
 
-Uma execução de cada vez (o módulo `artifacts` é configurado pelo flow ativo). Os eventos ficam em
-memória e em `runs/<entrada>/events.jsonl`; as decisões humanas em `runs/<entrada>/decisions.jsonl`.
-Uma decisão **não executa nada**: fica registada e, se o gate tiver ligações de saída, a execução é
-retomada (mesma sessão) para o orquestrador seguir o grafo. Os rascunhos continuam rascunhos.
-Os eventos não guardam os argumentos das ferramentas (podem ter dados pessoais), só o nome.
+One run at a time (the `artifacts` module is configured by the active flow). Events are kept in
+memory and in `runs/<input>/events.jsonl`; human decisions in `runs/<input>/decisions.jsonl`.
+A decision **runs nothing**: it is recorded and, if the gate has outgoing edges, the run resumes
+(same session) so that the orchestrator follows the graph. Drafts stay drafts.
+Events do not keep tool arguments (they can contain personal data), only the tool name.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -37,14 +38,16 @@ from ..tools.guards import safe_artifact_path
 
 Status = Literal["running", "gate", "paused", "done", "error", "stopped"]
 Mode = Literal["full", "step", "until", "agent"]
-STEP_HINT = ("\n\n(Modo de teste passo a passo: delega num agente de cada vez. Depois de cada "
-             "agente, termina com um resumo curto e espera pela indicação para continuar.)")
-CONTINUE = ("Continua o flow a partir de onde paraste: delega no próximo agente, conforme o "
-            "grafo e os artefactos já guardados.")
-AGENT_TEST = ("És um orquestrador de TESTE. Delega uma única vez no subagente `{agent}` com a "
-              "tarefa indicada, passa-lhe o id de execução `{input}` (para ler e guardar "
-              "artefactos) e termina com um resumo curto do resultado. Não delegues em mais "
-              "nenhum agente nem faças o trabalho tu.")
+STEP_HINT = ("\n\n(Step-by-step test mode: delegate to one agent at a time. After each agent, "
+             "finish with a short summary and wait for the instruction to continue.)")
+CONTINUE = ("Continue the flow from where you stopped: delegate to the next agent, following the "
+            "graph and the artifacts already saved.")
+AGENT_TEST = ("You are a TEST orchestrator. Delegate once to the subagent `{agent}` with the "
+              "given task, pass it the run id `{input}` (to read and save artifacts) and finish "
+              "with a short summary of the result. Do not delegate to any other agent and do not "
+              "do the work yourself.")
+# Text of the policy's step-by-step denials (PT before the translation, EN after it).
+STEP_DENIAL = re.compile(r"\bmod[eo]\b", re.IGNORECASE)
 Decision = Literal["approve", "reject", "answer"]
 QueryFn = Callable[..., AsyncIterator[Any]]
 
@@ -63,7 +66,7 @@ class Run:
     started: float = field(default_factory=time.time)
     task: asyncio.Task[None] | None = None
     mode: Mode = "full"
-    target: str | None = None  # modo until/agent
+    target: str | None = None  # until/agent mode
     done_agents: set[str] = field(default_factory=set)
     pending: dict[str, tuple[ApprovalRequest, asyncio.Future[tuple[bool, str]]]] = field(
         default_factory=dict)
@@ -100,13 +103,13 @@ class Runner:
         self.runs: dict[str, Run] = {}
         self._query = query_fn
 
-    # --- estado
+    # --- state
     def active(self) -> Run | None:
         return next((r for r in self.runs.values() if r.status == "running"), None)
 
     def get(self, run_id: str) -> Run:
         if run_id not in self.runs:
-            raise RunError(404, "execução não existe")
+            raise RunError(404, "run does not exist")
         return self.runs[run_id]
 
     def _emit(self, run: Run, ev: dict[str, Any]) -> None:
@@ -115,27 +118,27 @@ class Runner:
         try:
             path = safe_artifact_path(settings.runs_dir, run.input, "events.jsonl")
             path.parent.mkdir(parents=True, exist_ok=True)
-            disk = {k: v for k, v in ev.items() if k != "detail"}  # conteúdos só em memória
+            disk = {k: v for k, v in ev.items() if k != "detail"}  # contents only in memory
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"run": run.id, **disk}, ensure_ascii=False) + "\n")
         except (OSError, ValueError):
-            pass  # o trace em memória continua; o ficheiro é só histórico
+            pass  # the in-memory trace goes on; the file is only history
 
-    # --- arranque e retoma
+    # --- start and resume
     def start(self, flow: str, run_input: str, mode: Mode = "full", target: str | None = None,
               instruction: str = "") -> Run:
-        """full: o flow todo · step: um agente de cada vez · until: corre passo a passo até
-        `target` terminar · agent: só o agente `target`, isolado (com os artefactos já guardados)."""
+        """full: the whole flow · step: one agent at a time · until: runs step by step until
+        `target` finishes · agent: only the `target` agent, isolated (with the saved artifacts)."""
         if self.active():
-            raise RunError(409, "já há uma execução a decorrer; espera ou pára-a")
-        compiled = load_flow(flow, base=self.base)  # valida flow e entrada antes de arrancar
+            raise RunError(409, "a run is already in progress; wait or stop it")
+        compiled = load_flow(flow, base=self.base)  # validates flow and input before starting
         prompt = compiled.task(run_input)
         if mode in ("until", "agent") and target not in compiled.spec.agents:
-            raise RunError(400, f"agente {target!r} não existe no flow")
+            raise RunError(400, f"agent {target!r} does not exist in the flow")
         if mode in ("step", "until"):
             prompt += STEP_HINT
         if mode == "agent":
-            prompt = instruction.strip() or f"Executa o teu passo do flow para {run_input}."
+            prompt = instruction.strip() or f"Run your step of the flow for {run_input}."
         run = Run(uuid.uuid4().hex[:12], flow, run_input, self.base, mode=mode,
                   target=target if mode in ("until", "agent") else None)
         self.runs[run.id] = run
@@ -146,12 +149,12 @@ class Runner:
         return run
 
     def continue_(self, run_id: str, how: Literal["step", "full"]) -> Run:
-        """Retoma uma execução em pausa: mais um passo, ou até ao fim."""
+        """Resumes a paused run: one more step, or up to the end."""
         run = self.get(run_id)
         if run.status != "paused":
-            raise RunError(409, "a execução não está em pausa")
+            raise RunError(409, "the run is not paused")
         if self.active():
-            raise RunError(409, "já há uma execução a decorrer")
+            raise RunError(409, "a run is already in progress")
         run.mode, run.status = how, "running"
         self._emit(run, {"type": "continue", "how": how})
         self._launch(run, CONTINUE + (STEP_HINT if how == "step" else ""), run.session_id)
@@ -160,11 +163,11 @@ class Runner:
     def decide(self, run_id: str, decision: Decision, comment: str) -> Run:
         run = self.get(run_id)
         if run.status != "gate" or not run.gate:
-            raise RunError(409, "a execução não está parada num gate")
+            raise RunError(409, "the run is not stopped at a gate")
         if run.gate["kind"] != "human":
-            raise RunError(409, "um gate de paragem não se aprova; corrige a causa e corre de novo")
+            raise RunError(409, "a stop gate cannot be approved; fix the cause and run again")
         if self.active():
-            raise RunError(409, "já há uma execução a decorrer")
+            raise RunError(409, "a run is already in progress")
         gate = run.gate
         record = {"ts": time.time(), "run": run.id, "session_id": run.session_id,
                   "gate": gate["gate"], "decision": decision, "comment": comment}
@@ -178,20 +181,20 @@ class Runner:
         if not compiled.spec.outgoing(gate["gate"]):
             run.status, run.gate = "done", None
             self._emit(run, {"type": "end", "status": "done",
-                             "note": "decisão registada; o gate não tem passos seguintes"})
+                             "note": "decision recorded; the gate has no next steps"})
             return run
-        word = {"approve": "APROVADO", "reject": "REJEITADO", "answer": "RESPONDIDO"}[decision]
-        prompt = (f"Decisão humana no gate `{gate['gate']}` ({gate['label']}): {word}."
-                  + (f"\nComentário/resposta do analista:\n{comment}" if comment else "")
-                  + "\nContinua o flow a partir deste gate, conforme o grafo. Não executes "
-                    "correções: os rascunhos continuam rascunhos.")
+        word = {"approve": "APPROVED", "reject": "REJECTED", "answer": "ANSWERED"}[decision]
+        prompt = (f"Human decision at gate `{gate['gate']}` ({gate['label']}): {word}."
+                  + (f"\nAnalyst comment/answer:\n{comment}" if comment else "")
+                  + "\nContinue the flow from this gate, following the graph. Do not apply "
+                    "fixes: drafts stay drafts.")
         run.status, run.gate = "running", None
         self._launch(run, prompt, run.session_id)
         return run
 
     def _launch(self, run: Run, prompt: str, resume: str | None) -> None:
         def finished(task: asyncio.Task[None]) -> None:
-            # cancelada antes de começar: o _drive não chegou a tratar o CancelledError
+            # cancelled before it started: _drive never handled the CancelledError
             if task.cancelled() and run.status == "running":
                 run.status = "stopped"
                 self._emit(run, {"type": "end", "status": "stopped"})
@@ -224,7 +227,7 @@ class Runner:
         run = self.get(run_id)
         item = run.pending.get(approval_id)
         if item is None:
-            raise RunError(404, "pedido de aprovação não existe ou já foi decidido")
+            raise RunError(404, "approval request does not exist or was already decided")
         req, fut = item
         self._log_decision(run, {"type": "write", "agent": req.agent, "tool": req.tool,
                                  "environment": req.environment, "summary": req.summary,
@@ -242,14 +245,14 @@ class Runner:
                 fut.cancel()
         if run.task and not run.task.done():
             run.task.cancel()
-        elif run.status in ("paused", "gate"):  # sem tarefa a correr: fecha a execução
+        elif run.status in ("paused", "gate"):  # no task running: close the run
             run.status = "stopped"
             self._emit(run, {"type": "end", "status": "stopped"})
         return run
 
-    # --- execução
+    # --- execution
     async def _segment(self, run: Run, prompt: str, resume: str | None) -> int:
-        """Uma ida ao SDK. Devolve quantos agentes terminaram neste segmento."""
+        """One call to the SDK. Returns how many agents finished in this segment."""
         compiled = load_flow(run.flow, resume=resume, base=run.base)
         options = compiled.options
         policy = compiled.policy
@@ -263,7 +266,7 @@ class Runner:
         elif run.mode in ("step", "until"):
             policy.limit_segment(1)
         before = len(run.done_agents)
-        delegations: dict[str, str] = {}  # tool_use_id → subagente
+        delegations: dict[str, str] = {}  # tool_use_id → subagent
         async for msg in self._query(prompt=prompt, options=options):
             self._on_message(run, msg, delegations, compiled.spec)
         return len(run.done_agents) - before
@@ -271,7 +274,7 @@ class Runner:
     async def _drive(self, run: Run, prompt: str, resume: str | None) -> None:
         try:
             progressed = await self._segment(run, prompt, resume)
-            # "até ao agente": continua um passo de cada vez até o alvo terminar
+            # "until agent": go on one step at a time until the target finishes
             while (run.mode == "until" and run.status == "running" and not run.gate
                    and progressed and run.target not in run.done_agents and run.session_id):
                 self._emit(run, {"type": "continue", "how": "auto"})
@@ -280,7 +283,7 @@ class Runner:
                 if run.gate:
                     run.status = "gate"
                 elif run.mode in ("step", "until") and progressed:
-                    run.status = "paused"  # pode haver mais passos: o humano decide
+                    run.status = "paused"  # there may be more steps: the human decides
                 else:
                     run.status = "done"
             if run.gate and run.gate["kind"] == "stop":
@@ -289,7 +292,7 @@ class Runner:
         except asyncio.CancelledError:
             run.status = "stopped"
             self._emit(run, {"type": "end", "status": "stopped"})
-        except Exception as e:  # noqa: BLE001 — reportar no trace em vez de perder a execução
+        except Exception as e:  # noqa: BLE001 — report in the trace instead of losing the run
             run.status = "error"
             self._emit(run, {"type": "end", "status": "error", "message": f"{type(e).__name__}: {e}"})
 
@@ -321,8 +324,8 @@ class Runner:
             for b in msg.content:
                 if isinstance(b, ToolResultBlock) and b.tool_use_id in delegations:
                     sub = delegations[b.tool_use_id]
-                    if b.is_error and "modo " in _text(b.content):
-                        # recusada pelo controlo passo a passo: o agente não correu
+                    if b.is_error and STEP_DENIAL.search(_text(b.content)):
+                        # denied by the step-by-step control: the agent did not run
                         self._emit(run, {"type": "agent_blocked", "agent": sub})
                         continue
                     if not b.is_error:
@@ -343,7 +346,7 @@ class Runner:
                 run.status = "error"
 
     async def stream(self, run_id: str, after: int = 0) -> AsyncIterator[dict[str, Any]]:
-        """Eventos a partir de `after`, até a execução sair de 'running' (gate, fim ou erro)."""
+        """Events from `after`, until the run leaves 'running' (gate, end or error)."""
         run = self.get(run_id)
         i = max(0, after)
         while True:

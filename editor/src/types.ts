@@ -1,4 +1,4 @@
-// Forma "crua" de flow.yaml (ver src/investigator/builder/spec.py). O servidor valida tudo.
+// "Raw" shape of flow.yaml (see src/agent_flow_studio/builder/spec.py). The server validates everything.
 
 export interface ArtifactRaw {
   name: string;
@@ -88,7 +88,7 @@ export interface FlowError {
 export interface Validation {
   ok: boolean;
   errors: FlowError[];
-  fluxo?: string;
+  flow_section?: string;
   allowed_tools?: string[];
 }
 

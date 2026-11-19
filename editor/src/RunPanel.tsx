@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useI18n, type I18n } from "./i18n";
 import type { Doc } from "./types";
 
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
@@ -16,7 +17,7 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-/** Estado de cada nó a partir dos eventos (para o canvas). */
+/** State of each node from the events (for the canvas). */
 export function traceOf(events: Ev[]): Record<string, NodeRun> {
   const s: Record<string, NodeRun> = {};
   for (const e of events) {
@@ -26,34 +27,34 @@ export function traceOf(events: Ev[]): Record<string, NodeRun> {
       s[a] = "active";
     }
     if (e.type === "agent_done" && a) s[a] = e.error ? "error" : "done";
-    if (e.type === "agent_blocked" && a) delete s[a];  // recusado pelo modo passo a passo
+    if (e.type === "agent_blocked" && a) delete s[a];  // denied by step-by-step mode
     if (e.type === "gate") s[e.gate as string] = "gate";
     if (e.type === "decision") s[e.gate as string] = "done";
   }
   return s;
 }
 
-const MODE_LABEL: Record<string, string> = {
-  full: "flow completo", step: "passo a passo", until: "até ao agente", agent: "só o agente",
-};
+const status = (i18n: I18n, s: unknown) => i18n.tOr(`run.status.${String(s)}`, String(s));
 
-function line(e: Ev): { cls: string; text: string } | null {
+function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
+  const { t, tOr } = i18n;
   const who = e.agent ? `${e.agent}: ` : "";
+  const mode = String(e.mode ?? "full");
   switch (e.type) {
-    case "start": return { cls: "info", text: `Início · ${e.flow} · ${e.input} · ${MODE_LABEL[String(e.mode ?? "full")]}${e.target ? ` ${e.target}` : ""}${e.mock ? " · MOCK" : " · DADOS REAIS"}` };
+    case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${t(e.mock ? "run.ev.mock" : "run.ev.real")}` };
     case "delegate": return { cls: "deleg", text: `→ ${e.agent}${e.task ? ` — ${e.task}` : ""}` };
     case "tool": return { cls: "tool", text: `${who}${e.tool}${e.artifact ? ` (${e.artifact})` : ""}` };
-    case "tool_error": return { cls: "err", text: `${who}ferramenta devolveu erro` };
-    case "agent_done": return { cls: e.error ? "err" : "ok", text: `✓ ${e.agent} terminou${e.error ? " com erro" : ""}` };
+    case "tool_error": return { cls: "err", text: t("run.ev.toolError", { who }) };
+    case "agent_done": return { cls: e.error ? "err" : "ok", text: t(e.error ? "run.ev.agentDoneError" : "run.ev.agentDone", { agent: String(e.agent) }) };
     case "text": return { cls: e.agent ? "sub" : "say", text: `${who}${e.text}` };
     case "gate": return { cls: "gate", text: `⏸ ${e.label} — ${e.reason}` };
-    case "approval": return { cls: "gate", text: `✎ ${e.agent}: pede aprovação — ${e.summary}` };
-    case "approval_result": return { cls: e.approved ? "ok" : "err", text: `${e.approved ? "✓ aprovado" : "✗ recusado"}: ${e.summary}${e.comment ? ` — ${e.comment}` : ""}` };
+    case "approval": return { cls: "gate", text: t("run.ev.approval", { agent: String(e.agent), summary: String(e.summary) }) };
+    case "approval_result": return { cls: e.approved ? "ok" : "err", text: `${t(e.approved ? "run.ev.approved" : "run.ev.rejected")}: ${e.summary}${e.comment ? ` — ${e.comment}` : ""}` };
     case "agent_blocked": return null;
-    case "continue": return { cls: "info", text: e.how === "full" ? "Continuar até ao fim" : e.how === "auto" ? "Próximo passo (automático)" : "Próximo passo" };
-    case "decision": return { cls: "info", text: `Decisão em ${e.gate}: ${e.decision}${e.comment ? ` — ${e.comment}` : ""}` };
-    case "result": return { cls: "info", text: `Sessão ${String(e.session_id).slice(0, 8)}… · ${e.turns} turnos · ≈ ${Number(e.cost ?? 0).toFixed(3)} USD${e.denials ? ` · ${e.denials} recusas do hook` : ""}` };
-    case "end": return { cls: e.status === "error" ? "err" : "info", text: `Fim: ${e.status}${e.message ? ` — ${e.message}` : ""}${e.note ? ` (${e.note})` : ""}` };
+    case "continue": return { cls: "info", text: t(e.how === "full" ? "run.ev.continueFull" : e.how === "auto" ? "run.ev.continueAuto" : "run.ev.continueStep") };
+    case "decision": return { cls: "info", text: `${t("run.ev.decision", { gate: String(e.gate), decision: tOr(`run.decision.${String(e.decision)}`, String(e.decision)) })}${e.comment ? ` — ${e.comment}` : ""}` };
+    case "result": return { cls: "info", text: `${t("run.ev.result", { session: String(e.session_id).slice(0, 8), turns: String(e.turns), cost: Number(e.cost ?? 0).toFixed(3) })}${e.denials ? t("run.ev.denials", { n: String(e.denials) }) : ""}` };
+    case "end": return { cls: e.status === "error" ? "err" : "info", text: `${t("run.ev.end", { status: status(i18n, e.status) })}${e.message ? ` — ${e.message}` : ""}${e.note ? ` (${e.note})` : ""}` };
     default: return null;
   }
 }
@@ -62,10 +63,12 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   flow: string; doc: Doc; dirty: boolean; mock: boolean; onTrace: (t: Record<string, NodeRun>) => void;
   request?: RunRequest | null;
 }) {
+  const i18n = useI18n();
+  const { t } = i18n;
   const [mode, setMode] = useState<RunMode>("full");
   const [target, setTarget] = useState("");
   const [instruction, setInstruction] = useState("");
-  const [inputs, setInputs] = useState<string[]>([]);  // artefactos já existentes para a entrada
+  const [inputs, setInputs] = useState<string[]>([]);  // artifacts that already exist for the input
   useEffect(() => {
     if (request) { setMode(request.mode); setTarget(request.target ?? ""); }
   }, [request]);
@@ -79,7 +82,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const [sent, setSent] = useState<Set<string>>(new Set());
   const evRef = useRef<Ev[]>([]);
   const end = useRef<HTMLDivElement>(null);
-  const label = doc.spec.input?.label ?? "Entrada";
+  const label = doc.spec.input?.label ?? t("insp.inputDefault");
 
   useEffect(() => { onTrace(traceOf(events)); end.current?.scrollIntoView({ block: "nearest" }); }, [events, onTrace]);
   useEffect(() => () => onTrace({}), [onTrace]);
@@ -117,9 +120,9 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     setError(null);
     const inp = input.trim();
     if (!inp) return;
-    if (!mock && !confirm("AFS_MOCK está desligado: os conectores vão ler dados reais. Continuar?")) return;
+    if (!mock && !confirm(t("run.confirmReal"))) return;
     try {
-      if ((mode === "until" || mode === "agent") && !target) throw new Error("Escolhe o agente");
+      if ((mode === "until" || mode === "agent") && !target) throw new Error(t("run.pickAgent"));
       const r = await post<RunInfo>("/api/runs", { flow, input: inp, mode, target: target || null, instruction: mode === "agent" ? instruction : "" });
       evRef.current = []; setEvents([]); setView(null); setRun(r);
       await follow(r.id, inp);
@@ -136,7 +139,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     } catch (e) { setError(String((e as Error).message)); }
   };
 
-  // artefactos de que o agente-alvo precisa (modo "só o agente")
+  // artifacts the target agent needs ("single agent" mode)
   useEffect(() => {
     const inp = input.trim();
     if (mode !== "agent" || !/^[A-Za-z0-9_-]{1,40}$/.test(inp)) { setInputs([]); return; }
@@ -168,7 +171,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const pending = events.filter((e) => e.type === "approval" && !decided.has(e.id as string) && !sent.has(e.id as string));
   const answer = async (id: string, ok: boolean) => {
     if (!run || sent.has(id)) return;
-    setSent((s) => new Set(s).add(id));  // esconde já o cartão (evita duplo clique)
+    setSent((s) => new Set(s).add(id));  // hide the card now (avoids a double click)
     try { await post(`/api/runs/${run.id}/approvals/${id}`, { approve: ok, comment }); setComment(""); }
     catch (e) { setError(String((e as Error).message)); }
   };
@@ -180,80 +183,80 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     <div className="runp">
       <div className="run-head">
         <div className="row">
-          <input placeholder={`${label} (ex.: teste-001)`} value={input} disabled={running}
+          <input placeholder={t("run.inputPlaceholder", { label })} value={input} disabled={running}
             onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && start()} />
           {running
-            ? <button className="danger" onClick={() => run && post(`/api/runs/${run.id}/stop`)}>Parar</button>
+            ? <button className="danger" onClick={() => run && post(`/api/runs/${run.id}/stop`)}>{t("run.stop")}</button>
             : <button className="primary" disabled={!input.trim() || dirty} onClick={start}
-              title={dirty ? "Grava o flow antes de executar (corre a versão em disco)" : "Executar"}>Executar</button>}
+              title={dirty ? t("run.saveFirstTitle") : t("run.run")}>{t("run.run")}</button>}
         </div>
         <div className="row mode-row">
           <select value={mode} disabled={running} onChange={(e) => setMode(e.target.value as RunMode)}
-            title="Como correr: o flow todo, um agente de cada vez, até um agente, ou só um agente isolado">
-            <option value="full">Flow completo</option>
-            <option value="step">Passo a passo</option>
-            <option value="until">Até ao agente…</option>
-            <option value="agent">Só um agente (isolado)</option>
+            title={t("run.modeTitle")}>
+            <option value="full">{t("run.opt.full")}</option>
+            <option value="step">{t("run.opt.step")}</option>
+            <option value="until">{t("run.opt.until")}</option>
+            <option value="agent">{t("run.opt.agent")}</option>
           </select>
           {(mode === "until" || mode === "agent") && (
             <select value={target} disabled={running} onChange={(e) => setTarget(e.target.value)}>
-              <option value="">— agente —</option>
+              <option value="">{t("run.agentOption")}</option>
               {agents.map((a) => <option key={a}>{a}</option>)}
             </select>)}
         </div>
         {mode === "agent" && <>
-          <textarea rows={2} disabled={running} placeholder="Tarefa para o agente (opcional; por defeito, o seu passo do flow)"
+          <textarea rows={2} disabled={running} placeholder={t("run.instruction")}
             value={instruction} onChange={(e) => setInstruction(e.target.value)} />
           {target && needs.length > 0 && (
             <p className={`small ${missing.length ? "field-err" : "muted"}`}>
-              {missing.length ? `Faltam artefactos de entrada em runs/${input || "<entrada>"}/: ${missing.join(", ")} (corre antes os agentes anteriores, ou um flow até aqui)`
-                : `Artefactos de entrada presentes: ${needs.join(", ")}`}</p>)}
+              {missing.length ? t("run.missingInputs", { input: input || t("run.inputFolder"), names: missing.join(", ") })
+                : t("run.presentInputs", { names: needs.join(", ") })}</p>)}
         </>}
-        <span className={`badge ${mock ? "" : "warn"}`}>{mock ? "mock (dados simulados)" : "dados reais"}</span>
-        {dirty && <span className="muted small"> grava antes de executar</span>}
-        {run && <span className="muted small"> · {run.status}{run.cost ? ` · ≈ ${run.cost.toFixed(3)} USD` : ""}</span>}
+        <span className={`badge ${mock ? "" : "warn"}`}>{mock ? t("run.mock") : t("run.real")}</span>
+        {dirty && <span className="muted small">{t("run.saveFirst")}</span>}
+        {run && <span className="muted small"> · {status(i18n, run.status)}{run.cost ? ` · ≈ ${run.cost.toFixed(3)} USD` : ""}</span>}
         {error && <div className="field-err">{error}</div>}
       </div>
 
       <div className="run-log">
-        {!run && <p className="muted">Corre o flow gravado com uma entrada. Vês no canvas o agente ativo, os que terminaram e o gate onde parou. Nos gates de aprovação humana decides aqui: a decisão fica registada em <code>runs/&lt;entrada&gt;/decisions.jsonl</code> e nada é executado.</p>}
-        {events.map((e) => { const l = line(e); return l && <div key={e.i} className={`ev ${l.cls}`}>{l.text}</div>; })}
+        {!run && <p className="muted">{t("run.intro")} <code>runs/{t("run.inputFolder")}/decisions.jsonl</code> {t("run.introEnd")}</p>}
+        {events.map((e) => { const l = line(e, i18n); return l && <div key={e.i} className={`ev ${l.cls}`}>{l.text}</div>; })}
         {pending.map((p) => (
           <div key={p.id as string} className="gate-card write">
-            <b>Escrita pedida por {String(p.agent)} · {String(p.environment)}</b>
+            <b>{t("run.writeBy", { agent: String(p.agent), env: String(p.environment) })}</b>
             <p className="small mono">{String(p.summary)}</p>
-            <details open><summary className="small">Detalhe</summary>
+            <details open><summary className="small">{t("run.detail")}</summary>
               <pre className="mono art-view">{JSON.stringify(p.detail, null, 2)}</pre></details>
-            <textarea rows={2} placeholder="Comentário (opcional; em caso de recusa, explica porquê)" value={comment} onChange={(e) => setComment(e.target.value)} />
+            <textarea rows={2} placeholder={t("run.writeComment")} value={comment} onChange={(e) => setComment(e.target.value)} />
             <div className="row">
-              <button className="primary small" onClick={() => answer(p.id as string, true)}>Aprovar escrita</button>
-              <button className="danger small" onClick={() => answer(p.id as string, false)}>Recusar</button>
+              <button className="primary small" onClick={() => answer(p.id as string, true)}>{t("run.approveWrite")}</button>
+              <button className="danger small" onClick={() => answer(p.id as string, false)}>{t("run.reject")}</button>
             </div>
           </div>
         ))}
-        {running && !pending.length && <div className="ev tool">a trabalhar…</div>}
+        {running && !pending.length && <div className="ev tool">{t("run.working")}</div>}
         {paused && (
           <div className="gate-card step">
-            <b>Em pausa{run?.target && run.mode === "until" ? ` — ${run.target} terminou` : " depois deste passo"}</b>
-            <p className="small muted">Revê o trace e os artefactos abaixo. Podes editar o flow e gravar antes de continuar: o passo seguinte usa a versão gravada.</p>
+            <b>{run?.target && run.mode === "until" ? t("run.pausedUntil", { target: run.target }) : t("run.pausedAfter")}</b>
+            <p className="small muted">{t("run.pausedHelp")}</p>
             <div className="row">
-              <button className="primary small" onClick={() => cont("step")}>Próximo passo</button>
-              <button className="small" onClick={() => cont("full")}>Continuar até ao fim</button>
-              <button className="danger small" onClick={() => run && post(`/api/runs/${run.id}/stop`).then(() => setRun({ ...run, status: "stopped" }))}>Terminar</button>
+              <button className="primary small" onClick={() => cont("step")}>{t("run.nextStep")}</button>
+              <button className="small" onClick={() => cont("full")}>{t("run.continueToEnd")}</button>
+              <button className="danger small" onClick={() => run && post(`/api/runs/${run.id}/stop`).then(() => setRun({ ...run, status: "stopped" }))}>{t("run.finish")}</button>
             </div>
           </div>
         )}
         {gate && gate.kind === "human" && (
           <div className="gate-card">
-            <b>Aprovação humana: {gate.label}</b>
+            <b>{t("run.humanApproval", { label: gate.label })}</b>
             <p className="small">{gate.reason}</p>
-            <textarea rows={3} placeholder="Comentário ou resposta (opcional)" value={comment} onChange={(e) => setComment(e.target.value)} />
+            <textarea rows={3} placeholder={t("run.gateComment")} value={comment} onChange={(e) => setComment(e.target.value)} />
             <div className="row">
-              <button className="primary small" onClick={() => decide("approve")}>Aprovar</button>
-              <button className="small" onClick={() => decide("answer")} disabled={!comment.trim()}>Responder e continuar</button>
-              <button className="danger small" onClick={() => decide("reject")}>Rejeitar</button>
+              <button className="primary small" onClick={() => decide("approve")}>{t("run.approve")}</button>
+              <button className="small" onClick={() => decide("answer")} disabled={!comment.trim()}>{t("run.answerContinue")}</button>
+              <button className="danger small" onClick={() => decide("reject")}>{t("run.rejectGate")}</button>
             </div>
-            <p className="muted small">Aprovar não executa ações: os rascunhos continuam rascunhos. Se o gate tiver passos seguintes, o flow continua.</p>
+            <p className="muted small">{t("run.gateHelp")}</p>
           </div>
         )}
         <div ref={end} />
@@ -261,7 +264,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
 
       {arts.length > 0 && (
         <div className="run-arts">
-          <h2>Artefactos · runs/{run?.input}/</h2>
+          <h2>{t("run.artifacts", { input: run?.input ?? "" })}</h2>
           <div className="arts">{arts.map((a) => (
             <button key={a.name} className={`small${view?.name === a.name ? " on" : ""}`} onClick={() => open(a.name)}>{a.name}</button>
           ))}</div>

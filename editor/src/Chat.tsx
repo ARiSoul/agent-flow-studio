@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useI18n, type Lang } from "./i18n";
 import type { Doc, Validation } from "./types";
 
 type Item =
@@ -12,14 +13,9 @@ type Event =
       changed: boolean; doc: Doc | null; validation: Validation }
   | { type: "error"; message: string };
 
-const SUGGESTIONS = [
-  "Explica-me este flow em 5 linhas.",
-  "Revê este flow e sugere melhorias (sem alterar nada).",
-  "Adiciona um agente revisor antes do último passo.",
-  "Cria um flow novo de raiz: pergunta-me o que preciso.",
-];
+const SUGGESTIONS = ["chat.suggest1", "chat.suggest2", "chat.suggest3", "chat.suggest4"] as const;
 
-/** `código` em linha e blocos ``` — o resto é texto simples (sem HTML). */
+/** Inline `code` and ``` blocks — the rest is plain text (no HTML). */
 function Rich({ text }: { text: string }) {
   const out: ReactNode[] = [];
   text.split(/```[a-z]*\n?/).forEach((part, i) => {
@@ -31,9 +27,10 @@ function Rich({ text }: { text: string }) {
   return <>{out}</>;
 }
 
-export function Chat({ flow, doc, apply, onBusy }: {
-  flow: string; doc: Doc; apply: (d: Doc) => void; onBusy: (b: boolean) => void;
+export function Chat({ flow, lang, doc, apply, onBusy }: {
+  flow: string; lang: Lang; doc: Doc; apply: (d: Doc) => void; onBusy: (b: boolean) => void;
 }) {
+  const { t } = useI18n();
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -61,7 +58,7 @@ export function Chat({ flow, doc, apply, onBusy }: {
       const r = await fetch("/api/assist", {
         method: "POST", signal: ctrl.signal,
         headers: { "Content-Type": "application/json", "X-Flow-Editor": "1" },
-        body: JSON.stringify({ flow, message: msg, session_id: session, ...docRef.current }),
+        body: JSON.stringify({ flow, message: msg, session_id: session, lang, ...docRef.current }),
       });
       if (!r.ok || !r.body) throw new Error((await r.text()) || r.statusText);
       const reader = r.body.getReader();
@@ -83,18 +80,18 @@ export function Chat({ flow, doc, apply, onBusy }: {
           else if (ev.type === "done") {
             setSession(ev.session_id);
             setCost((c) => c + (ev.cost ?? 0));
-            if (ev.is_error) push({ kind: "error", text: "O assistente terminou com erro (limite de turnos?)." });
+            if (ev.is_error) push({ kind: "error", text: t("chat.endedWithError") });
             if (ev.changed && ev.doc) {
               apply(ev.doc);
-              push({ kind: "info", text: (ev.validation.ok ? "Alterações aplicadas ao canvas (por gravar). "
-                : `Alterações aplicadas, com ${ev.validation.errors.length} problema(s). `) + "Ctrl+Z desfaz." });
+              push({ kind: "info", text: (ev.validation.ok ? t("chat.applied")
+                : t("chat.appliedWithProblems", { n: ev.validation.errors.length })) + t("chat.undoHint") });
             }
           }
         }
       }
     } catch (e) {
       if ((e as Error).name !== "AbortError") push({ kind: "error", text: String(e) });
-      else push({ kind: "info", text: "Interrompido; nada foi aplicado." });
+      else push({ kind: "info", text: t("chat.interrupted") });
     } finally {
       abort.current = null;
       setB(false);
@@ -106,28 +103,27 @@ export function Chat({ flow, doc, apply, onBusy }: {
       <div className="chat-log">
         {items.length === 0 && (
           <div className="chat-empty">
-            <p>Pede-me para criar ou mudar agentes, gates, ligações, prompts, ferramentas, artefactos ou MCPs.
-              Altero só o rascunho no canvas: tu revês e gravas.</p>
-            {SUGGESTIONS.map((s) => <button key={s} className="suggest" onClick={() => send(s)}>{s}</button>)}
+            <p>{t("chat.intro")}</p>
+            {SUGGESTIONS.map((s) => <button key={s} className="suggest" onClick={() => send(t(s))}>{t(s)}</button>)}
           </div>
         )}
         {items.map((it, i) => it.kind === "tool"
           ? <div key={i} className={`chat-tool${it.edit ? " edit" : ""}`}>{it.edit ? "✎" : "·"} {it.name} {it.arg && <code>{it.arg}</code>}</div>
           : <div key={i} className={`chat-msg ${it.kind}`}><Rich text={it.text} /></div>)}
-        {busy && <div className="chat-tool">a pensar…</div>}
+        {busy && <div className="chat-tool">{t("chat.thinking")}</div>}
         <div ref={end} />
       </div>
       <div className="chat-input">
-        <textarea rows={3} value={input} placeholder="Escreve… (Enter envia, Shift+Enter muda de linha)"
+        <textarea rows={3} value={input} placeholder={t("chat.placeholder")}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} />
         <div className="chat-actions">
-          <span className="muted small">{cost > 0 ? `≈ ${cost.toFixed(3)} USD nesta conversa` : ""}</span>
+          <span className="muted small">{cost > 0 ? t("chat.cost", { cost: cost.toFixed(3) }) : ""}</span>
           <button className="small" disabled={busy || !items.length}
-            onClick={() => { setItems([]); setSession(null); setCost(0); }}>Nova conversa</button>
+            onClick={() => { setItems([]); setSession(null); setCost(0); }}>{t("chat.newConversation")}</button>
           {busy
-            ? <button className="small danger" onClick={() => abort.current?.abort()}>Parar</button>
-            : <button className="small primary" disabled={!input.trim()} onClick={() => send(input)}>Enviar</button>}
+            ? <button className="small danger" onClick={() => abort.current?.abort()}>{t("chat.stop")}</button>
+            : <button className="small primary" disabled={!input.trim()} onClick={() => send(input)}>{t("chat.send")}</button>}
         </div>
       </div>
     </div>

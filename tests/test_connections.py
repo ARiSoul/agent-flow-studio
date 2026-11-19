@@ -1,4 +1,4 @@
-"""Conectores: modelo, segredos, autenticação, GET só leitura, API do editor e uso nos flows."""
+"""Connectors: model, secrets, authentication, read-only GET, editor API and use in flows."""
 import asyncio
 import base64
 import copy
@@ -55,11 +55,11 @@ def transport(monkeypatch):
 
 
 @pytest.mark.parametrize("patch,needle", [
-    ({"type": "github", "auth": {"method": "client_credentials", "client_id": "x"}}, "não suportado"),
+    ({"type": "github", "auth": {"method": "client_credentials", "client_id": "x"}}, "not supported"),
     ({"organization": None}, "organization"),
-    ({"base_url": "http://inseguro"}, "https://"),
+    ({"base_url": "http://insecure"}, "https://"),
     ({"secrets": {"token": "literal"}}, "keyring"),
-    ({"allowed_paths": ["../x"]}, "caminho inválido"),
+    ({"allowed_paths": ["../x"]}, "invalid path"),
 ])
 def test_connection_model_rules(patch, needle):
     with pytest.raises(ValueError, match=needle):
@@ -69,11 +69,11 @@ def test_connection_model_rules(patch, needle):
 def test_store_roundtrip_without_secrets(cfile: Path, fake_keyring, monkeypatch):
     c = Connection.model_validate({**DEVOPS, "secrets": {"token": "keyring"}})
     store.save({"devops": c})
-    store.set_secret("devops", "token", "pat-super-secreto")
-    assert "pat-super-secreto" not in cfile.read_text(encoding="utf-8")
+    store.set_secret("devops", "token", "pat-super-secret")
+    assert "pat-super-secret" not in cfile.read_text(encoding="utf-8")
     loaded = store.load()
     assert loaded["devops"] == c
-    assert store.get_secret("devops", c, "token") == "pat-super-secreto"
+    assert store.get_secret("devops", c, "token") == "pat-super-secret"
     assert store.secret_status("devops", c) == {"field": "token", "source": "keyring", "set": True}
 
 
@@ -88,7 +88,7 @@ def test_devops_pat_get(cfile, transport, monkeypatch):
 
 
 @pytest.mark.parametrize("path", ["/_apis/git/repos", "https://evil/x", "/_apis/projects/../x",
-                                  "relativo"])
+                                  "relative"])
 def test_get_path_restrictions(transport, monkeypatch, path):
     monkeypatch.setenv("DEVOPS_PAT", "abc")
     conns = {"devops": Connection.model_validate(DEVOPS)}
@@ -101,7 +101,7 @@ def test_missing_secret_reported_without_request(transport, monkeypatch):
     monkeypatch.delenv("DEVOPS_PAT", raising=False)
     conns = {"devops": Connection.model_validate(DEVOPS)}
     r = asyncio.run(client.test("devops", conns))
-    assert not r["ok"] and "segredo" in r["detail"] and not transport
+    assert not r["ok"] and "secret" in r["detail"] and not transport
 
 
 def test_client_credentials_token_then_get(transport, monkeypatch):
@@ -127,7 +127,7 @@ def test_client_credentials_token_then_get(transport, monkeypatch):
         "%3A", ":")
 
 
-# --- API do editor ---------------------------------------------------------------------------
+# --- editor API ------------------------------------------------------------------------------
 def test_editor_connections_api(tmp_path, cfile, fake_keyring, transport):
     shutil.copytree(PIPELINE, tmp_path / "flows/pipeline")
     c = TestClient(create_app(tmp_path / "flows", allowed_hosts=["testserver"]))
@@ -140,7 +140,7 @@ def test_editor_connections_api(tmp_path, cfile, fake_keyring, transport):
     listing = c.get("/api/connections")
     assert "pat-xyz" not in listing.text and "pat-xyz" not in cfile.read_text(encoding="utf-8")
     assert listing.json()["connections"]["devops"]["secrets"] == {"token": "keyring"}
-    # editar não apaga a referência ao segredo
+    # editing does not remove the secret reference
     c.put("/api/connections/devops", json={**body, "description": "org"}, headers=H)
     assert store.load()["devops"].secrets == {"token": "keyring"}
     t = c.post("/api/connections/devops/test", headers=H).json()
@@ -151,10 +151,10 @@ def test_editor_connections_api(tmp_path, cfile, fake_keyring, transport):
     assert c.put("/api/connections/Mau", json=body, headers=H).status_code == 400
 
 
-# --- uso nos flows ---------------------------------------------------------------------------
+# --- use in flows ----------------------------------------------------------------------------
 FLOW = {
-    "name": "mini", "title": "Mini", "task": "Faz {input}.", "start": "a",
-    "agents": {"a": {"description": "lê", "prompt": "Lê.", "tools": ["connections.http_get"],
+    "name": "mini", "title": "Mini", "task": "Do {input}.", "start": "a",
+    "agents": {"a": {"description": "reads", "prompt": "Read.", "tools": ["connections.http_get"],
                      "connections": ["devops"]}},
 }
 
@@ -164,17 +164,17 @@ def test_flow_with_connection_compiles_and_guards(tmp_path, cfile, monkeypatch):
     cf = compile_flow(FlowSpec.model_validate(FLOW), tmp_path)
     assert "mcp__connections__http_get" in cf.agent_tools["a"]
     prompt = cf.options.agents["a"].prompt
-    assert "## Conectores" in prompt and "`devops`: azure_devops" in prompt
+    assert "## Connectors" in prompt and "`devops`: azure_devops" in prompt
 
 
 def test_flow_with_unknown_connection_fails(tmp_path, cfile):
-    with pytest.raises(FlowError, match="não configurado"):
+    with pytest.raises(FlowError, match="not configured"):
         compile_flow(FlowSpec.model_validate(FLOW), tmp_path)
 
 
 @pytest.mark.parametrize("mutate,needle", [
-    (lambda a: a.update(tools=[]), "não tem connections.http_get"),
-    (lambda a: a.update(connections=[]), "nenhum conector"),
+    (lambda a: a.update(tools=[]), "does not have connections.http_get"),
+    (lambda a: a.update(connections=[]), "no connector"),
 ])
 def test_flow_connection_rules(mutate, needle):
     d = copy.deepcopy(FLOW)

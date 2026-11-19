@@ -1,4 +1,4 @@
-"""Execuções a partir do editor: trace, gates, decisões e API (com um SDK falso)."""
+"""Runs from the editor: trace, gates, decisions and API (with a fake SDK)."""
 import asyncio
 import json
 import shutil
@@ -50,13 +50,13 @@ def fake_query(script):
 
 def first_run(_n):
     return [
-        _am(TextBlock("A começar.")),
-        _am(ToolUseBlock("d1", "Agent", {"subagent_type": "triage", "description": "triagem"})),
+        _am(TextBlock("Starting.")),
+        _am(ToolUseBlock("d1", "Agent", {"subagent_type": "triage", "description": "triage"})),
         _am(ToolUseBlock("t1", "mcp__artifacts__read_artifact", {"number": "INC1"}), parent="d1"),
         _am(ToolUseBlock("t2", "mcp__artifacts__save_artifact",
                          {"ticket": "INC1", "name": "01_triage.json", "content": "{}"}), parent="d1"),
         UserMessage(content=[ToolResultBlock("d1", "ok", False)]),
-        _am(ToolUseBlock("g1", GATE, {"gate": "analyst_answers", "reason": "falta a data z"})),
+        _am(ToolUseBlock("g1", GATE, {"gate": "analyst_answers", "reason": "date z is missing"})),
         _result(),
     ]
 
@@ -74,7 +74,7 @@ async def _wait(r):
 
 
 def test_run_reaches_gate_then_resumes(env: Path):
-    q = fake_query(lambda n: first_run(n) if n == 1 else [_am(TextBlock("Continuo.")), _result()])
+    q = fake_query(lambda n: first_run(n) if n == 1 else [_am(TextBlock("Continuing.")), _result()])
     rn = Runner(env / "flows", q)
 
     async def scenario():
@@ -87,12 +87,12 @@ def test_run_reaches_gate_then_resumes(env: Path):
                          "result", "end"]
         tool_ev = [e for e in r.events if e["type"] == "tool"]
         assert tool_ev[0] == {**tool_ev[0], "agent": "triage", "tool": "read_artifact"}
-        assert "number" not in json.dumps(tool_ev)  # argumentos não ficam no trace
+        assert "number" not in json.dumps(tool_ev)  # arguments do not stay in the trace
         assert tool_ev[1]["artifact"] == "01_triage.json"
         rn.decide(r.id, "answer", "z = 2026-11-01")
         await _wait(r)
         assert r.status == "done" and q.calls[1]["resume"] == "sess-1"
-        assert "RESPONDIDO" in q.calls[1]["prompt"] and "2026-11-01" in q.calls[1]["prompt"]
+        assert "ANSWERED" in q.calls[1]["prompt"] and "2026-11-01" in q.calls[1]["prompt"]
         return r
 
     r = asyncio.run(scenario())
@@ -116,7 +116,7 @@ def test_terminal_gate_records_decision_without_resuming(env: Path):
         return r
 
     r = asyncio.run(scenario())
-    assert r.status == "done" and len(q.calls) == 1  # sem ligações de saída: não retoma
+    assert r.status == "done" and len(q.calls) == 1  # no outgoing edges: it does not resume
 
 
 def test_stop_gate_ends_run_and_cannot_be_approved(env: Path):

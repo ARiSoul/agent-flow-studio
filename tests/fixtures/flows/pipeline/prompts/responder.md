@@ -1,2 +1,2 @@
-Prepara os rascunhos de resposta para aprovação.
-Guarda o resultado como indicado.
+Prepare the reply drafts for approval.
+Save the result as instructed.

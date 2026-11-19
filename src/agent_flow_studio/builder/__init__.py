@@ -1,4 +1,4 @@
-"""Construtor de flows: formato (spec), catálogo e compilação para o Claude Agent SDK."""
+"""Flow builder: format (spec), catalog and compilation for the Claude Agent SDK."""
 from .compile import CompiledFlow, FlowError, compile_flow, list_flows, load_flow, load_spec
 from .spec import FlowSpec
 

@@ -1,6 +1,6 @@
-"""Ferramenta genérica de leitura através dos conectores configurados (connections.yaml).
+"""Generic tools that call the configured connectors (connections.yaml).
 
-O hook de guarda garante que cada subagente só usa os conectores que o flow lhe atribuiu.
+The guard hook makes sure each subagent uses only the connectors the flow assigned to it.
 """
 import httpx
 from claude_agent_sdk import tool
@@ -12,9 +12,9 @@ from .common import err, ok
 
 @tool(
     "http_get",
-    "GET (só leitura) num conector configurado. 'path' é relativo à URL base do conector e começa "
-    "por / (ex.: /_apis/projects?api-version=7.1). Só podes usar os conectores que te foram "
-    "atribuídos.",
+    "GET (read-only) on a configured connector. 'path' is relative to the connector's base URL "
+    "and starts with / (e.g. /_apis/projects?api-version=7.1). You can only use the connectors "
+    "assigned to you.",
     {"type": "object", "properties": {
         "connection": {"type": "string"},
         "path": {"type": "string"},
@@ -31,9 +31,9 @@ async def http_get(args):
 
 @tool(
     "http_write",
-    "Escrita (POST/PUT/PATCH/DELETE) num conector com acesso de escrita: criar PR, comentar, "
-    "atualizar um work item, etc. 'path' relativo à URL base; 'body' em JSON. Conforme a "
-    "autonomia do flow, a chamada pode esperar aprovação humana ou ser recusada.",
+    "Write (POST/PUT/PATCH/DELETE) on a connector with write access: create a PR, comment, "
+    "update a work item, etc. 'path' is relative to the base URL; 'body' is JSON. Depending on "
+    "the flow autonomy, the call may wait for human approval or be denied.",
     {"type": "object", "properties": {
         "connection": {"type": "string"},
         "method": {"type": "string", "enum": list(WRITE_METHODS)},

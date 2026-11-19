@@ -1,5 +1,5 @@
-"""Rede de segurança: só as ferramentas do flow (e a delegação a subagentes) são permitidas, cada
-subagente só usa as suas, e todas as chamadas ficam registadas em runs/audit.jsonl."""
+"""Safety net: only the flow tools (and delegation to subagents) are allowed, each subagent
+uses only its own, and every call is logged in runs/audit.jsonl."""
 from __future__ import annotations
 
 import json
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from .policy import WritePolicy
 
 DELEGATION_TOOL = "Agent"
-# "Task" é o nome antigo, ainda aceite como alias pelo CLI.
+# "Task" is the old name, still accepted as an alias by the CLI.
 DELEGATION_TOOLS = frozenset({DELEGATION_TOOL, "Task"})
 CONNECTION_TOOL = "mcp__connections__http_get"
 
@@ -33,8 +33,8 @@ def _deny(reason: str) -> HookJSONOutput:
 def make_guard(allowed: Iterable[str], per_agent: Mapping[str, Iterable[str]] | None = None,
                per_agent_connections: Mapping[str, Iterable[str]] | None = None,
                policy: WritePolicy | None = None) -> GuardFn:
-    """allowed: lista fechada do flow (nomes SDK); per_agent: subagente → as suas ferramentas;
-    per_agent_connections: subagente → conectores que pode usar com http_get."""
+    """allowed: closed list of the flow (SDK names); per_agent: subagent → its tools;
+    per_agent_connections: subagent → connectors it can use with http_get."""
     allowed_set = frozenset(allowed) | DELEGATION_TOOLS
     agent_tools = {k: frozenset(v) for k, v in (per_agent or {}).items()}
     agent_conns = {k: frozenset(v) for k, v in (per_agent_connections or {}).items()}
@@ -51,15 +51,15 @@ def make_guard(allowed: Iterable[str], per_agent: Mapping[str, Iterable[str]] | 
                 "tool": name, "tool_use_id": tool_use_id,
                 "agent": agent, "input": _audit_input(name, input_data.get("tool_input")),
             }, ensure_ascii=False) + "\n")
-        # Lista fechada: um prefixo "mcp__" não chega (outros servidores MCP podiam ser carregados).
+        # Closed list: an "mcp__" prefix is not enough (other MCP servers could be loaded).
         if name not in allowed_set:
-            return _deny(f"Ferramenta '{name}' não permitida neste flow (lista fechada).")
+            return _deny(f"Tool '{name}' is not allowed in this flow (closed list).")
         if agent in agent_tools and name not in agent_tools[agent]:
-            return _deny(f"Ferramenta '{name}' não atribuída ao subagente '{agent}'.")
+            return _deny(f"Tool '{name}' is not assigned to subagent '{agent}'.")
         if name == CONNECTION_TOOL:
             conn = (input_data.get("tool_input") or {}).get("connection")
             if conn not in agent_conns.get(agent, frozenset()):
-                return _deny(f"Conector '{conn}' não atribuído ao subagente '{agent}'.")
+                return _deny(f"Connector '{conn}' is not assigned to subagent '{agent}'.")
         if policy is not None:
             why = await policy.check(name, agent, input_data.get("tool_input") or {})
             if why:
@@ -70,7 +70,7 @@ def make_guard(allowed: Iterable[str], per_agent: Mapping[str, Iterable[str]] | 
 
 
 def _audit_input(name: str, data: Any) -> Any:
-    """Conteúdos de ficheiros não vão para o audit (só o caminho e o tamanho)."""
+    """File contents do not go to the audit log (only the path and the size)."""
     if not isinstance(data, dict):
         return data
     if name in ("Write", "Edit"):
@@ -83,5 +83,5 @@ def _audit_input(name: str, data: Any) -> Any:
 
 
 def make_hooks(guard: GuardFn) -> dict:
-    # on_failure="block": se o hook falhar (exceção, retorno inválido), a chamada é bloqueada.
+    # on_failure="block": if the hook fails (exception, invalid return), the call is blocked.
     return {"PreToolUse": [HookMatcher(hooks=[guard], on_failure="block")]}

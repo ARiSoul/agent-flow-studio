@@ -1,9 +1,9 @@
-"""Carrega flows/<nome>/flow.yaml e compila-o para o Claude Agent SDK.
+"""Loads flows/<name>/flow.yaml and compiles it for the Claude Agent SDK.
 
-O orquestrador recebe o grafo (agentes, gates, ligações) como secção "Fluxo" gerada; cada subagente
-recebe as suas ferramentas, artefactos e regras comuns. A segurança não depende do modelo:
-lista fechada de ferramentas no hook, por flow e por subagente, contratos no save_artifact,
-`dontAsk`, sem ferramentas nativas além da delegação, e sem settings do utilizador.
+The orchestrator receives the graph (agents, gates, edges) as a generated "Flow" section; each
+subagent receives its tools, artifacts and common rules. Security does not depend on the model:
+closed tool list in the hook, per flow and per subagent, contracts in save_artifact,
+`dontAsk`, no native tools besides delegation, and no user settings.
 """
 from __future__ import annotations
 
@@ -30,14 +30,14 @@ DISALLOWED = [
     "Read", "Glob", "Grep",
 ]
 SUBAGENT_RULES = (
-    "\n\n## Regras comuns\nSó leitura; não inventes dados; cada conclusão aponta para uma "
-    "`evidence_ref`. Se `save_artifact` devolver ERRO de contrato ou de nome, corrige o JSON (só os "
-    "campos previstos, com os tipos previstos) e volta a guardar. Usa sempre o id de execução que "
-    "o orquestrador te passar como `run_id`."
+    "\n\n## Common rules\nRead-only; do not make up data; every conclusion points to an "
+    "`evidence_ref`. If `save_artifact` returns a contract or name ERROR, fix the JSON (only the "
+    "expected fields, with the expected types) and save again. Always use the run id that "
+    "the orchestrator gives you as `run_id`."
 )
 _ENV_IN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
-# Ferramenta só do orquestrador: assinala de forma estruturada que o flow chegou a um gate
-# (o editor usa-a para mostrar a aprovação pendente). Não executa nada.
+# Orchestrator-only tool: signals in a structured way that the flow reached a gate
+# (the editor uses it to show the pending approval). It runs nothing.
 GATE_SERVER = "flow_control"
 GATE_TOOL = f"mcp__{GATE_SERVER}__reach_gate"
 
@@ -50,12 +50,12 @@ class FlowError(ValueError):
 class CompiledFlow:
     spec: FlowSpec
     options: ClaudeAgentOptions
-    agent_tools: dict[str, list[str]]  # subagente → nomes SDK
-    policy: WritePolicy | None = None  # o runner do editor liga-lhe o `approver`
+    agent_tools: dict[str, list[str]]  # subagent → SDK names
+    policy: WritePolicy | None = None  # the editor runner attaches the `approver` to it
 
     def task(self, run_input: str) -> str:
         if not re.fullmatch(self.spec.input.pattern, run_input):
-            raise FlowError(f"{self.spec.input.label} inválido: {run_input!r}")
+            raise FlowError(f"invalid {self.spec.input.label}: {run_input!r}")
         return self.spec.task.replace("{input}", run_input)
 
 
@@ -72,7 +72,7 @@ def load_spec(name_or_path: str | Path, base: Path | None = None) -> tuple[FlowS
     p = Path(name_or_path)
     path = p if p.suffix in (".yaml", ".yml") else (base or flows_dir()) / str(name_or_path) / "flow.yaml"
     if not path.exists():
-        raise FlowError(f"flow não encontrado: {path}")
+        raise FlowError(f"flow not found: {path}")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         spec = FlowSpec.model_validate(data)
@@ -87,9 +87,9 @@ def _read_prompt(flow_dir: Path, inline: str | None, file: str | None, what: str
     assert file is not None
     p = (flow_dir / file).resolve()
     if flow_dir.resolve() not in p.parents:
-        raise FlowError(f"{what}: prompt_file fora da pasta do flow")
+        raise FlowError(f"{what}: prompt_file outside the flow folder")
     if not p.exists():
-        raise FlowError(f"{what}: prompt_file não existe ({file})")
+        raise FlowError(f"{what}: prompt_file does not exist ({file})")
     return p.read_text(encoding="utf-8")
 
 
@@ -103,42 +103,42 @@ def _sdk_tool(spec: FlowSpec, tool_id: str) -> str:
 def _artifacts_section(a: AgentSpec) -> str:
     lines = []
     if a.reads:
-        lines.append("Lês com `read_artifact`: " + ", ".join(f"`{r}`" for r in a.reads) + ".")
+        lines.append("You read with `read_artifact`: " + ", ".join(f"`{r}`" for r in a.reads) + ".")
     for w in a.writes:
-        extra = f" (contrato {w.contract})" if w.contract else (" (rascunho)" if w.draft else "")
-        lines.append(f"Guardas com `save_artifact`: `{w.name}`{extra}.")
-    return ("\n\n## Artefactos\n" + "\n".join(lines)) if lines else ""
+        extra = f" (contract {w.contract})" if w.contract else (" (draft)" if w.draft else "")
+        lines.append(f"You save with `save_artifact`: `{w.name}`{extra}.")
+    return ("\n\n## Artifacts\n" + "\n".join(lines)) if lines else ""
 
 
 def _describe_target(spec: FlowSpec, node: str) -> str:
     if node in spec.agents:
-        return f"delega em `{node}`"
+        return f"delegate to `{node}`"
     g = spec.gates[node]
     if g.kind == "human":
-        return f"PÁRA e pede aprovação humana: **{g.label}** (gate `{node}`)"
-    return f"PÁRA e reporta: **{g.label}** (gate `{node}`)"
+        return f"STOP and ask for human approval: **{g.label}** (gate `{node}`)"
+    return f"STOP and report: **{g.label}** (gate `{node}`)"
 
 
 def flow_section(spec: FlowSpec) -> str:
-    """Secção "Fluxo" do prompt do orquestrador, gerada a partir do grafo."""
-    out = ["## Fluxo (gerado a partir do grafo do flow)", f"Começa em `{spec.start}`."]
+    """The "Flow" section of the orchestrator prompt, generated from the graph."""
+    out = ["## Flow (generated from the flow graph)", f"Start at `{spec.start}`."]
     for i, name in enumerate(spec.agent_order(), 1):
         a = spec.agents[name]
         writes = ", ".join(f"`{w.name}`" for w in a.writes) or "—"
-        out.append(f"\n{i}. `{name}`: {a.description} Guarda: {writes}.")
+        out.append(f"\n{i}. `{name}`: {a.description} Saves: {writes}.")
         for e in spec.outgoing(name):
-            cond = f"se {e.when}" if e.when else "a seguir"
+            cond = f"if {e.when}" if e.when else "next"
             out.append(f"   - {cond}: {_describe_target(spec, e.to)}.")
     gates_out = [g for g in spec.gates if spec.outgoing(g)]
     if gates_out:
-        out.append("\nDepois de uma paragem humana (numa execução retomada com a resposta):")
+        out.append("\nAfter a human stop (in a run resumed with the answer):")
         for g in gates_out:
             for e in spec.outgoing(g):
-                cond = f" e {e.when}" if e.when else ""
-                out.append(f"- após **{spec.gates[g].label}**{cond}: {_describe_target(spec, e.to)}.")
-    out.append("\nNunca saltes um passo nem uses um agente fora deste grafo. Quando chegares a uma "
-               "paragem, chama `reach_gate` com o nome do gate e o motivo, depois termina a "
-               "execução e explica o que falta decidir.")
+                cond = f" and {e.when}" if e.when else ""
+                out.append(f"- after **{spec.gates[g].label}**{cond}: {_describe_target(spec, e.to)}.")
+    out.append("\nNever skip a step or use an agent outside this graph. When you reach a "
+               "stop, call `reach_gate` with the gate name and the reason, then end the "
+               "run and explain what is left to decide.")
     return "\n".join(out)
 
 
@@ -147,7 +147,7 @@ def _external_config(name: str, m: ExternalMcp) -> dict[str, Any]:
         def rep(mt: re.Match[str]) -> str:
             val = os.getenv(mt.group(1))
             if val is None:
-                raise FlowError(f"MCP {name!r}: variável de ambiente {mt.group(1)} não definida")
+                raise FlowError(f"MCP {name!r}: environment variable {mt.group(1)} is not set")
             return val
         return _ENV_IN.sub(rep, v)
 
@@ -173,7 +173,7 @@ def _connections(spec: FlowSpec) -> dict[str, Any]:
     missing = sorted(wanted - set(conns))
     if missing:
         users = [n for n, a in spec.agents.items() if set(a.connections) & set(missing)]
-        raise FlowError(f"agente {', '.join(users)}: conector(es) não configurado(s) nesta máquina: "
+        raise FlowError(f"agent {', '.join(users)}: connector(s) not configured on this machine: "
                         f"{', '.join(missing)}")
     return conns
 
@@ -181,11 +181,11 @@ def _connections(spec: FlowSpec) -> dict[str, Any]:
 def _connections_section(a: AgentSpec, conns: dict[str, Any]) -> str:
     if not a.connections:
         return ""
-    lines = [f"- `{n}`: {conns[n].type}, ambiente {conns[n].environment}"
+    lines = [f"- `{n}`: {conns[n].type}, environment {conns[n].environment}"
              + (f" — {conns[n].description}" if conns[n].description else "")
-             + (f" (caminhos: {', '.join(conns[n].allowed_paths)})" if conns[n].allowed_paths else "")
+             + (f" (paths: {', '.join(conns[n].allowed_paths)})" if conns[n].allowed_paths else "")
              for n in a.connections]
-    return "\n\n## Conectores (só leitura, com `http_get`)\n" + "\n".join(lines)
+    return "\n\n## Connectors (read-only, with `http_get`)\n" + "\n".join(lines)
 
 
 def _workspace_dir(spec: FlowSpec, check: bool) -> Path | None:
@@ -193,14 +193,14 @@ def _workspace_dir(spec: FlowSpec, check: bool) -> Path | None:
         return None
     p = Path(spec.workspace.path).expanduser().resolve()
     if check and not p.is_dir():
-        raise FlowError(f"workspace não existe: {p}")
+        raise FlowError(f"workspace does not exist: {p}")
     return p
 
 
 def _autonomy_text(level: str) -> str:
-    return {"approve": "cada escrita espera aprovação humana",
-            "approve_prod": "escritas em produção esperam aprovação humana",
-            "auto": "as escritas correm sem aprovação (ficam auditadas)"}[level]
+    return {"approve": "every write waits for human approval",
+            "approve_prod": "writes in production wait for human approval",
+            "auto": "writes run without approval (they are audited)"}[level]
 
 
 def _write_section(spec: FlowSpec, a: AgentSpec, ws: Path | None) -> str:
@@ -208,42 +208,43 @@ def _write_section(spec: FlowSpec, a: AgentSpec, ws: Path | None) -> str:
     if ws is not None and any(t.startswith("workspace.") for t in a.tools):
         w = spec.workspace
         assert w is not None
-        lines.append(f"Trabalhas no workspace `{ws}` (ambiente {w.environment}); não saias desta "
-                     f"pasta. Branches protegidas: {', '.join(w.protected_branches) or '—'}: cria "
-                     "uma branch de trabalho e propõe as alterações por PR (como rascunho).")
+        lines.append(f"You work in the workspace `{ws}` (environment {w.environment}); do not "
+                     "leave this folder. Protected branches: "
+                     f"{', '.join(w.protected_branches) or '—'}: create a work branch and propose "
+                     "the changes in a PR (as a draft).")
     if a.write_connections:
-        lines.append("Conectores com escrita (`http_write`): "
+        lines.append("Connectors with write (`http_write`): "
                      + ", ".join(f"`{c}`" for c in a.write_connections) + ".")
     if lines:
-        lines.append(f"Autonomia: {_autonomy_text(a.autonomy or spec.autonomy)}. Se uma escrita "
-                     "for recusada, não insistas: segue sem ela ou reporta.")
-        return "\n\n## Escrita\n" + "\n".join(lines)
+        lines.append(f"Autonomy: {_autonomy_text(a.autonomy or spec.autonomy)}. If a write "
+                     "is refused, do not insist: continue without it or report.")
+        return "\n\n## Writes\n" + "\n".join(lines)
     return ""
 
 
 def _gate_server(spec: FlowSpec) -> Any:
     gates = dict(spec.gates)
 
-    @tool("reach_gate", "Assinala que o flow chegou a um gate (aprovação humana ou paragem). "
-          "Chama-a uma vez, antes de terminar.", {"gate": str, "reason": str})
+    @tool("reach_gate", "Signals that the flow reached a gate (human approval or stop). "
+          "Call it once, before you finish.", {"gate": str, "reason": str})
     async def reach_gate(args: dict[str, Any]) -> dict[str, Any]:
         g = gates.get(args["gate"])
         if g is None:
-            return err(f"gate desconhecido {args['gate']!r}; gates: {', '.join(gates)}")
-        return ok(f"Registado: {g.label}. Termina agora a execução e explica o que falta decidir.")
+            return err(f"unknown gate {args['gate']!r}; gates: {', '.join(gates)}")
+        return ok(f"Recorded: {g.label}. End the run now and explain what is left to decide.")
 
     return create_sdk_mcp_server(name=GATE_SERVER, version="0.1.0", tools=[reach_gate])
 
 
 def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
                  resolve_secrets: bool = True, configure_artifacts: bool = True) -> CompiledFlow:
-    """configure_artifacts=False: só validar (não mexe no estado global de `artifacts`)."""
+    """configure_artifacts=False: validate only (leaves the global state of `artifacts` as is)."""
     agents: dict[str, AgentDefinition] = {}
     agent_tools: dict[str, list[str]] = {}
     conns = _connections(spec)
     ws = _workspace_dir(spec, check=configure_artifacts)
     for name, a in spec.agents.items():
-        body = _read_prompt(flow_dir, a.prompt, a.prompt_file, f"agente {name}")
+        body = _read_prompt(flow_dir, a.prompt, a.prompt_file, f"agent {name}")
         tools = [_sdk_tool(spec, t) for t in a.tools]
         agent_tools[name] = tools
         agents[name] = AgentDefinition(
@@ -267,12 +268,12 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
             servers[name] = _external_config(name, m) if resolve_secrets else {"type": m.type}
 
     allowed = sorted({t for ts in agent_tools.values() for t in ts})
-    if spec.gates:  # só o orquestrador a pode usar: os subagentes têm lista própria no hook
+    if spec.gates:  # orchestrator only: the subagents have their own list in the hook
         servers[GATE_SERVER] = _gate_server(spec)
         allowed.append(GATE_TOOL)
     orch = _read_prompt(flow_dir, spec.orchestrator.prompt, spec.orchestrator.prompt_file,
-                        "orquestrador") if (spec.orchestrator.prompt or spec.orchestrator.prompt_file) \
-        else "És o orquestrador deste flow. Delegas o trabalho aos subagentes e nunca alteras nada."
+                        "orchestrator") if (spec.orchestrator.prompt or spec.orchestrator.prompt_file) \
+        else "You orchestrate this flow. You delegate to the subagents and never change anything."
 
     names = {w.name for a in spec.agents.values() for w in a.writes}
     contracts = {w.name: CONTRACTS[w.contract] for a in spec.agents.values()

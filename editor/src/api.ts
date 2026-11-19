@@ -1,6 +1,6 @@
 import type { Catalog, Doc, FlowSummary, Validation } from "./types";
 
-// Pedidos que alteram ficheiros levam X-Flow-Editor (o servidor rejeita-os sem ele).
+// Requests that change files carry X-Flow-Editor (the server rejects them without it).
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
 
 async function call<T>(url: string, init?: RequestInit): Promise<{ status: number; data: T }> {

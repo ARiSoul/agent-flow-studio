@@ -1,65 +1,76 @@
 # CLAUDE.md — Agent Flow Studio
 
-## Antes de tudo: STATUS.md
-Este projeto é trabalhado em várias máquinas e contas (a memória do Claude Code é por conta e não
-passa entre elas). **No início de cada sessão lê `STATUS.md`**: diz em que ponto o trabalho ficou e o
-que vem a seguir. **No fim de cada tarefa atualiza `STATUS.md`** (estado atual, próximos passos e uma
-linha no registo) e propõe commit e push, para a outra máquina continuar a partir daí.
-Se existir `CLAUDE.local.md` (fora do git), segue também essas instruções locais.
+## First of all: STATUS.md
+This project is worked on from several machines and accounts (Claude Code memory is per account and
+does not travel between them). **At the start of each session read `STATUS.md`**: it says where the
+work stopped and what comes next. **At the end of each task update `STATUS.md`** (current state, next
+steps and one line in the log) and propose commit and push, so the other machine can pick it up.
+If `CLAUDE.local.md` exists (outside git), follow those local instructions too.
 
-## Objetivo
-Estúdio para montar, testar e correr **fluxos de agentes** (Claude Agent SDK, Python): flows em YAML,
-editor visual (React Flow + FastAPI), assistente de construção por chat, execução com trace,
-aprovações humanas, conectores (Azure, Azure DevOps, GitHub, APIs) e escrita com autonomia controlada.
-Ver `README.md`.
+## Language
+- **Everything in the repository is in English**: code, comments, docstrings, messages, logs,
+  prompts, flows, tests, docs (`README.md`, `CLAUDE.md`, `STATUS.md`…), commit messages and PRs.
+- **Chat with the user in Portuguese** (European Portuguese). Only the conversation is in Portuguese.
+- The **editor UI is multilingual** (`pt`, `en`, `es`): every user-facing text in `editor/src` goes
+  through `t("key")` with the strings in `editor/src/i18n/<lang>.ts`; `en.ts` is the reference and
+  the other languages must have the same keys. A new language = a new file + an entry in
+  `editor/src/i18n/index.tsx`. Backend messages (validation, errors) are in English.
 
-## Regras invioláveis
-1. **Só leitura por defeito.** Escrever só é possível com ferramentas de escrita declaradas no flow —
-   `workspace.edit|write|bash` (dentro do workspace) e `connections.http_write` (conectores com
-   `access: write` atribuídos ao agente) — e segue a **autonomia** do agente/flow (`approve` ·
-   `approve_prod` · `auto`), aplicada por `policy.py` no hook. O orquestrador nunca escreve. Sem quem
-   aprove (CLI), escritas que precisem de aprovação são recusadas. Rascunhos ficam em `runs/<id>/`.
-2. **Segredos** só em variáveis de ambiente/`.env` ou no keyring do sistema (conectores) — nunca no
-   código, nos flows, em `connections.yaml`, na UI nem em logs. Num flow, segredos são sempre `${VAR}`.
-   Não registar PII nem conteúdos de ficheiros em `runs/audit.jsonl`.
-3. **Toda a conclusão tem evidência**: cada agente cita a fonte (ficheiro:linha, pedido, registo).
-4. Ferramentas internas seguem o padrão de `src/agent_flow_studio/tools/` e são registadas em
-   `registry.py`; ferramentas de um domínio/empresa vão para uma **extensão** (`extensions/<nome>/`,
-   fora do git — ver `extensions.py`).
-5. **MCPs externos** só entram num flow com `approved: true`, `read_only: true` e lista fechada de
-   ferramentas (sem curingas). O hook aplica a lista por flow e por subagente.
-6. **Autonomia `auto`** só é escolhida por uma pessoa no editor (o assistente só usa `approve` /
-   `approve_prod`). Mesmo em `auto`, o hook recusa caminhos fora do workspace, push forçado ou para
-   branches protegidas e comandos destrutivos; Bash não é sandbox (por isso é tratado como escrita).
-7. Não remover o hook de guarda, `dontAsk`, `setting_sources=[]` nem a validação de contratos.
-8. **Repositório público:** nada interno de empresas/clientes entra no git (código, flows, nomes de
-   sistemas, dados). Isso vive em `extensions/`, `flows/` ignorados localmente e `CLAUDE.local.md`.
+## Goal
+A studio to build, test and run **agent flows** (Claude Agent SDK, Python): flows in YAML, visual
+editor (React Flow + FastAPI), chat-based build assistant, execution with trace, human approvals,
+connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autonomy. See `README.md`.
 
-## Arquitetura
-- `builder/`: `spec.py` (formato do flow + validação), `catalog.py` (ferramentas, contratos),
-  `compile.py` (flow → `ClaudeAgentOptions`; secção "Fluxo" do orquestrador gerada do grafo).
-- `hooks.py` (guarda + auditoria) e `policy.py` (escrita, workspace, Bash, autonomia, aprovações,
-  limite de delegações para testes passo a passo).
-- `connections/`: perfis em `connections.yaml` (fora do git), segredos `keyring`/`${VAR}`,
-  `http_get` (leitura) e `http_write` (escrita, só com `access: write`).
-- `editor/`: `server.py` (API local, 127.0.0.1, Hosts locais, cabeçalho `X-Flow-Editor` em escritas),
-  `assistant.py` (chat: só altera um rascunho em memória), `runner.py` (execuções full/step/until/agent,
-  gates, aprovações ao vivo, decisões em `runs/<id>/decisions.jsonl`), `yaml_io.py`, `validation.py`.
-- `extensions.py`: carrega `extensions/<nome>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
-- Frontend em `editor/` (Vite + React + @xyflow/react) → build em `src/agent_flow_studio/editor/static/`.
+## Inviolable rules
+1. **Read-only by default.** Writing is only possible with write tools declared in the flow —
+   `workspace.edit|write|bash` (inside the workspace) and `connections.http_write` (connectors with
+   `access: write` assigned to the agent) — and follows the agent/flow **autonomy** (`approve` ·
+   `approve_prod` · `auto`), enforced by `policy.py` in the hook. The orchestrator never writes.
+   With no one to approve (CLI), writes that need approval are denied. Drafts live in `runs/<id>/`.
+2. **Secrets** only in environment variables/`.env` or the system keyring (connectors) — never in
+   code, flows, `connections.yaml`, the UI or logs. In a flow, secrets are always `${VAR}`.
+   Do not record PII or file contents in `runs/audit.jsonl`.
+3. **Every conclusion has evidence**: each agent cites its source (file:line, request, record).
+4. Internal tools follow the pattern in `src/agent_flow_studio/tools/` and are registered in
+   `registry.py`; tools for a domain/company go into an **extension** (`extensions/<name>/`,
+   outside git — see `extensions.py`).
+5. **External MCPs** only enter a flow with `approved: true`, `read_only: true` and a closed list of
+   tools (no wildcards). The hook enforces the list per flow and per subagent.
+6. **`auto` autonomy** is only chosen by a person in the editor (the assistant only uses `approve` /
+   `approve_prod`). Even in `auto`, the hook denies paths outside the workspace, force pushes or
+   pushes to protected branches, and destructive commands; Bash is not a sandbox (so it is treated
+   as a write).
+7. Do not remove the guard hook, `dontAsk`, `setting_sources=[]` or the contract validation.
+8. **Public repository:** nothing internal to companies/clients goes into git (code, flows, system
+   names, data). That lives in `extensions/`, locally ignored `flows/` and `CLAUDE.local.md`.
 
-## Convenções
-- Python ≥ 3.10, tipagem, `ruff` (linha 100). Prompts em PT-PT em `flows/<flow>/prompts/*.md`.
-- Ferramentas devolvem `ok(...)`/`err(...)` de `tools/common.py`.
-- Testes do núcleo usam o flow genérico `tests/fixtures/flows/pipeline` e têm de passar sem extensões
-  (`AFS_NO_EXTENSIONS=1 pytest tests`). Testes de extensões ficam em `extensions/<nome>/tests`.
+## Architecture
+- `builder/`: `spec.py` (flow format + validation), `catalog.py` (tools, contracts),
+  `compile.py` (flow → `ClaudeAgentOptions`; the orchestrator's "Flow" section is generated from
+  the graph).
+- `hooks.py` (guard + audit) and `policy.py` (writes, workspace, Bash, autonomy, approvals,
+  delegation limit for step-by-step tests).
+- `connections/`: profiles in `connections.yaml` (outside git), `keyring`/`${VAR}` secrets,
+  `http_get` (read) and `http_write` (write, only with `access: write`).
+- `editor/`: `server.py` (local API, 127.0.0.1, local Hosts, `X-Flow-Editor` header on writes),
+  `assistant.py` (chat: only changes an in-memory draft), `runner.py` (full/step/until/agent runs,
+  gates, live approvals, decisions in `runs/<id>/decisions.jsonl`), `yaml_io.py`, `validation.py`.
+- `extensions.py`: loads `extensions/<name>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
+- Frontend in `editor/` (Vite + React + @xyflow/react, i18n in `editor/src/i18n/`) → build in
+  `src/agent_flow_studio/editor/static/`.
 
-## SDK (verificado contra claude-agent-sdk 0.2.185 / CLI 2.1.328)
-Delegação: ferramenta `Agent` (`Task` é alias). `@tool` devolve `{"content": [...], "is_error"?}`.
-Subagentes aceitam ferramentas MCP pelo nome completo `mcp__servidor__ferramenta`.
+## Conventions
+- Python ≥ 3.10, typing, `ruff` (line 100). Flow prompts in `flows/<flow>/prompts/*.md`.
+- Tools return `ok(...)`/`err(...)` from `tools/common.py`.
+- Core tests use the generic flow `tests/fixtures/flows/pipeline` and must pass without extensions
+  (`AFS_NO_EXTENSIONS=1 pytest tests`). Extension tests live in `extensions/<name>/tests`.
 
-## Comandos
+## SDK (verified against claude-agent-sdk 0.2.185 / CLI 2.1.328)
+Delegation: the `Agent` tool (`Task` is an alias). `@tool` returns `{"content": [...], "is_error"?}`.
+Subagents accept MCP tools by their full name `mcp__server__tool`.
+
+## Commands
 - `pytest` · `AFS_NO_EXTENSIONS=1 pytest tests` · `ruff check .`
-- `agent-flow-studio <entrada> --flow <flow> [--resume <session_id>]`
+- `agent-flow-studio <input> --flow <flow> [--resume <session_id>]`
 - `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog`
-- `agent-flow-studio-editor [--port 8765] [--flows <pasta>]` · frontend: `cd editor && npm run build`
+- `agent-flow-studio-editor [--port 8765] [--flows <folder>]` · frontend: `cd editor && npm run build`

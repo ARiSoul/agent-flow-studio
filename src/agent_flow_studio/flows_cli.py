@@ -1,4 +1,4 @@
-"""agent-flow-studio-flows: listar, validar e inspecionar flows."""
+"""agent-flow-studio-flows: list, validate and inspect flows."""
 import argparse
 import json
 import sys
@@ -11,21 +11,21 @@ from .builder.compile import compile_flow, flow_section
 def main() -> None:
     p = argparse.ArgumentParser(prog="agent-flow-studio-flows")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list", help="lista os flows em flows/")
-    v = sub.add_parser("validate", help="valida um flow (formato, grafo, ferramentas, prompts)")
+    sub.add_parser("list", help="list the flows in flows/")
+    v = sub.add_parser("validate", help="validate a flow (format, graph, tools, prompts)")
     v.add_argument("flow")
-    s = sub.add_parser("show", help="mostra o prompt do orquestrador gerado")
+    s = sub.add_parser("show", help="show the generated orchestrator prompt")
     s.add_argument("flow")
-    sub.add_parser("catalog", help="ferramentas e contratos disponíveis (JSON)")
+    sub.add_parser("catalog", help="available tools and contracts (JSON)")
     a = p.parse_args()
 
     if a.cmd == "list":
         for name in list_flows():
             try:
                 spec, _ = load_spec(name)
-                print(f"{name:24} {spec.title}  ({len(spec.agents)} agentes, {len(spec.gates)} gates)")
+                print(f"{name:24} {spec.title}  ({len(spec.agents)} agents, {len(spec.gates)} gates)")
             except FlowError as e:
-                print(f"{name:24} INVÁLIDO: {e}")
+                print(f"{name:24} INVALID: {e}")
     elif a.cmd == "catalog":
         json.dump(catalog_dict(), sys.stdout, ensure_ascii=False, indent=2)
     else:
@@ -33,10 +33,10 @@ def main() -> None:
             spec, flow_dir = load_spec(a.flow)
             compiled = compile_flow(spec, flow_dir, resolve_secrets=False)
         except FlowError as e:
-            raise SystemExit(f"INVÁLIDO: {e}") from e
+            raise SystemExit(f"INVALID: {e}") from e
         if a.cmd == "validate":
-            print(f"OK: {spec.name} · {len(spec.agents)} agentes · {len(spec.gates)} gates · "
-                  f"{len(compiled.options.allowed_tools)} ferramentas permitidas")
+            print(f"OK: {spec.name} · {len(spec.agents)} agents · {len(spec.gates)} gates · "
+                  f"{len(compiled.options.allowed_tools)} allowed tools")
         else:
             print(flow_section(spec))
 

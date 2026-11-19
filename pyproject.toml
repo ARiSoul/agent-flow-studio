@@ -1,7 +1,7 @@
 [project]
 name = "agent-flow-studio"
 version = "0.1.0"
-description = "Estúdio para montar, testar e correr fluxos de agentes (Claude Agent SDK): editor visual, assistente, conectores e escrita com autonomia controlada."
+description = "Studio to build, test and run agent flows (Claude Agent SDK): visual editor, assistant, connectors and writes with controlled autonomy."
 requires-python = ">=3.10"
 dependencies = [
   "claude-agent-sdk",

@@ -29,7 +29,7 @@ def test_allowed(name):
     assert _call(name) == {}
 
 
-@pytest.mark.parametrize("name", ["Bash", "Write", "Read", "mcp__outro__qualquer", ""])
+@pytest.mark.parametrize("name", ["Bash", "Write", "Read", "mcp__other__any", ""])
 def test_denied(name):
     out = _call(name)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -39,7 +39,7 @@ def test_per_agent_restriction():
     assert _call("mcp__artifacts__read_artifact", "triage") == {}
     out = _call("mcp__artifacts__save_artifact", "triage")
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert _call("mcp__artifacts__save_artifact", "outro_agente_sem_mapa") == {}
+    assert _call("mcp__artifacts__save_artifact", "other_agent_without_map") == {}
 
 
 def test_connection_restricted_per_agent():
