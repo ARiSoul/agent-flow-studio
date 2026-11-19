@@ -62,6 +62,14 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   `prompts/`; `{{param}}` filled in only inside YAML string values, after parsing). Templates are
   generic and public, start with autonomy `approve`, and company templates go in
   `extensions/<name>/templates/`.
+- Typed data: `builder/types.py` (`IOType`, `check_value`), `builder/expr.py` (safe `if`
+  expressions: `ast` with a whitelist, never `eval`), `tools/io.py` (MCP `io`: `get_inputs`,
+  `set_output`, `read_file`; values in `runs/<id>/io/`; the hook checks that `agent` is the caller).
+  Agents get the `io` tools implicitly from their inputs/outputs.
+- Execution per flow (`execution`): `orchestrator` (LLM, `compile_flow`) or `graph` (`engine.py`:
+  one session per agent from `compile_agent`, guard with `fixed_agent`, parallel branches, joins,
+  `if`/`when`, loops with `max_runs`). Legacy flows (no `inputs`) keep the one `input` that is also
+  the run id.
 - `tools/git.py`: `workspace.git`, read-only git (closed list of subcommands and options, no
   `-c`/`--output`/external diff, fsmonitor off). Writing with git stays in `workspace.bash`.
 - `hooks.py` (guard + audit) and `policy.py` (writes, workspace, Bash, autonomy, approvals,

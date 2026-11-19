@@ -1,11 +1,18 @@
-# Example flow: review of a repository (read-only; the result is a draft for approval).
+# Example flow: review of a repository (read-only; the review is a draft for approval).
 version: 1
 name: repo-review
 title: Repository review (example)
 description: |
   Explores the workspace, summarizes the structure and prepares a review with risks and suggestions.
   Change the workspace to the folder of the repository you want to review.
-task: Review the repository for run {input}.
+execution: graph
+inputs:
+  focus:
+    type: text
+    label: What to look at (optional)
+    required: false
+    description: e.g. security, tests, the API layer. Empty = the whole repository.
+task: "Review the repository. Focus: {focus}."
 orchestrator: {prompt_file: prompts/orchestrator.md}
 autonomy: approve
 workspace: {path: ., environment: dev}
@@ -14,22 +21,32 @@ start: explorer
 
 agents:
   explorer:
-    description: Explores the repository and summarizes its structure, technologies and entry points. Use first.
+    description: Explores the repository and summarizes its structure, technologies and entry
+      points. Use first.
     prompt_file: prompts/explorer.md
-    tools: [workspace.read, workspace.glob, workspace.grep, artifacts.save_artifact]
-    writes:
-    - {name: 01_overview.json}
+    tools: [workspace.read, workspace.glob, workspace.grep, workspace.git]
+    inputs:
+      focus: {from: input.focus, required: false}
+    outputs:
+      overview:
+        type: json
+        description: "{languages, entry_points, structure, tests, notes}"
+      main_language: {type: text}
   reviewer:
-    description: Reviews the code based on the overview and prepares the review (risks, likely bugs, suggestions).
+    description: Reviews the code based on the overview and writes the review (risks, likely
+      bugs, suggestions).
     prompt_file: prompts/reviewer.md
-    tools: [workspace.read, workspace.grep, artifacts.read_artifact, artifacts.save_artifact]
-    reads: [01_overview.json]
-    writes:
-    - {name: 02_review.md, draft: true}
+    tools: [workspace.read, workspace.grep, workspace.git]
+    inputs:
+      overview: {from: explorer.overview}
+      focus: {from: input.focus, required: false}
+    outputs:
+      review: {type: markdown, draft: true}
+      risks: {type: integer, min: 0, description: Number of risks found}
 
 gates:
   approve_review: {kind: human, label: Check and approve the review}
 
 edges:
 - {from: explorer, to: reviewer}
-- {from: reviewer, to: approve_review, when: the review is saved}
+- {from: reviewer, to: approve_review}

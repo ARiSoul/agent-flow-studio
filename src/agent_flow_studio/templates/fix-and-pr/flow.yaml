@@ -6,10 +6,18 @@ title: Fix an issue and open a draft PR
 description: |
   Issue → plan with evidence → fix on the branch fix/<issue> from {{base_branch}} → tests → push →
   human check → draft PR in {{repository}} through the connector {{connector}}.
-input:
-  label: Issue number or id
-  pattern: "^[A-Za-z0-9_-]{1,40}$"
-task: "Fix issue {input} of {{repository}} and propose the fix as a draft pull request."
+execution: graph
+inputs:
+  issue:
+    type: text
+    label: Issue number or id
+    pattern: "^[A-Za-z0-9_-]{1,40}$"
+  notes:
+    type: markdown
+    label: Extra context (optional)
+    required: false
+    description: Anything the issue does not say (where to look, constraints, how to test).
+task: "Fix issue {issue} of {{repository}} and propose the fix as a draft pull request."
 orchestrator: {prompt_file: prompts/orchestrator.md}
 autonomy: approve
 workspace: {path: "{{workspace}}", environment: dev}
@@ -21,45 +29,72 @@ agents:
     description: Reads the issue through the connector and the code, and writes the fix plan with
       evidence. Use first. Read-only.
     prompt_file: prompts/analyst.md
-    tools: [connections.http_get, workspace.read, workspace.grep, workspace.glob, workspace.git,
-            artifacts.save_artifact]
+    tools: [connections.http_get, workspace.read, workspace.grep, workspace.glob, workspace.git]
     connections: ["{{connector}}"]
-    writes:
-    - {name: 01_plan.json}
+    inputs:
+      issue: {from: input.issue}
+      notes: {from: input.notes, required: false}
+    outputs:
+      issue_title: {type: text}
+      issue_url: {type: url, required: false}
+      fixable: {type: boolean}
+      reason: {type: text, required: false, description: Why it cannot be fixed (when fixable is false)}
+      cause: {type: markdown, description: The likely cause with path:line evidence}
+      files_to_change: {type: json, description: "list of {path, what}"}
+      plan: {type: markdown}
   coder:
     description: Makes the fix on a work branch, adds or updates tests, runs them, commits and
       pushes the branch. Never touches the base branch.
     prompt_file: prompts/coder.md
     tools: [workspace.read, workspace.grep, workspace.glob, workspace.git, workspace.edit,
-            workspace.write, workspace.bash, artifacts.read_artifact, artifacts.save_artifact]
-    reads: [01_plan.json]
-    writes:
-    - {name: 02_changes.json}
+            workspace.write, workspace.bash]
+    inputs:
+      issue: {from: input.issue}
+      plan: {from: analyst.plan}
+      files_to_change: {from: analyst.files_to_change}
+      notes: {from: input.notes, required: false}
+    outputs:
+      branch: {type: text}
+      pushed: {type: boolean}
+      tests_passed: {type: boolean}
+      commits: {type: json, description: "list of {sha, message}"}
+      summary: {type: markdown, description: What changed and the test result}
   pr_opener:
     description: Opens the draft pull request through the connector, after the human check.
     prompt_file: prompts/pr_opener.md
-    tools: [connections.http_write, artifacts.read_artifact, artifacts.save_artifact]
+    tools: [connections.http_write]
     write_connections: ["{{connector}}"]
-    reads: [01_plan.json, 02_changes.json]
-    writes:
-    - {name: 03_pr.json}
+    inputs:
+      issue: {from: input.issue}
+      issue_title: {from: analyst.issue_title}
+      issue_url: {from: analyst.issue_url, required: false}
+      cause: {from: analyst.cause}
+      branch: {from: coder.branch}
+      summary: {from: coder.summary}
+    outputs:
+      opened: {type: boolean}
+      pr_url: {type: url, required: false}
+      pr_id: {type: text, required: false}
 
 gates:
-  cannot_fix: {kind: stop, label: The issue cannot be fixed as it is (see the plan)}
+  cannot_fix: {kind: stop, label: The issue cannot be fixed as it is (see the analyst's reason)}
+  not_pushed: {kind: stop, label: The branch was not pushed (see the coder's summary)}
   approve_pr: {kind: human, label: Check the changes on the branch before the PR is opened}
   pr_opened: {kind: stop, label: Draft pull request opened}
 
 edges:
-- {from: analyst, to: coder, when: the plan is saved and the fix is clear}
-- {from: analyst, to: cannot_fix, when: "the issue was not found, is unclear or is not a code change"}
-- {from: coder, to: approve_pr, when: the branch is pushed and the tests ran}
-- {from: approve_pr, to: pr_opener, when: approved}
-- {from: pr_opener, to: pr_opened, when: the pull request is open}
+- {from: analyst, to: coder, if: analyst.fixable}
+- {from: analyst, to: cannot_fix, if: not analyst.fixable}
+- {from: coder, to: approve_pr, if: coder.pushed}
+- {from: coder, to: not_pushed, if: not coder.pushed}
+- {from: approve_pr, to: pr_opener, if: approve_pr.decision == "approve"}
+- {from: pr_opener, to: pr_opened}
 
 layout:
   analyst: {x: 0, y: 0}
-  cannot_fix: {x: 300, y: 160}
-  coder: {x: 0, y: 160}
-  approve_pr: {x: 0, y: 320}
-  pr_opener: {x: 0, y: 480}
-  pr_opened: {x: 0, y: 640}
+  cannot_fix: {x: 320, y: 200}
+  coder: {x: 0, y: 200}
+  not_pushed: {x: 320, y: 420}
+  approve_pr: {x: 0, y: 420}
+  pr_opener: {x: 0, y: 640}
+  pr_opened: {x: 0, y: 860}

@@ -10,7 +10,9 @@ from agent_flow_studio.registry import ALL_TOOLS
 
 GUARD = hooks.make_guard(ALL_TOOLS, {"triage": ["mcp__artifacts__read_artifact"]},
                          {"reader": ["devops"]})
-NO_CONN = [t for t in ALL_TOOLS if t not in (hooks.CONNECTION_TOOL, "mcp__connections__http_write")]
+# tools with extra rules (connector, agent identity) have their own tests
+NO_CONN = [t for t in ALL_TOOLS if t not in (hooks.CONNECTION_TOOL, "mcp__connections__http_write")
+           and not t.startswith(hooks.IO_PREFIX)]
 
 
 @pytest.fixture(autouse=True)

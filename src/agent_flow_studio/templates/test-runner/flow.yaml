@@ -6,9 +6,14 @@ title: Run the tests and diagnose failures
 description: |
   Runs `{{test_command}}` in the workspace and diagnoses the failures (draft for human approval).
   With autonomy "approve" you approve the command before it runs.
-input:
-  label: Run id (e.g. test-001)
-task: "Run the tests of the workspace for run {input} and diagnose the failures."
+execution: graph
+inputs:
+  notes:
+    type: text
+    label: Notes for this run (optional)
+    required: false
+    description: e.g. "the CI fails on the login tests since yesterday".
+task: "Run the tests of the workspace and diagnose the failures. Notes: {notes}."
 orchestrator: {prompt_file: prompts/orchestrator.md}
 autonomy: approve
 workspace: {path: "{{workspace}}", environment: dev}
@@ -20,26 +25,43 @@ agents:
     description: Checks how the repository runs its tests (config, folders, setup) before they
       run. Use first.
     prompt_file: prompts/test_planner.md
-    tools: [workspace.read, workspace.glob, workspace.grep, workspace.git, artifacts.save_artifact]
-    writes:
-    - {name: 01_test_plan.json}
+    tools: [workspace.read, workspace.glob, workspace.grep, workspace.git]
+    inputs:
+      notes: {from: input.notes, required: false}
+    outputs:
+      matches_repo: {type: boolean}
+      test_folders: {type: text, multiple: true, required: false}
+      setup_needed: {type: json, required: false}
+      warnings: {type: text, multiple: true, required: false}
   test_runner:
     description: Runs the test command once and records the results. The only agent that runs a
       command.
     prompt_file: prompts/test_runner.md
-    tools: [workspace.bash, artifacts.read_artifact, artifacts.save_artifact]
-    reads: [01_test_plan.json]
-    writes:
-    - {name: 02_test_results.json}
+    tools: [workspace.bash]
+    inputs:
+      warnings: {from: test_planner.warnings, required: false}
+    outputs:
+      ran: {type: boolean}
+      exit_code: {type: integer, required: false}
+      passed: {type: integer, min: 0}
+      failed: {type: integer, min: 0}
+      errors: {type: integer, min: 0}
+      skipped: {type: integer, min: 0, required: false}
+      failures: {type: json, required: false, description: "list of {test, file, line, message}"}
+      output_tail: {type: text, required: false}
   diagnoser:
     description: Explains each failing test (likely cause with evidence and a proposed fix),
       without changing files.
     prompt_file: prompts/diagnoser.md
-    tools: [workspace.read, workspace.grep, workspace.glob, workspace.git,
-            artifacts.read_artifact, artifacts.save_artifact]
-    reads: [01_test_plan.json, 02_test_results.json]
-    writes:
-    - {name: 03_diagnosis.md, draft: true}
+    tools: [workspace.read, workspace.grep, workspace.glob, workspace.git]
+    inputs:
+      ran: {from: test_runner.ran}
+      failures: {from: test_runner.failures, required: false}
+      output_tail: {from: test_runner.output_tail, required: false}
+      setup_needed: {from: test_planner.setup_needed, required: false}
+      notes: {from: input.notes, required: false}
+    outputs:
+      diagnosis: {type: markdown, draft: true}
 
 gates:
   all_passed: {kind: stop, label: All tests passed}
@@ -47,13 +69,13 @@ gates:
 
 edges:
 - {from: test_planner, to: test_runner}
-- {from: test_runner, to: diagnoser, when: one or more tests failed or the run had errors}
-- {from: test_runner, to: all_passed, when: all tests passed}
-- {from: diagnoser, to: approve_diagnosis, when: the diagnosis is saved}
+- {from: test_runner, to: diagnoser, if: "not test_runner.ran or test_runner.failed > 0 or test_runner.errors > 0"}
+- {from: test_runner, to: all_passed, if: "test_runner.ran and test_runner.failed == 0 and test_runner.errors == 0"}
+- {from: diagnoser, to: approve_diagnosis}
 
 layout:
   test_planner: {x: 0, y: 0}
-  test_runner: {x: 0, y: 160}
-  all_passed: {x: 300, y: 320}
-  diagnoser: {x: 0, y: 320}
-  approve_diagnosis: {x: 0, y: 480}
+  test_runner: {x: 0, y: 200}
+  all_passed: {x: 320, y: 420}
+  diagnoser: {x: 0, y: 420}
+  approve_diagnosis: {x: 0, y: 640}

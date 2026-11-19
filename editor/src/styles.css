@@ -253,3 +253,53 @@ input.bad { border-color: var(--bad); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 button.danger.strong { background: var(--stop); border-color: var(--stop); color: var(--on-accent); font-weight: 600; }
 .new-conn-group { margin: 8px 0 2px; }
+
+/* typed ports (nodes.tsx): inputs on the left (in:<name>), outputs on the right (out:<name>) */
+.topbar button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.ports { display: flex; gap: 4px; margin: 6px -10px 0; padding-top: 4px; border-top: 1px dashed var(--border); }
+.ports-col { flex: 1; min-width: 0; }
+.port { position: relative; height: 18px; display: flex; align-items: center; gap: 4px; padding: 0 10px; font-size: 11px; }
+.ports-col.out .port { justify-content: flex-end; }
+.port-name { font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.port-tag { font-size: 9px; font-weight: 600; padding: 0 4px; border-radius: 3px; background: var(--panel-2); color: var(--muted); flex: none; margin-left: 4px; }
+.port .port-tag { margin-left: 0; }
+.port-src { font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.port-src::before { content: "← "; }
+.port.add { opacity: .55; }
+.port.add .port-name { font-family: inherit; color: var(--muted); }
+.node:hover .port.add, .react-flow__node.selected .port.add { opacity: 1; }
+.react-flow__handle.h-data { width: 9px; height: 9px; background: var(--panel); border: 2px solid var(--accent); }
+.port.fed .react-flow__handle.h-data, .ports-col.out .react-flow__handle.h-data { background: var(--accent); }
+.react-flow__handle.h-new { border-style: dashed; border-color: var(--muted); }
+.react-flow__handle.h-data.connectingto, .react-flow__handle.h-data.valid { background: var(--ok); border-color: var(--ok); }
+.react-flow__edge.data path { stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 3 3; opacity: .8; }
+.react-flow__edge.data.selected path { stroke-width: 2.2; opacity: 1; }
+.react-flow__edge.cond .react-flow__edge-text { fill: var(--accent); font-family: ui-monospace, Consolas, monospace; }
+.node.run-skipped { opacity: .5; border-style: dashed; }
+
+/* inspector: typed value editors (IOEditors.tsx) */
+textarea.bad, select.bad { border-color: var(--bad); }
+.io-list { margin: 6px 0 10px; }
+.io-row { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.io-row.hl { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.io-row .row select { width: 130px; }
+.io-row .row select.from { width: 160px; }
+.io-row .field { margin: 6px 0; }
+.io-flags { flex-wrap: wrap; gap: 10px; }
+.io-flags select { flex: 1; width: auto; }
+.io-more summary { cursor: pointer; }
+.refs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+button.ref { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+button.link { border: none; background: none; color: var(--accent); padding: 0 4px; margin-left: 6px; text-decoration: underline; }
+
+/* run form and outputs (RunPanel.tsx, RunForm.tsx) */
+.run-form { margin: 4px 0 8px; max-height: 42vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+.run-form summary { cursor: pointer; font-weight: 600; }
+.run-field { margin: 8px 0; }
+.run-field .field-label { display: flex; gap: 6px; align-items: center; }
+.ev.edge { color: var(--muted); font-size: 11px; padding-left: 12px; }
+.ev.edge.off { opacity: .6; }
+.outs { display: flex; flex-direction: column; gap: 4px; overflow: auto; min-height: 0; }
+.out-group summary { cursor: pointer; }
+.out-row { margin: 4px 0 6px 12px; }
+.out-row .art-view { margin-top: 2px; max-height: 160px; }

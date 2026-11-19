@@ -1,0 +1,64 @@
+# Test fixture: typed inputs/outputs, parallel branches, a join and conditions (graph mode).
+version: 1
+name: parallel
+title: Parallel research (tests)
+execution: graph
+max_parallel: 4
+inputs:
+  topic: {type: text, label: Topic}
+  depth: {type: choice, options: [quick, deep], default: quick}
+  since: {type: date, required: false}
+  docs: {type: file, multiple: true, required: false, accept: [.md, .txt]}
+task: "Research {topic} ({depth})."
+
+start: planner
+
+agents:
+  planner:
+    description: Splits the topic into two questions.
+    prompt: Split the topic into two research questions.
+    inputs:
+      topic: {from: input.topic}
+      depth: {from: input.depth}
+      docs: {from: input.docs, required: false}
+    outputs:
+      question_a: {type: text}
+      question_b: {type: text}
+      size: {type: integer, min: 1, max: 10}
+  researcher_a:
+    description: Answers question A.
+    prompt: Answer the question with evidence.
+    inputs:
+      question: {from: planner.question_a}
+    outputs:
+      answer: {type: markdown}
+      confidence: {type: number, min: 0, max: 1}
+  researcher_b:
+    description: Answers question B.
+    prompt: Answer the question with evidence.
+    inputs:
+      question: {from: planner.question_b}
+    outputs:
+      answer: {type: markdown}
+      confidence: {type: number, min: 0, max: 1}
+  writer:
+    description: Joins both answers into a report.
+    prompt: Write the report from both answers.
+    inputs:
+      a: {from: researcher_a.answer}
+      b: {from: researcher_b.answer}
+    outputs:
+      report: {type: markdown, draft: true}
+      sources: {type: url, multiple: true, required: false}
+
+gates:
+  too_small: {kind: stop, label: The topic is too small to research}
+  approve: {kind: human, label: Check the report}
+
+edges:
+- {from: planner, to: researcher_a, if: planner.size > 1}
+- {from: planner, to: researcher_b, if: planner.size > 1}
+- {from: planner, to: too_small, if: planner.size <= 1}
+- {from: researcher_a, to: writer}
+- {from: researcher_b, to: writer}
+- {from: writer, to: approve}

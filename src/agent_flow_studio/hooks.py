@@ -14,6 +14,7 @@ from .config import settings
 if TYPE_CHECKING:
     from .policy import WritePolicy
 
+IO_PREFIX = "mcp__io__"  # io tools: the `agent` argument must be the calling agent
 DELEGATION_TOOL = "Agent"
 # "Task" is the old name, still accepted as an alias by the CLI.
 DELEGATION_TOOLS = frozenset({DELEGATION_TOOL, "Task"})
@@ -32,10 +33,11 @@ def _deny(reason: str) -> HookJSONOutput:
 
 def make_guard(allowed: Iterable[str], per_agent: Mapping[str, Iterable[str]] | None = None,
                per_agent_connections: Mapping[str, Iterable[str]] | None = None,
-               policy: WritePolicy | None = None) -> GuardFn:
+               policy: WritePolicy | None = None, fixed_agent: str | None = None) -> GuardFn:
     """allowed: closed list of the flow (SDK names); per_agent: subagent → its tools;
-    per_agent_connections: subagent → connectors it can use with http_get."""
-    allowed_set = frozenset(allowed) | DELEGATION_TOOLS
+    per_agent_connections: subagent → connectors it can use with http_get.
+    fixed_agent: the session IS this agent (graph engine): no delegation, its rules always."""
+    allowed_set = frozenset(allowed) | (frozenset() if fixed_agent else DELEGATION_TOOLS)
     agent_tools = {k: frozenset(v) for k, v in (per_agent or {}).items()}
     agent_conns = {k: frozenset(v) for k, v in (per_agent_connections or {}).items()}
 
@@ -43,7 +45,7 @@ def make_guard(allowed: Iterable[str], per_agent: Mapping[str, Iterable[str]] | 
         input_data: dict[str, Any], tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         name = input_data.get("tool_name", "")
-        agent = input_data.get("agent_type")
+        agent = fixed_agent or input_data.get("agent_type")
         settings.runs_dir.mkdir(parents=True, exist_ok=True)
         with (settings.runs_dir / "audit.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps({
@@ -56,6 +58,10 @@ def make_guard(allowed: Iterable[str], per_agent: Mapping[str, Iterable[str]] | 
             return _deny(f"Tool '{name}' is not allowed in this flow (closed list).")
         if agent in agent_tools and name not in agent_tools[agent]:
             return _deny(f"Tool '{name}' is not assigned to subagent '{agent}'.")
+        if name.startswith(IO_PREFIX):
+            who = (input_data.get("tool_input") or {}).get("agent")
+            if agent is None or who != agent:
+                return _deny(f"{name}: 'agent' must be your own name ({agent or 'orchestrator'}).")
         if name == CONNECTION_TOOL:
             conn = (input_data.get("tool_input") or {}).get("connection")
             if conn not in agent_conns.get(agent, frozenset()):

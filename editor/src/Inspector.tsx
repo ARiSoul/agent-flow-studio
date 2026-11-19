@@ -1,49 +1,20 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { artifactOwners, renameNode, SLUG, nodeNames } from "./model";
+import { useState, type ReactNode } from "react";
+import { CommitInput, Field, NumberInput } from "./fields";
+import { AgentInputsEditor, ExprInput, IOListEditor, exprRefs } from "./IOEditors";
+import { artifactOwners, isTyped, renameNode, SLUG, nodeNames } from "./model";
 import { useI18n } from "./i18n";
-import type { AgentRaw, ArtifactRaw, Catalog, Doc, FlowRaw, McpRaw, Selection } from "./types";
+import type { AgentRaw, ArtifactRaw, Catalog, Doc, FlowRaw, McpRaw, Selection, Validation } from "./types";
 
 type Update = (fn: (d: Doc) => void) => void;
 interface Props {
   doc: Doc;
   sel: Selection;
   catalog: Catalog;
+  val: Validation | null;
   update: Update;
   select: (s: Selection) => void;
   remove: (s: Selection) => void;
   testAgent?: (id: string) => void;
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <label className="field">
-      <span className="field-label">{label}</span>
-      {children}
-      {hint && <span className="field-hint">{hint}</span>}
-    </label>
-  );
-}
-
-/** Field that only commits on leave (Enter or blur): used for names, which touch the links. */
-function CommitInput({ value, onCommit, pattern }: { value: string; onCommit: (v: string) => string | null; pattern?: RegExp }) {
-  const { t } = useI18n();
-  const [v, setV] = useState(value);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { setV(value); setErr(null); }, [value]);
-  const commit = () => {
-    if (v === value) return;
-    if (pattern && !pattern.test(v)) return setErr(t("insp.slugError"));
-    const e = onCommit(v);
-    setErr(e);
-    if (e) setV(value);
-  };
-  return (
-    <>
-      <input className={err ? "bad" : ""} value={v} onChange={(e) => setV(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
-      {err && <span className="field-err">{err}</span>}
-    </>
-  );
 }
 
 const AUTONOMY = ["approve", "approve_prod", "auto"] as const;
@@ -176,7 +147,7 @@ function WritesEditor({ writes, catalog, set }: { writes: ArtifactRaw[]; catalog
   );
 }
 
-function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: string } & Omit<Props, "sel" | "remove">) {
+function AgentPanel({ id, doc, catalog, update, select, testAgent, focus }: { id: string; focus?: string } & Omit<Props, "sel" | "remove" | "val">) {
   const { t } = useI18n();
   const spec = doc.spec;
   const a = spec.agents[id];
@@ -211,6 +182,25 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
         <PromptEditor owner={a} defaultPath={`prompts/${id}.md`} doc={doc} update={update}
           pick={(d) => d.spec.agents[id]} />
       </Field>
+      <h3>{t("io.inputs")}</h3>
+      <p className="muted small">{t("io.agentInputsHint")}</p>
+      <AgentInputsEditor id={id} doc={doc} update={update} focus={focus} />
+      <h3>{t("io.outputs")}</h3>
+      <p className="muted small">{t("io.agentOutputsHint")}</p>
+      <IOListEditor root={id} doc={doc} catalog={catalog} update={update} />
+      {spec.execution === "graph" && (
+        <div className="grid2">
+          <Field label={t("io.join")} hint={t("io.joinHint")}>
+            <select value={a.join ?? "all"} onChange={(e) => setA((x) => { x.join = e.target.value as "all" | "any"; })}>
+              <option value="all">{t("io.joinAll")}</option>
+              <option value="any">{t("io.joinAny")}</option>
+            </select>
+          </Field>
+          <Field label={t("io.maxRuns")} hint={t("io.maxRunsHint")}>
+            <NumberInput value={a.max_runs ?? 3} min={1} max={20} step={1}
+              onChange={(v) => setA((x) => { if (v === null) delete x.max_runs; else x.max_runs = v; })} />
+          </Field>
+        </div>)}
       <div className="grid2">
         <Field label={t("insp.model")}>
           <input list="models" value={a.model ?? ""} placeholder={t("insp.modelFromFlow")}
@@ -297,7 +287,7 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent }: { id: strin
   );
 }
 
-function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "sel" | "remove" | "catalog">) {
+function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "sel" | "remove" | "catalog" | "val">) {
   const { t } = useI18n();
   const g = doc.spec.gates![id];
   return (
@@ -323,16 +313,25 @@ function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "se
   );
 }
 
-function EdgePanel({ index, doc, update }: { index: number; doc: Doc; update: Update }) {
+function EdgePanel({ index, doc, val, update }: { index: number; doc: Doc; val: Validation | null; update: Update }) {
   const { t } = useI18n();
   const e = doc.spec.edges![index];
   if (!e) return null;
+  const tag = `edge ${e.from}→${e.to}: `;
+  const errors = (val?.errors ?? []).filter((x) => x.msg.startsWith(tag)).map((x) => x.msg.slice(tag.length));
   return (
     <>
       <p className="edge-title"><code>{e.from}</code> → <code>{e.to}</code></p>
-      <Field label={t("insp.condition")} hint={t("insp.conditionHint")}>
+      <div className="field">
+        <span className="field-label">{t("insp.expression")}</span>
+        <span className="field-hint">{t("insp.expressionHint")}</span>
+        <ExprInput value={e.if ?? ""} refs={exprRefs(doc.spec, e.from)} errors={errors}
+          onChange={(v) => update((d) => { d.spec.edges![index].if = v; })} />
+      </div>
+      <Field label={t("insp.condition")} hint={doc.spec.execution === "graph" ? t("insp.conditionHintGraph") : t("insp.conditionHint")}>
         <textarea rows={3} value={e.when ?? ""} onChange={(ev) => update((d) => { d.spec.edges![index].when = ev.target.value; })} />
       </Field>
+      <p className="muted small">{t("insp.bothHint")}</p>
     </>
   );
 }
@@ -411,14 +410,32 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
         <Field label={t("insp.maxTurns")}><input type="number" min={1} max={500} value={s.max_turns ?? 60}
           onChange={(e) => set((x) => { x.max_turns = Number(e.target.value) || undefined; })} /></Field>
       </div>
-      <div className="grid2">
-        <Field label={t("insp.input")}><input value={s.input?.label ?? t("insp.inputDefault")}
-          onChange={(e) => set((x) => { x.input = { ...x.input, label: e.target.value }; })} /></Field>
-        <Field label={t("insp.inputPattern")} hint={t("insp.inputPatternHint")}>
-          <input className="mono" value={s.input?.pattern ?? "^[A-Za-z0-9_-]{1,40}$"}
-            onChange={(e) => set((x) => { x.input = { ...x.input, pattern: e.target.value }; })} /></Field>
-      </div>
-      <Field label={t("insp.task")} hint={t("insp.taskHint")}>
+      <Field label={t("insp.execution")} hint={t(s.execution === "graph" ? "insp.executionGraphHint" : "insp.executionOrchHint")}>
+        <select value={s.execution ?? "orchestrator"} onChange={(e) => set((x) => { x.execution = e.target.value as FlowRaw["execution"]; })}>
+          <option value="orchestrator">{t("insp.execOrchestrator")}</option>
+          <option value="graph">{t("insp.execGraph")}</option>
+        </select>
+      </Field>
+      {s.execution === "graph" && (
+        <Field label={t("insp.maxParallel")} hint={t("insp.maxParallelHint")}>
+          <NumberInput value={s.max_parallel ?? 4} min={1} max={16} step={1}
+            onChange={(v) => set((x) => { if (v === null) delete x.max_parallel; else x.max_parallel = v; })} />
+        </Field>)}
+      <h3>{t("io.flowInputs")}</h3>
+      {isTyped(s)
+        ? <p className="muted small">{t("io.flowInputsHint")}</p>
+        : <>
+          <p className="muted small">{t("io.legacyHint")}</p>
+          <div className="grid2">
+            <Field label={t("insp.input")}><input value={s.input?.label ?? t("insp.inputDefault")}
+              onChange={(e) => set((x) => { x.input = { ...x.input, label: e.target.value }; })} /></Field>
+            <Field label={t("insp.inputPattern")} hint={t("insp.inputPatternHint")}>
+              <input className="mono" value={s.input?.pattern ?? "^[A-Za-z0-9_-]{1,40}$"}
+                onChange={(e) => set((x) => { x.input = { ...x.input, pattern: e.target.value }; })} /></Field>
+          </div>
+        </>}
+      <IOListEditor root="input" doc={doc} catalog={catalog} update={update} />
+      <Field label={t("insp.task")} hint={t(isTyped(s) ? "insp.taskHintTyped" : "insp.taskHint")}>
         <textarea rows={3} value={s.task ?? ""} onChange={(e) => set((x) => { x.task = e.target.value; })} />
       </Field>
       <Field label={t("insp.start")}>
@@ -478,12 +495,19 @@ export function Inspector(p: Props) {
   if (sel?.kind === "node" && sel.id in doc.spec.agents) {
     title = t("insp.agent");
     body = <AgentPanel key={sel.id} id={sel.id} {...p} />;
+  } else if (sel?.kind === "data" && sel.agent in doc.spec.agents) {
+    const from = doc.spec.agents[sel.agent].inputs?.[sel.input]?.from;
+    title = t("insp.dataLink");
+    body = <>
+      <p className="edge-title"><code>{from ?? "—"}</code> → <code>{sel.agent}.{sel.input}</code></p>
+      <AgentPanel key={sel.agent} id={sel.agent} focus={sel.input} {...p} />
+    </>;
   } else if (sel?.kind === "node" && sel.id in (doc.spec.gates ?? {})) {
     title = t("insp.gate");
     body = <GatePanel key={sel.id} id={sel.id} {...p} />;
   } else if (sel?.kind === "edge" && doc.spec.edges?.[sel.index]) {
     title = t("insp.edge");
-    body = <EdgePanel index={sel.index} doc={doc} update={p.update} />;
+    body = <EdgePanel index={sel.index} doc={doc} val={p.val} update={p.update} />;
   }
   return (
     <aside className="inspector">
@@ -492,7 +516,8 @@ export function Inspector(p: Props) {
         {sel && <>
           <button className="small" onClick={() => p.select(null)}>{t("insp.flow")}</button>
           <button className="danger small" disabled={sel.kind === "node" && sel.id === doc.spec.start}
-            title={sel.kind === "node" && sel.id === doc.spec.start ? t("insp.changeStartFirst") : t("insp.deleteTitle")}
+            title={sel.kind === "node" && sel.id === doc.spec.start ? t("insp.changeStartFirst")
+              : sel.kind === "data" ? t("insp.deleteLinkTitle") : t("insp.deleteTitle")}
             onClick={() => p.remove(sel)}>{t("insp.delete")}</button>
         </>}
       </div>

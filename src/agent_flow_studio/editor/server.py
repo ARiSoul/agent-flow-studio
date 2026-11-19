@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import re
 import shutil
 import time
@@ -27,7 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..builder.catalog import BUILTIN_SERVERS, BUILTIN_TOOLS, CONTRACTS
 from ..builder.compile import FlowError, flows_dir
-from ..builder.spec import FlowSpec
+from ..builder.spec import SLUG, FlowSpec
 from ..builder.templates import TemplateError, templates_dict
 from ..builder.templates import render as render_template
 from ..config import settings
@@ -36,6 +37,7 @@ from ..connections import oauth as conn_oauth
 from ..connections import store as conn_store
 from ..connections.model import SLUG as CONN_SLUG
 from ..connections.model import Connection, types_meta
+from ..tools import io as io_tool
 from . import assistant
 from .runner import RunError, Runner, list_artifacts, read_artifact_text
 from .validation import _atomic_write, _public, _structured, _validate
@@ -47,6 +49,7 @@ PROMPT_PATH = re.compile(r"^prompts/[A-Za-z0-9_-]{1,60}\.md$")
 MAX_PROMPT = 100_000
 MODELS = ["inherit", "sonnet", "opus", "haiku"]
 CSRF_HEADER = "x-flow-editor"
+SLUG_RE = re.compile(SLUG)
 
 
 class FlowBody(BaseModel):
@@ -65,7 +68,10 @@ class AssistBody(BaseModel):
 
 class RunBody(BaseModel):
     flow: str
-    input: str = Field(min_length=1, max_length=80)
+    input: str | None = Field(default=None, min_length=1, max_length=80)  # legacy flows
+    run_id: str | None = Field(default=None, max_length=40)  # typed flows (default: generated)
+    inputs: dict[str, Any] = Field(default_factory=dict)  # typed flows; files {name, content_b64}
+    given: dict[str, Any] = Field(default_factory=dict)  # agent mode: free inputs of the agent
     mode: Literal["full", "step", "until", "agent"] = "full"
     target: str | None = Field(default=None, max_length=40)
     instruction: str = Field(default="", max_length=20_000)
@@ -140,6 +146,14 @@ def _disk_prompts(d: Path) -> dict[str, str]:
         return {}
     return {f"prompts/{f.name}": f.read_text(encoding="utf-8")
             for f in sorted(p.glob("*.md")) if PROMPT_PATH.fullmatch(f"prompts/{f.name}")}
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _check_prompts(prompts: dict[str, str]) -> None:
@@ -381,11 +395,11 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     runner = Runner(base)
     app.state.runner = runner
 
-    def _run_call(fn, *a):  # type: ignore[no-untyped-def]
+    def _run_call(fn, *a, **kw):  # type: ignore[no-untyped-def]
         try:
-            return fn(*a).summary()
+            return fn(*a, **kw).summary()
         except RunError as e:
-            raise HTTPException(e.status, str(e)) from e
+            raise HTTPException(e.status, e.detail) from e
         except FlowError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -397,7 +411,8 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     async def start_run(body: RunBody) -> dict[str, Any]:
         _flow_dir(base, body.flow)
         return _run_call(runner.start, body.flow, body.input, body.mode, body.target,
-                         body.instruction)
+                         body.instruction, run_id=body.run_id, inputs=body.inputs,
+                         given=body.given)
 
     @app.post("/api/runs/{run_id}/continue", dependencies=[Depends(csrf)])
     async def continue_run(run_id: str, body: ContinueBody) -> dict[str, Any]:
@@ -443,6 +458,27 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             raise HTTPException(400, str(e)) from e
         except FileNotFoundError as e:
             raise HTTPException(404, "artifact does not exist") from e
+
+    @app.get("/api/io/{run_input}")
+    def run_io(run_input: str, flow: str) -> dict[str, Any]:
+        """Saved values of a run (read only): flow inputs, outputs per agent, gate decisions and
+        the inputs last given to each agent (agent test mode)."""
+        d = _flow_dir(base, flow)
+        try:
+            raw = yaml.safe_load((d / "flow.yaml").read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as e:
+            raise HTTPException(422, f"flow.yaml is not valid YAML: {e}") from e
+        agents = raw.get("agents") if isinstance(raw, dict) else None
+        names = [a for a in (agents or {}) if isinstance(a, str) and SLUG_RE.fullmatch(a)]
+        try:
+            io_dir = io_tool.run_dir(run_input) / io_tool.IO_DIR
+            outputs = {a: o for a in names if (o := io_tool.outputs(run_input, a))}
+            given = {a: g for a in names
+                     if (g := _read_json_file(io_dir / f"{a}{io_tool.GIVEN_SUFFIX}"))}
+            return {"inputs": io_tool.flow_inputs(run_input), "outputs": outputs,
+                    "gates": _read_json_file(io_dir / io_tool.GATES_FILE), "given": given}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.get("/api/templates")
     def templates() -> list[dict[str, Any]]:

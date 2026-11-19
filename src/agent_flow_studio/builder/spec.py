@@ -1,7 +1,11 @@
 """Format of a flow (flows/<name>/flow.yaml) and its validation rules.
 
 A flow is a graph: `agents` nodes (subagents) and `gates` (human approval or stop), linked by
-`edges` with a condition in natural language. The orchestrator receives the graph as instructions.
+`edges` with a condition: an expression (`if`, evaluated by the studio) and/or text (`when`).
+The flow declares typed `inputs`; each agent declares typed `inputs` (from a flow input or from
+an earlier agent's output) and typed `outputs`. `execution` chooses who runs the graph: the LLM
+orchestrator (`orchestrator`, it receives the graph as instructions) or the studio's engine
+(`graph`, parallel branches, joins, conditions).
 """
 from __future__ import annotations
 
@@ -11,13 +15,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from . import expr
 from .catalog import BUILTIN_TOOLS, CONTRACTS
+from .types import IOKind, IOType, check_type, compatible
 
 SLUG = r"^[a-z][a-z0-9_]{0,39}$"
 _SLUG_RE = re.compile(SLUG)
 _ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 _ENV_REF = re.compile(r"^\$\{[A-Z_][A-Z0-9_]*\}$")
 _ENV_IN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+_TASK_VAR = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+LEGACY_INPUT = "input"  # the one implicit input of flows without `inputs`
 
 
 class _Strict(BaseModel):
@@ -43,6 +51,24 @@ class ArtifactSpec(_Strict):
         return self
 
 
+class AgentInput(_Strict):
+    """An agent input: `from` a flow input (`input.<name>`) or an agent output (`<agent>.<out>`),
+    or free (no `from`: given by the orchestrator, or in the editor when testing the agent).
+    Without `type`, it takes the type of its source (text when free)."""
+
+    from_: str | None = Field(default=None, alias="from")
+    type: IOKind | None = None
+    description: str = ""
+    required: bool = True
+
+    @field_validator("from_")
+    @classmethod
+    def _ref(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"[a-z][a-z0-9_]{0,39}\.[a-z][a-z0-9_]{0,39}", v):
+            raise ValueError(f"'from' must be input.<name> or <agent>.<output>, not {v!r}")
+        return v
+
+
 # Write autonomy: approve = every write asks for approval; approve_prod = only in production;
 # auto = no stops (everything stays in the audit).
 Autonomy = Literal["approve", "approve_prod", "auto"]
@@ -61,6 +87,10 @@ class AgentSpec(_Strict):
     connections: list[str] = Field(default_factory=list)  # connectors (connections.yaml) for http_get
     write_connections: list[str] = Field(default_factory=list)  # connectors for http_write
     autonomy: Autonomy | None = None  # None = the flow's
+    inputs: dict[str, AgentInput] = Field(default_factory=dict)
+    outputs: dict[str, IOType] = Field(default_factory=dict)
+    join: Literal["all", "any"] = "all"  # graph: wait for all incoming branches, or the first
+    max_runs: int = Field(default=3, ge=1, le=20)  # graph: limit for loops (back edges)
 
     @model_validator(mode="after")
     def _one_prompt(self) -> AgentSpec:
@@ -77,7 +107,8 @@ class GateSpec(_Strict):
 class Edge(_Strict):
     from_: str = Field(alias="from")
     to: str
-    when: str = ""
+    when: str = ""  # condition in natural language (orchestrator, or the router in graph mode)
+    if_: str = Field(default="", alias="if")  # expression on inputs/outputs (see expr.py)
 
 
 class ExternalMcp(_Strict):
@@ -143,7 +174,10 @@ class FlowSpec(_Strict):
     description: str = ""
     model: str | None = None
     max_turns: int = Field(default=60, ge=1, le=500)
-    input: InputSpec = Field(default_factory=InputSpec)
+    execution: Literal["orchestrator", "graph"] = "orchestrator"
+    max_parallel: int = Field(default=4, ge=1, le=16)  # graph: agents running at the same time
+    inputs: dict[str, IOType] = Field(default_factory=dict)  # typed flow inputs (run form)
+    input: InputSpec = Field(default_factory=InputSpec)  # legacy: one text input = run id
     task: str = "Run the flow for {input}."
     orchestrator: OrchestratorSpec = Field(default_factory=OrchestratorSpec)
     start: str
@@ -174,8 +208,12 @@ class FlowSpec(_Strict):
         clash = set(self.mcp_servers) & {t.server for t in BUILTIN_TOOLS.values()}
         if clash:
             errors.append(f"external MCP with the name of a built-in server: {sorted(clash)}")
-        if "{input}" not in self.task:
+        if not self.inputs and "{input}" not in self.task:
             errors.append("'task' must contain {input}")
+        if self.inputs:
+            known = set(self.inputs) | {"input", "run_id"}
+            errors += [f"'task' uses {{{v}}}, which is not a flow input" for v in
+                       _TASK_VAR.findall(self.task) if v not in known]
         nodes = set(self.agents) | set(self.gates)
         if self.start not in self.agents:
             errors.append(f"start {self.start!r} is not an agent")
@@ -184,6 +222,7 @@ class FlowSpec(_Strict):
                 if end not in nodes:
                     errors.append(f"edge {e.from_}→{e.to}: node {end!r} does not exist")
         errors += self._tool_errors()
+        errors += self._io_errors()
         seen: dict[str, str] = {}
         for an, a in self.agents.items():
             for w in a.writes:
@@ -218,6 +257,117 @@ class FlowSpec(_Strict):
         if errors:
             raise ValueError("; ".join(errors))
         return self
+
+    def flow_inputs(self) -> dict[str, IOType]:
+        """The typed inputs; a legacy flow has one text input `input` (its pattern applies)."""
+        if self.inputs:
+            return self.inputs
+        return {LEGACY_INPUT: IOType(type="text", label=self.input.label, pattern=self.input.pattern)}
+
+    def input_type(self, agent: str, name: str) -> str:
+        """Resolved type of an agent input (from its source when it has no `type`)."""
+        i = self.agents[agent].inputs[name]
+        if i.type:
+            return i.type
+        src = self.source_type(i.from_) if i.from_ else None
+        return src or "text"
+
+    def source_io(self, ref: str) -> IOType | None:
+        root, name = ref.split(".", 1)
+        if root == "input":
+            return self.flow_inputs().get(name)
+        return self.agents[root].outputs.get(name) if root in self.agents else None
+
+    def source_type(self, ref: str) -> str | None:
+        t = self.source_io(ref)
+        return t.type if t else None
+
+    def ancestors(self, node: str) -> set[str]:
+        """Nodes with a path to `node` (edges into `start` are loops and do not count)."""
+        into: dict[str, list[str]] = {}
+        for e in self.edges:
+            if e.to != self.start:
+                into.setdefault(e.to, []).append(e.from_)
+        seen: set[str] = set()
+        q = deque(into.get(node, []))
+        while q:
+            n = q.popleft()
+            if n not in seen:
+                seen.add(n)
+                q.extend(into.get(n, []))
+        return seen
+
+    def _io_errors(self) -> list[str]:
+        errors: list[str] = []
+        for n, t in self.inputs.items():
+            if not _SLUG_RE.fullmatch(n):
+                errors.append(f"flow input {n!r}: invalid name (use {SLUG})")
+            try:
+                check_type(t, CONTRACTS)
+            except ValueError as e:
+                errors.append(f"flow input {n!r}: {e}")
+        flow_in = self.flow_inputs()
+        for an, a in self.agents.items():
+            for n, t in a.outputs.items():
+                if not _SLUG_RE.fullmatch(n):
+                    errors.append(f"agent {an!r}: output {n!r} has an invalid name")
+                try:
+                    check_type(t, CONTRACTS)
+                except ValueError as e:
+                    errors.append(f"agent {an!r}, output {n!r}: {e}")
+            for n, i in a.inputs.items():
+                if not _SLUG_RE.fullmatch(n):
+                    errors.append(f"agent {an!r}: input {n!r} has an invalid name")
+                if i.from_ is None:
+                    continue
+                root, src = i.from_.split(".", 1)
+                if root == "input":
+                    if src not in flow_in:
+                        errors.append(f"agent {an!r}, input {n!r}: flow input {src!r} does not "
+                                      "exist")
+                        continue
+                elif root not in self.agents:
+                    errors.append(f"agent {an!r}, input {n!r}: agent {root!r} does not exist")
+                    continue
+                elif src not in self.agents[root].outputs:
+                    errors.append(f"agent {an!r}, input {n!r}: agent {root!r} has no output "
+                                  f"{src!r}")
+                    continue
+                elif root == an:
+                    errors.append(f"agent {an!r}, input {n!r}: an agent cannot read its own output")
+                    continue
+                elif self.execution == "graph" and root not in self.ancestors(an):
+                    errors.append(f"agent {an!r}, input {n!r}: {root!r} does not run before "
+                                  f"{an!r} (add an edge path from {root!r} to {an!r})")
+                st = self.source_type(i.from_)
+                if i.type and st and not compatible(st, i.type):
+                    errors.append(f"agent {an!r}, input {n!r}: a {st} cannot feed a {i.type}")
+        for e in self.edges:
+            if e.if_:
+                errors += [f"edge {e.from_}→{e.to}: {m}" for m in self._expr_errors(e.if_)]
+        return errors
+
+    def _expr_errors(self, text: str) -> list[str]:
+        try:
+            used = expr.refs(text)
+        except expr.ExprError as e:
+            return [f"condition: {e}"]
+        out = []
+        for r in used:
+            if len(r) < 2:
+                out.append(f"condition: {r[0]!r} needs a field (e.g. {r[0]}.x)")
+            elif r[0] == "input":
+                if r[1] not in self.flow_inputs():
+                    out.append(f"condition: flow input {r[1]!r} does not exist")
+            elif r[0] in self.agents:
+                if r[1] not in self.agents[r[0]].outputs:
+                    out.append(f"condition: agent {r[0]!r} has no output {r[1]!r}")
+            elif r[0] in self.gates:
+                if r[1] not in ("decision", "comment"):
+                    out.append(f"condition: a gate has only .decision and .comment, not {r[1]!r}")
+            else:
+                out.append(f"condition: {r[0]!r} is not input, an agent or a gate")
+        return out
 
     def _tool_errors(self) -> list[str]:
         errors: list[str] = []

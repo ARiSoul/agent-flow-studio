@@ -57,6 +57,8 @@ def test_core_templates_render_and_compile(tid, repo, gh_connector, tmp_path):
     assert spec.name == f"my-{tid}" and spec.title == "Mine"
     assert spec.workspace is not None and spec.workspace.path == str(repo)
     assert spec.autonomy == "approve"  # templates never ship "auto"
+    assert spec.execution == "graph" and spec.inputs  # typed inputs, run by the graph engine
+    assert all(a.outputs for a in spec.agents.values())
     for text in [*prompts.values(), yaml.safe_dump(spec.model_dump(mode="json"))]:
         assert "{{" not in text
     d = tmp_path / "flows" / spec.name

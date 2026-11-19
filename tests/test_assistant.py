@@ -137,3 +137,35 @@ def test_system_prompt_ends_with_reply_language(draft: Draft, lang, expected):
     tail = o.system_prompt.rstrip().rsplit("## Language", 1)[1]
     assert f"Reply to the user in {expected}" in tail
     assert o.system_prompt.startswith(assistant.PROMPT.split("\n", 1)[0])
+
+
+def test_typed_io_graph_execution_and_if_conditions(draft: Draft):
+    ok, text = call(draft, "update_flow", execution="graph",
+                    inputs={"ticket": {"type": "text", "label": "Ticket"}}, task="Handle {ticket}.")
+    assert ok, text
+    ok, text = call(draft, "set_agent", name="triage", inputs={"ticket": {"from": "input.ticket"}},
+                    outputs={"severity": {"type": "choice", "options": ["low", "high"]}})
+    assert ok, text
+    ok, text = call(draft, "add_edge", **{"from": "triage", "to": "diagnostician",
+                                          "if": 'triage.severity == "high"'})
+    assert ok and draft.spec["agents"]["triage"]["outputs"]["severity"]["type"] == "choice"
+    edge = next(e for e in draft.spec["edges"] if e["from"] == "triage"
+                and e["to"] == "diagnostician")
+    assert edge["if"] == 'triage.severity == "high"'
+    ok, text = call(draft, "add_edge", **{"from": "triage", "to": "diagnostician",
+                                          "if": "triage.nope > 1"})
+    assert ok and "has no output 'nope'" in text  # the summary reports the problem
+
+
+def test_rename_updates_from_refs_and_expressions(draft: Draft):
+    call(draft, "set_agent", name="triage",
+         outputs={"severity": {"type": "choice", "options": ["low", "high"]}})
+    call(draft, "set_agent", name="diagnostician", inputs={"sev": {"from": "triage.severity"}})
+    call(draft, "add_edge", **{"from": "triage", "to": "diagnostician",
+                               "if": 'triage.severity == "high" and not xtriage.a'})
+    ok, _ = call(draft, "rename_node", old="triage", new="sorting")
+    assert ok
+    assert draft.spec["agents"]["diagnostician"]["inputs"]["sev"]["from"] == "sorting.severity"
+    edge = next(e for e in draft.spec["edges"] if e["from"] == "sorting"
+                and e["to"] == "diagnostician")
+    assert edge["if"] == 'sorting.severity == "high" and not xtriage.a'

@@ -1,34 +1,48 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api";
 import { useDialog } from "./Dialog";
 import { useI18n, type I18n } from "./i18n";
-import type { Doc } from "./types";
+import { inputKind, isTyped, sourceIO } from "./model";
+import { formValue, sendValue, ValueField, type FormVal } from "./RunForm";
+import type { Doc, FlowRaw, IOTypeRaw, RunIO } from "./types";
 
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
+const RUN_ID = /^[A-Za-z0-9_-]{1,40}$/;  // same rule as the runner
 
-export type NodeRun = "active" | "done" | "error" | "gate";
+export type NodeRun = "active" | "done" | "error" | "gate" | "skipped";
 type Ev = { i: number; type: string; [k: string]: unknown };
 type RunInfo = { id: string; status: string; gate: { gate: string; kind: string; label: string; reason: string } | null; cost: number; input: string; mode?: string; target?: string | null };
 export type RunMode = "full" | "step" | "until" | "agent";
 export type RunRequest = { mode: RunMode; target?: string; nonce: number };
 
+class ApiError extends Error {
+  constructor(message: string, public status: number, public detail: unknown) { super(message); }
+}
+
 async function post<T>(url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: MUTATE, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((data as { detail?: string }).detail ?? r.statusText);
+  if (!r.ok) {
+    const d = (data as { detail?: unknown }).detail;
+    throw new ApiError(typeof d === "string" ? d : d ? JSON.stringify(d) : r.statusText, r.status, d);
+  }
   return data as T;
 }
 
-/** State of each node from the events (for the canvas). */
+/** State of each node from the events (for the canvas). In graph mode several agents run at once. */
 export function traceOf(events: Ev[]): Record<string, NodeRun> {
   const s: Record<string, NodeRun> = {};
+  let graph = false;
   for (const e of events) {
     const a = e.agent as string | undefined;
+    if (e.type === "start") graph = e.execution === "graph";
     if (e.type === "delegate" && a) {
-      for (const k of Object.keys(s)) if (s[k] === "active") s[k] = "done";
+      if (!graph) for (const k of Object.keys(s)) if (s[k] === "active") s[k] = "done";
       s[a] = "active";
     }
     if (e.type === "agent_done" && a) s[a] = e.error ? "error" : "done";
     if (e.type === "agent_blocked" && a) delete s[a];  // denied by step-by-step mode
+    if (e.type === "skipped" && e.node) s[e.node as string] = "skipped";
     if (e.type === "gate") s[e.gate as string] = "gate";
     if (e.type === "decision") s[e.gate as string] = "done";
   }
@@ -42,7 +56,7 @@ function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
   const who = e.agent ? `${e.agent}: ` : "";
   const mode = String(e.mode ?? "full");
   switch (e.type) {
-    case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${t(e.mock ? "run.ev.mock" : "run.ev.real")}` };
+    case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${e.execution === "graph" ? t("run.ev.graph") : ""}${t(e.mock ? "run.ev.mock" : "run.ev.real")}` };
     case "delegate": return { cls: "deleg", text: `→ ${e.agent}${e.task ? ` — ${e.task}` : ""}` };
     case "tool": return { cls: "tool", text: `${who}${e.tool}${e.artifact ? ` (${e.artifact})` : ""}` };
     case "tool_error": return { cls: "err", text: t("run.ev.toolError", { who }) };
@@ -54,11 +68,47 @@ function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
     case "agent_blocked": return null;
     case "continue": return { cls: "info", text: t(e.how === "full" ? "run.ev.continueFull" : e.how === "auto" ? "run.ev.continueAuto" : "run.ev.continueStep") };
     case "decision": return { cls: "info", text: `${t("run.ev.decision", { gate: String(e.gate), decision: tOr(`run.decision.${String(e.decision)}`, String(e.decision)) })}${e.comment ? ` — ${e.comment}` : ""}` };
-    case "result": return { cls: "info", text: `${t("run.ev.result", { session: String(e.session_id).slice(0, 8), turns: String(e.turns), cost: Number(e.cost ?? 0).toFixed(3) })}${e.denials ? t("run.ev.denials", { n: String(e.denials) }) : ""}` };
+    case "result": return { cls: "info", text: `${who}${t("run.ev.result", { session: String(e.session_id).slice(0, 8), turns: String(e.turns), cost: Number(e.cost ?? 0).toFixed(3) })}${e.denials ? t("run.ev.denials", { n: String(e.denials) }) : ""}` };
+    case "skipped": return { cls: "info", text: t("run.ev.skipped", { node: String(e.node) }) };
+    case "edge": {
+      const by = String(e.by ?? "always");
+      return { cls: e.fired ? "edge" : "edge off", text: t(e.fired ? "run.ev.edgeFired" : "run.ev.edgeNotFired", { from: String(e.from), to: String(e.to), by: tOr(`run.by.${by}`, by) }) };
+    }
+    case "outputs": return { cls: "ok", text: t("run.ev.outputs", { agent: String(e.agent), names: (Array.isArray(e.names) ? e.names : []).join(", ") || "—" }) };
     case "end": return { cls: e.status === "error" ? "err" : "info", text: `${t("run.ev.end", { status: status(i18n, e.status) })}${e.message ? ` — ${e.message}` : ""}${e.note ? ` (${e.note})` : ""}` };
     default: return null;
   }
 }
+
+/** Default run id, as the runner makes it: <flow[:20]>-<yyyymmdd-hhmmss>. */
+export function defaultRunId(flow: string): string {
+  const d = new Date(), p = (n: number) => String(n).padStart(2, "0");
+  return `${flow.slice(0, 20)}-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+/** The field type of an agent input in the agent-mode form (its resolved type and its source's options). */
+function agentInputIO(spec: FlowRaw, agent: string, name: string): IOTypeRaw {
+  const i = spec.agents[agent].inputs![name];
+  const src = sourceIO(spec, i.from);
+  const type = inputKind(spec, i);
+  return {
+    type, multiple: !!src?.multiple, options: type === "choice" ? src?.options : undefined,
+    required: i.required !== false, description: i.description || (i.from ? `← ${i.from}` : undefined), accept: src?.accept,
+  };
+}
+
+/** Last value of an agent input in a saved run: what was given, else its source. */
+function savedInput(spec: FlowRaw, io: RunIO | null, agent: string, name: string): unknown {
+  if (!io) return undefined;
+  const given = io.given[agent];
+  if (given && name in given) return given[name];
+  const from = spec.agents[agent].inputs?.[name]?.from;
+  if (!from) return undefined;
+  const [root, key] = [from.slice(0, from.indexOf(".")), from.slice(from.indexOf(".") + 1)];
+  return root === "input" ? io.inputs[key] : io.outputs[root]?.[key];
+}
+
+const pretty = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
 
 export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   flow: string; doc: Doc; dirty: boolean; mock: boolean; onTrace: (t: Record<string, NodeRun>) => void;
@@ -67,14 +117,23 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const i18n = useI18n();
   const { t } = i18n;
   const dialog = useDialog();
+  const spec = doc.spec;
+  const typed = isTyped(spec);
   const [mode, setMode] = useState<RunMode>("full");
   const [target, setTarget] = useState("");
   const [instruction, setInstruction] = useState("");
-  const [inputs, setInputs] = useState<string[]>([]);  // artifacts that already exist for the input
+  const [inputs, setInputs] = useState<string[]>([]);  // artifacts that already exist for the run
   useEffect(() => {
     if (request) { setMode(request.mode); setTarget(request.target ?? ""); }
   }, [request]);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState("");  // legacy flows: the one input (also the run id)
+  const [runId, setRunId] = useState(() => defaultRunId(flow));  // typed flows
+  const [values, setValues] = useState<Record<string, FormVal>>(
+    () => Object.fromEntries(Object.entries(spec.inputs ?? {}).map(([n, x]) => [n, formValue(x, x.default)])));
+  const [given, setGiven] = useState<Record<string, FormVal>>({});
+  const [fieldErr, setFieldErr] = useState<Record<string, string>>({});
+  const [runIdErr, setRunIdErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState<RunIO | null>(null);
   const [run, setRun] = useState<RunInfo | null>(null);
   const [events, setEvents] = useState<Ev[]>([]);
   const [comment, setComment] = useState("");
@@ -84,15 +143,29 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const [sent, setSent] = useState<Set<string>>(new Set());
   const evRef = useRef<Ev[]>([]);
   const end = useRef<HTMLDivElement>(null);
-  const label = doc.spec.input?.label ?? t("insp.inputDefault");
+  const label = spec.input?.label ?? t("insp.inputDefault");
+  const rid = typed ? runId.trim() : input.trim();  // the run folder in runs/
 
   useEffect(() => { onTrace(traceOf(events)); end.current?.scrollIntoView({ block: "nearest" }); }, [events, onTrace]);
   useEffect(() => () => onTrace({}), [onTrace]);
+
+  // new flow inputs (edited in the Inspector) get their default
+  useEffect(() => {
+    setValues((v) => {
+      const next = { ...v };
+      for (const [n, x] of Object.entries(spec.inputs ?? {})) if (!(n in next)) next[n] = formValue(x, x.default);
+      return next;
+    });
+  }, [spec.inputs]);
 
   const loadArts = async (inp: string) => {
     const r = await fetch(`/api/artifacts/${encodeURIComponent(inp)}`);
     setArts(r.ok ? await r.json() : []);
   };
+  const loadIO = useCallback((inp: string) => {
+    if (!RUN_ID.test(inp)) { setSaved(null); return; }
+    api.io(inp, flow).then(setSaved).catch(() => setSaved(null));
+  }, [flow]);
 
   const follow = async (id: string, inp: string) => {
     const r = await fetch(`/api/runs/${id}/events?after=${evRef.current.length}`);
@@ -113,22 +186,79 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
         if (ev.type === "state") setRun(ev as unknown as RunInfo);
         else { evRef.current = [...evRef.current, ev]; setEvents(evRef.current); }
         if (ev.type === "tool" || ev.type === "agent_done") loadArts(inp);
+        if (ev.type === "agent_done" || ev.type === "outputs" || ev.type === "decision") loadIO(inp);
       }
     }
     loadArts(inp);
+    loadIO(inp);
+  };
+
+  // saved values of the run (outputs view, agent-mode form), and artifacts the target agent needs
+  useEffect(() => {
+    if (!RUN_ID.test(rid)) { setInputs([]); setSaved(null); return; }
+    const h = setTimeout(() => {
+      loadIO(rid);
+      if (mode === "agent") fetch(`/api/artifacts/${encodeURIComponent(rid)}`)
+        .then((r) => (r.ok ? r.json() : [])).then((a: { name: string }[]) => setInputs(a.map((x) => x.name)))
+        .catch(() => setInputs([]));
+    }, 300);
+    return () => clearTimeout(h);
+  }, [mode, rid, loadIO]);
+  const needs = mode === "agent" && target ? spec.agents[target]?.reads ?? [] : [];
+  const missing = needs.filter((n) => !inputs.includes(n));
+
+  // agent mode: the target agent's inputs, prefilled from the saved run
+  const targetInputs = mode === "agent" && target && spec.agents[target] ? Object.keys(spec.agents[target].inputs ?? {}) : [];
+  const targetKey = `${target}|${targetInputs.join(",")}`;
+  useEffect(() => {
+    if (mode !== "agent" || !target || !spec.agents[target]) { setGiven({}); return; }
+    setGiven(Object.fromEntries(targetInputs.map((n) =>
+      [n, formValue(agentInputIO(spec, target, n), savedInput(spec, saved, target, n))])));
+  }, [mode, targetKey, saved]);  // eslint-disable-line react-hooks/exhaustive-deps -- refill when the agent or the saved run changes
+
+  const collect = (): { body: Record<string, unknown> } | null => {
+    const errs: Record<string, string> = {};
+    const out: Record<string, unknown> = {};
+    if (typed) for (const [n, x] of Object.entries(spec.inputs ?? {})) {
+      const r = sendValue(x, values[n] ?? formValue(x, x.default));
+      if (r.error) errs[n] = t("run.form.badJson");
+      else if (r.value !== undefined) out[n] = r.value;
+    }
+    const g: Record<string, unknown> = {};
+    for (const n of targetInputs) {
+      const x = agentInputIO(spec, target, n);
+      if (x.type === "file") continue;  // an agent under test reads the saved file
+      const r = sendValue(x, given[n] ?? "");
+      if (r.error) errs[`given.${n}`] = t("run.form.badJson");
+      else if (r.value !== undefined) g[n] = r.value;
+    }
+    setFieldErr(errs);
+    if (Object.keys(errs).length) return null;
+    const base = { flow, mode, target: target || null, instruction: mode === "agent" ? instruction : "",
+      ...(Object.keys(g).length ? { given: g } : {}) };
+    return { body: typed ? { ...base, run_id: runId.trim() || null, inputs: out } : { ...base, input: input.trim() } };
   };
 
   const start = async () => {
-    setError(null);
-    const inp = input.trim();
-    if (!inp) return;
+    setError(null); setRunIdErr(null);
+    if (!rid && !typed) return;
+    if ((mode === "until" || mode === "agent") && !target) return setError(t("run.pickAgent"));
+    const c = collect();
+    if (!c) return setError(t("run.form.fix"));
     if (!mock && !(await dialog.confirm({ title: t("run.realTitle"), message: t("run.confirmReal"), ok: t("run.realOk"), danger: true }))) return;
     try {
-      if ((mode === "until" || mode === "agent") && !target) throw new Error(t("run.pickAgent"));
-      const r = await post<RunInfo>("/api/runs", { flow, input: inp, mode, target: target || null, instruction: mode === "agent" ? instruction : "" });
+      const r = await post<RunInfo>("/api/runs", c.body);
       evRef.current = []; setEvents([]); setView(null); setRun(r);
-      await follow(r.id, inp);
-    } catch (e) { setError(String((e as Error).message)); }
+      await follow(r.id, r.input);
+    } catch (e) {
+      const d = e instanceof ApiError && e.status === 422 ? e.detail : null;
+      if (d && typeof d === "object" && !Array.isArray(d)) {
+        const o = d as { inputs?: Record<string, string>; run_id?: string };
+        if (o.inputs) setFieldErr(o.inputs);
+        if (o.run_id) setRunIdErr(o.run_id);
+        setError(t("run.form.fix"));
+      } else setError(String((e as Error).message));
+    }
   };
 
   const cont = async (how: "step" | "full") => {
@@ -140,18 +270,6 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
       await follow(r.id, run.input);
     } catch (e) { setError(String((e as Error).message)); }
   };
-
-  // artifacts the target agent needs ("single agent" mode)
-  useEffect(() => {
-    const inp = input.trim();
-    if (mode !== "agent" || !/^[A-Za-z0-9_-]{1,40}$/.test(inp)) { setInputs([]); return; }
-    const t = setTimeout(() => fetch(`/api/artifacts/${encodeURIComponent(inp)}`)
-      .then((r) => (r.ok ? r.json() : [])).then((a: { name: string }[]) => setInputs(a.map((x) => x.name)))
-      .catch(() => setInputs([])), 300);
-    return () => clearTimeout(t);
-  }, [mode, input]);
-  const needs = mode === "agent" && target ? doc.spec.agents[target]?.reads ?? [] : [];
-  const missing = needs.filter((n) => !inputs.includes(n));
 
   const decide = async (decision: "approve" | "reject" | "answer") => {
     if (!run) return;
@@ -180,18 +298,32 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const running = run?.status === "running";
   const gate = run?.status === "gate" ? run.gate : null;
   const paused = run?.status === "paused";
-  const agents = Object.keys(doc.spec.agents);
+  const agents = Object.keys(spec.agents);
+  const savedInputs = typed && saved && Object.keys(saved.inputs).length > 0;
+  const outputs = useMemo(() => Object.entries(saved?.outputs ?? {}).filter(([, o]) => Object.keys(o).length), [saved]);
+
+  const runButton = running
+    ? <button className="danger" onClick={() => run && post(`/api/runs/${run.id}/stop`)}>{t("run.stop")}</button>
+    : <button className="primary" disabled={dirty || (typed ? !RUN_ID.test(rid) : !rid)} onClick={start}
+      title={dirty ? t("run.saveFirstTitle") : t("run.run")}>{t("run.run")}</button>;
   return (
     <div className="runp">
       <div className="run-head">
-        <div className="row">
-          <input placeholder={t("run.inputPlaceholder", { label })} value={input} disabled={running}
-            onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && start()} />
-          {running
-            ? <button className="danger" onClick={() => run && post(`/api/runs/${run.id}/stop`)}>{t("run.stop")}</button>
-            : <button className="primary" disabled={!input.trim() || dirty} onClick={start}
-              title={dirty ? t("run.saveFirstTitle") : t("run.run")}>{t("run.run")}</button>}
-        </div>
+        {typed ? <>
+          <div className="row">
+            <input className={`mono${runIdErr || (rid && !RUN_ID.test(rid)) ? " bad" : ""}`} value={runId} disabled={running}
+              title={t("run.runIdTitle")} aria-label={t("run.runId")} placeholder={t("run.runId")}
+              onChange={(e) => { setRunId(e.target.value); setRunIdErr(null); }} />
+            <button className="icon" disabled={running} title={t("run.newRunId")} onClick={() => setRunId(defaultRunId(flow))}>↻</button>
+            {runButton}
+          </div>
+          {(runIdErr || (rid && !RUN_ID.test(rid))) && <span className="field-err">{runIdErr ?? t("run.runIdHint")}</span>}
+        </> : (
+          <div className="row">
+            <input placeholder={t("run.inputPlaceholder", { label })} value={input} disabled={running}
+              onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && start()} />
+            {runButton}
+          </div>)}
         <div className="row mode-row">
           <select value={mode} disabled={running} onChange={(e) => setMode(e.target.value as RunMode)}
             title={t("run.modeTitle")}>
@@ -206,12 +338,41 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
               {agents.map((a) => <option key={a}>{a}</option>)}
             </select>)}
         </div>
+        {typed && (
+          <details className="run-form" open>
+            <summary className="small">{t("run.form.inputs")}
+              {savedInputs && <button className="small link" disabled={running} title={t("run.form.useSavedTitle")}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setValues((v) => ({ ...v, ...Object.fromEntries(Object.entries(spec.inputs ?? {})
+                    .filter(([n, x]) => x.type !== "file" && n in saved!.inputs).map(([n, x]) => [n, formValue(x, saved!.inputs[n])])) }));
+                }}>{t("run.form.useSaved")}</button>}
+            </summary>
+            {Object.entries(spec.inputs ?? {}).map(([n, x]) => (
+              <ValueField key={n} name={n} t={x} value={values[n] ?? formValue(x, x.default)} disabled={running}
+                error={fieldErr[n]} saved={saved?.inputs[n]}
+                onChange={(v) => { setValues((p) => ({ ...p, [n]: v })); setFieldErr(({ [n]: _, ...rest }) => rest); }} />
+            ))}
+          </details>)}
         {mode === "agent" && <>
           <textarea rows={2} disabled={running} placeholder={t("run.instruction")}
             value={instruction} onChange={(e) => setInstruction(e.target.value)} />
+          {target && targetInputs.length > 0 && (
+            <details className="run-form" open>
+              <summary className="small">{t("run.form.agentInputs", { agent: target })}</summary>
+              <p className="muted small">{t("run.form.agentInputsHint")}</p>
+              {targetInputs.map((n) => {
+                const x = agentInputIO(spec, target, n);
+                return x.type === "file"
+                  ? <div key={n} className="field run-field"><span className="field-label">{n}</span>
+                    <span className="field-hint">{t("run.form.agentFile")}</span></div>
+                  : <ValueField key={n} name={n} t={x} value={given[n] ?? ""} disabled={running} error={fieldErr[`given.${n}`]}
+                    onChange={(v) => setGiven((p) => ({ ...p, [n]: v }))} />;
+              })}
+            </details>)}
           {target && needs.length > 0 && (
             <p className={`small ${missing.length ? "field-err" : "muted"}`}>
-              {missing.length ? t("run.missingInputs", { input: input || t("run.inputFolder"), names: missing.join(", ") })
+              {missing.length ? t("run.missingInputs", { input: rid || t("run.inputFolder"), names: missing.join(", ") })
                 : t("run.presentInputs", { names: needs.join(", ") })}</p>)}
         </>}
         <span className={`badge ${mock ? "" : "warn"}`}>{mock ? t("run.mock") : t("run.real")}</span>
@@ -264,13 +425,28 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
         <div ref={end} />
       </div>
 
-      {arts.length > 0 && (
+      {(arts.length > 0 || outputs.length > 0) && (
         <div className="run-arts">
-          <h2>{t("run.artifacts", { input: run?.input ?? "" })}</h2>
-          <div className="arts">{arts.map((a) => (
-            <button key={a.name} className={`small${view?.name === a.name ? " on" : ""}`} onClick={() => open(a.name)}>{a.name}</button>
-          ))}</div>
-          {view && <pre className="mono art-view">{view.name.endsWith(".json") ? (() => { try { return JSON.stringify(JSON.parse(view.text), null, 2); } catch { return view.text; } })() : view.text}</pre>}
+          {outputs.length > 0 && <>
+            <h2>{t("run.outputs", { input: rid })}</h2>
+            <div className="outs">{outputs.map(([agent, o]) => (
+              <details key={agent} className="out-group">
+                <summary><b>{agent}</b> <span className="muted small">{Object.keys(o).join(", ")}</span></summary>
+                {Object.entries(o).map(([n, v]) => (
+                  <div key={n} className="out-row">
+                    <code>{n}</code>
+                    <pre className="mono art-view">{pretty(v)}</pre>
+                  </div>))}
+              </details>))}
+            </div>
+          </>}
+          {arts.length > 0 && <>
+            <h2>{t("run.artifacts", { input: run?.input ?? "" })}</h2>
+            <div className="arts">{arts.map((a) => (
+              <button key={a.name} className={`small${view?.name === a.name ? " on" : ""}`} onClick={() => open(a.name)}>{a.name}</button>
+            ))}</div>
+            {view && <pre className="mono art-view">{view.name.endsWith(".json") ? (() => { try { return JSON.stringify(JSON.parse(view.text), null, 2); } catch { return view.text; } })() : view.text}</pre>}
+          </>}
         </div>
       )}
     </div>

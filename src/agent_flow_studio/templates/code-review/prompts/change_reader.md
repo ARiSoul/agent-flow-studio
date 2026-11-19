@@ -6,13 +6,12 @@ Find out what the current branch changes against `{{base_branch}}`. Use only rea
 3. `diff` with `{{base_branch}}...HEAD --stat` for the size, then `diff` with
    `{{base_branch}}...HEAD` (add `-- <path>` per file when the diff is long).
 
-Save `01_changes.json` with:
-- `branch`, `base`: the two branches;
+Save these outputs with `set_output`:
+- `has_changes`: false when there are no commits and no diff;
+- `branch`: the current branch;
 - `commits`: list of `{sha, subject}`;
 - `files`: list of `{path, status, added, removed, summary}` (summary = what changes, in one line);
 - `risk_areas`: list of `{path, why}` — security, data, concurrency, public API, config, migrations;
-- `tests_changed`: true or false, and which test files;
-- `notes`: anything you could not read or understand.
+- `tests_changed`: true when test files changed.
 
-If there are no commits and no diff, save the file with empty lists and say so. Do not make
-things up: every entry comes from the git output.
+Do not make things up: every entry comes from the git output.

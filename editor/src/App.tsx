@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   Background, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow, MarkerType,
-  type Connection, type Edge, type EdgeChange, type Node, type NodeChange,
+  type Connection, type Edge, type EdgeChange, type IsValidConnection, type Node, type NodeChange,
 } from "@xyflow/react";
 import { api } from "./api";
 import { Chat } from "./Chat";
@@ -11,8 +11,10 @@ import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
 import { THEMES, useTheme, type Theme } from "./theme";
-import { autoLayout, clone, ensureLayout, newAgent, newGate, removeNode, tidy, uniqueName } from "./model";
-import { nodeTypes } from "./nodes";
+import {
+  autoLayout, clone, ensureLayout, inputKind, newAgent, newGate, removeNode, sourceIO, tidy, uniqueKey, uniqueName,
+} from "./model";
+import { nodeTypes, type Port } from "./nodes";
 import type { Catalog, Doc, FlowSummary, FlowTemplate, Selection, Validation } from "./types";
 
 const PALETTE = [
@@ -22,6 +24,11 @@ const PALETTE = [
 ] as const;
 type PaletteKind = (typeof PALETTE)[number]["kind"];
 const FLOW_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;  // same rule as the server
+const DATA_LINKS_KEY = "afs.dataLinks";
+
+/** Id of a data link on the canvas: d:<agent>:<input> (agent and input names are slugs, no ":"). */
+const dataEdgeId = (agent: string, input: string) => `d:${agent}:${input}`;
+const parseDataEdge = (id: string) => { const [, agent, input] = id.split(":"); return { agent, input }; };
 
 function Editor() {
   const rf = useReactFlow();
@@ -44,6 +51,13 @@ function Editor() {
   const [showConns, setShowConns] = useState(false);
   const [runReq, setRunReq] = useState<RunRequest | null>(null);
   const [dims, setDims] = useState<Record<string, { width: number; height: number }>>({});
+  const [showData, setShowData] = useState<boolean>(() => {
+    try { return localStorage.getItem(DATA_LINKS_KEY) !== "0"; } catch { return true; }
+  });
+  const toggleData = () => setShowData((v) => {
+    try { localStorage.setItem(DATA_LINKS_KEY, v ? "0" : "1"); } catch { /* storage not available */ }
+    return !v;
+  });
   const past = useRef<Doc[]>([]);
   const future = useRef<Doc[]>([]);
 
@@ -99,7 +113,8 @@ function Editor() {
     if (s.kind === "node") {
       if (s.id === doc.spec.start) return flash(t("app.cantDeleteStart"), true);
       update((d) => removeNode(d.spec, s.id));
-    } else update((d) => { d.spec.edges = (d.spec.edges ?? []).filter((_, i) => i !== s.index); });
+    } else if (s.kind === "data") update((d) => { const i = d.spec.agents[s.agent]?.inputs?.[s.input]; if (i) delete i.from; });
+    else update((d) => { d.spec.edges = (d.spec.edges ?? []).filter((_, i) => i !== s.index); });
     setSel(null);
   }, [doc, update, t]);
 
@@ -134,11 +149,19 @@ function Editor() {
     if (!doc) return [];
     const s = doc.spec, pos = (id: string) => s.layout?.[id] ?? { x: 0, y: 0 };
     return [
-      ...Object.entries(s.agents).map(([id, a]) => ({
-        id, type: "agent", position: pos(id), measured: dims[id],
-        selected: sel?.kind === "node" && sel.id === id,
-        data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace[id] },
-      })),
+      ...Object.entries(s.agents).map(([id, a]) => {
+        const ins: Port[] = Object.entries(a.inputs ?? {}).map(([n, i]) => ({
+          name: n, type: inputKind(s, i), multiple: !!sourceIO(s, i.from)?.multiple, from: i.from,
+        }));
+        const outs: Port[] = Object.entries(a.outputs ?? {}).map(([n, o]) => ({
+          name: n, type: o.type ?? "text", multiple: !!o.multiple,
+        }));
+        return {
+          id, type: "agent", position: pos(id), measured: dims[id],
+          selected: sel?.kind === "node" && sel.id === id,
+          data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace[id], ins, outs },
+        };
+      }),
       ...Object.entries(s.gates ?? {}).map(([id, g]) => ({
         id, type: "gate", position: pos(id), measured: dims[id],
         selected: sel?.kind === "node" && sel.id === id,
@@ -146,12 +169,31 @@ function Editor() {
       })),
     ];
   }, [doc, sel, errNodes, dims, trace]);
-  const edges: Edge[] = useMemo(() => (doc?.spec.edges ?? []).map((e, i) => ({
-    id: `e${i}`, source: e.from, target: e.to, label: e.when || undefined,
-    selected: sel?.kind === "edge" && sel.index === i, type: "smoothstep",
-    markerEnd: { type: MarkerType.ArrowClosed },
-    className: e.to === doc?.spec.start || e.from in (doc?.spec.gates ?? {}) ? "back" : "",
-  })), [doc, sel]);
+  const edges: Edge[] = useMemo(() => {
+    if (!doc) return [];
+    const s = doc.spec;
+    const control: Edge[] = (s.edges ?? []).map((e, i) => ({
+      id: `e${i}`, source: e.from, target: e.to,
+      label: [e.if?.trim(), e.when?.trim()].filter(Boolean).join(" · ") || undefined,
+      selected: sel?.kind === "edge" && sel.index === i, type: "smoothstep",
+      markerEnd: { type: MarkerType.ArrowClosed },
+      className: [e.to === s.start || e.from in (s.gates ?? {}) ? "back" : "", e.if?.trim() ? "cond" : ""].join(" ").trim(),
+    }));
+    if (!showData) return control;
+    const data: Edge[] = [];
+    for (const [an, a] of Object.entries(s.agents))
+      for (const [n, i] of Object.entries(a.inputs ?? {})) {
+        const ref = i.from ?? "";
+        const root = ref.slice(0, ref.indexOf("."));
+        const out = ref.slice(ref.indexOf(".") + 1);
+        if (!ref.includes(".") || root === "input" || !s.agents[root]?.outputs?.[out]) continue;
+        data.push({
+          id: dataEdgeId(an, n), source: root, target: an, sourceHandle: `out:${out}`, targetHandle: `in:${n}`,
+          className: "data", type: "default", selected: sel?.kind === "data" && sel.agent === an && sel.input === n,
+        });
+      }
+    return [...control, ...data];
+  }, [doc, sel, showData]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const moves = changes.filter((c) => c.type === "position" && c.position);
@@ -171,7 +213,9 @@ function Editor() {
   }, [update]);
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     for (const c of changes) {
-      if (c.type === "select" && c.selected) setSel({ kind: "edge", index: Number(c.id.slice(1)) });
+      if (c.type !== "select" || !c.selected) continue;
+      if (c.id.startsWith("d:")) setSel({ kind: "data", ...parseDataEdge(c.id) });
+      else setSel({ kind: "edge", index: Number(c.id.slice(1)) });
     }
   }, []);
   // Delete on the canvas: one single change (one undo step) for nodes and links
@@ -179,21 +223,45 @@ function Editor() {
     if (!doc) return;
     const ids = ns.map((n) => n.id).filter((id) => id !== doc.spec.start);
     if (ids.length < ns.length) flash(t("app.startNotDeleted"), true);
-    const drop = new Set(es.map((e) => Number(e.id.slice(1))));
-    if (!ids.length && !drop.size) return;
+    const drop = new Set(es.filter((e) => e.id.startsWith("e")).map((e) => Number(e.id.slice(1))));
+    const links = es.filter((e) => e.id.startsWith("d:")).map((e) => parseDataEdge(e.id));
+    if (!ids.length && !drop.size && !links.length) return;
     update((d) => {
       d.spec.edges = (d.spec.edges ?? []).filter((_, i) => !drop.has(i));
+      for (const l of links) { const i = d.spec.agents[l.agent]?.inputs?.[l.input]; if (i) delete i.from; }
       for (const id of ids) removeNode(d.spec, id);
     });
     setSel(null);
   }, [doc, update, t]);
+  // Data link: an output port (out:<x>) onto an input port (in:<y>) sets that input's `from`;
+  // onto "+ input" (in:+) or the node's top handle it creates an input named after the output.
+  const isValidConnection: IsValidConnection = useCallback((c) => {
+    if (!doc || c.source === c.target) return false;
+    if (c.sourceHandle?.startsWith("out:")) return c.target in doc.spec.agents;
+    return true;
+  }, [doc]);
   const onConnect = useCallback((c: Connection) => {
     if (!doc || !c.source || !c.target || c.source === c.target) return;
+    if (c.sourceHandle?.startsWith("out:")) {
+      const out = c.sourceHandle.slice(4), target = c.target, ref = `${c.source}.${out}`;
+      if (!(target in doc.spec.agents)) return flash(t("app.dataToGate"), true);
+      const ins = doc.spec.agents[target].inputs ?? {};
+      const th = c.targetHandle?.startsWith("in:") && c.targetHandle !== "in:+" ? c.targetHandle.slice(3) : null;
+      if (th && ins[th]?.from === ref) return flash(t("app.edgeExists"), true);
+      const name = th ?? uniqueKey(Object.keys(ins), out);
+      update((d) => {
+        const a = d.spec.agents[target];
+        a.inputs = { ...a.inputs, [name]: { ...a.inputs?.[name], from: ref } };
+      });
+      if (!showData) flash(t("app.dataLinkHidden"));
+      setSel({ kind: "data", agent: target, input: name });
+      return;
+    }
     if ((doc.spec.edges ?? []).some((e) => e.from === c.source && e.to === c.target)) return flash(t("app.edgeExists"), true);
     const index = (doc.spec.edges ?? []).length;
     update((d) => { d.spec.edges = [...(d.spec.edges ?? []), { from: c.source!, to: c.target!, when: "" }]; });
     setSel({ kind: "edge", index });
-  }, [doc, update, t]);
+  }, [doc, update, t, showData]);
 
   // ---- palette
   const addNode = (kind: PaletteKind, at?: { x: number; y: number }) => {
@@ -292,6 +360,8 @@ function Editor() {
         <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">{t("app.undo")}</button>
         <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">{t("app.redo")}</button>
         <button onClick={() => { update((d) => autoLayout(d.spec)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); }}>{t("app.arrange")}</button>
+        <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
+          title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
         <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
         <span className="grow" />
         {msg && <span className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</span>}
@@ -335,6 +405,7 @@ function Editor() {
         {doc && (
           <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode={base}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onDelete={onDelete}
+            isValidConnection={isValidConnection}
             onBeforeDelete={async ({ nodes: ns, edges: es }) => ({ nodes: ns.filter((n) => n.id !== doc.spec.start), edges: es })}
             onNodeDragStart={() => { if (doc) { past.current.push(doc); future.current = []; } }}
             onPaneClick={() => setSel(null)} deleteKeyCode={["Delete", "Backspace"]}
@@ -354,7 +425,7 @@ function Editor() {
           <button className={right === "run" ? "on" : ""} onClick={() => setRight("run")}>{t("tabs.run")}</button>
         </div>
         {doc && <div className="right-body" hidden={right !== "props"}>
-          <Inspector doc={doc} sel={sel} catalog={catalog} update={update} select={setSel} remove={remove}
+          <Inspector doc={doc} sel={sel} catalog={catalog} val={val} update={update} select={setSel} remove={remove}
             testAgent={(id) => {
               const until = id.startsWith("until:");
               setRunReq({ mode: until ? "until" : "agent", target: until ? id.slice(6) : id, nonce: Date.now() });

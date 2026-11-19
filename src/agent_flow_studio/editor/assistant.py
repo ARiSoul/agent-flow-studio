@@ -44,6 +44,23 @@ _STR = {"type": "string"}
 _STRS = {"type": "array", "items": _STR}
 _WRITES = {"type": "array", "items": {"type": "object", "properties": {
     "name": _STR, "contract": _STR, "draft": {"type": "boolean"}}, "required": ["name"]}}
+_KINDS = ["text", "markdown", "number", "integer", "boolean", "date", "datetime", "url", "path",
+          "file", "choice", "json"]
+# a typed value (flow input or agent output); the flow validation checks the details
+_IOTYPE = {"type": "object", "properties": {
+    "type": {"type": "string", "enum": _KINDS}, "label": _STR, "description": _STR,
+    "required": {"type": "boolean"}, "default": {}, "multiple": {"type": "boolean"},
+    "min": {"type": "number"}, "max": {"type": "number"}, "pattern": _STR, "options": _STRS,
+    "accept": _STRS, "contract": _STR, "draft": {"type": "boolean"}}}
+_IOMAP = {"type": "object", "additionalProperties": _IOTYPE}
+_AGENT_INPUTS = {"type": "object", "additionalProperties": {"type": "object", "properties": {
+    "from": _STR, "type": {"type": "string", "enum": _KINDS}, "description": _STR,
+    "required": {"type": "boolean"}}}}
+
+
+def _rename_refs(text: str, old: str, new: str) -> str:
+    """`old.x` → `new.x` in `from` refs and `if` expressions (whole words only)."""
+    return re.sub(rf"(?<![A-Za-z0-9_.]){re.escape(old)}\.", f"{new}.", text)
 
 
 def _schema(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -133,13 +150,20 @@ class Draft:
             return ok(owner.get("prompt") or "(no prompt)")
 
         @tool("update_flow", "Changes general flow fields: title, description, model, max_turns, "
-              "task (must contain {input}), input_label, input_pattern, start.",
+              "task, start, execution ('orchestrator' = an LLM orchestrator follows the graph; "
+              "'graph' = the studio runs the graph, in parallel where it can), max_parallel, and "
+              "inputs: the typed flow inputs {name: {type, label, required, default, options…}} "
+              "(the run form). Legacy flows without inputs use input_label/input_pattern and "
+              "{input} in the task; with inputs, the task may use {name} and {run_id}.",
               _schema({"title": _STR, "description": _STR, "model": _STR,
                        "max_turns": {"type": "integer"}, "task": _STR, "input_label": _STR,
                        "input_pattern": _STR, "start": _STR,
+                       "execution": {"type": "string", "enum": ["orchestrator", "graph"]},
+                       "max_parallel": {"type": "integer"}, "inputs": _IOMAP,
                        "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}}))
         async def update_flow(a: dict) -> dict:
-            for k in ("title", "description", "model", "max_turns", "task", "start", "autonomy"):
+            for k in ("title", "description", "model", "max_turns", "task", "start", "autonomy",
+                      "execution", "max_parallel", "inputs"):
                 if k in a:
                     d.spec[k] = a[k]
             if "input_label" in a or "input_pattern" in a:
@@ -154,11 +178,17 @@ class Draft:
               "Creates or updates an agent. Only the given fields change. tools: catalog ids "
               "('server.tool'); writes: [{name, contract?, draft?}]; reads: names of artifacts "
               "written by other agents; connections: configured connectors the agent can read "
-              "(GET). The prompt of a new agent goes to prompts/<name>.md.",
+              "(GET). The prompt of a new agent goes to prompts/<name>.md. inputs: {name: "
+              "{from: 'input.<x>' or '<agent>.<output>', type?, required?, description?}}; "
+              "outputs: {name: {type, required?, options?, contract?, draft?, multiple?…}} — the "
+              "agent gets them with io.get_inputs and saves them with io.set_output (implicit). "
+              "join ('all'|'any') and max_runs only matter in graph execution.",
               _schema({"name": _STR, "description": _STR, "prompt": _STR, "tools": _STRS,
                        "model": _STR, "max_turns": {"type": "integer"}, "skills": _STRS,
                        "reads": _STRS, "writes": _WRITES, "connections": _STRS,
-                       "write_connections": _STRS,
+                       "write_connections": _STRS, "inputs": _AGENT_INPUTS, "outputs": _IOMAP,
+                       "join": {"type": "string", "enum": ["all", "any"]},
+                       "max_runs": {"type": "integer"},
                        "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}},
                       ["name"]))
         async def set_agent(a: dict) -> dict:
@@ -190,7 +220,8 @@ class Draft:
                     tools = [t for t in tools if t != "connections.http_write"]
                 a = {**a, "tools": tools}
             for k in ("description", "tools", "model", "max_turns", "skills", "reads", "writes",
-                      "connections", "write_connections", "autonomy"):
+                      "connections", "write_connections", "autonomy", "inputs", "outputs", "join",
+                      "max_runs"):
                 if k in a:
                     ag[k] = a[k]
             if "prompt" in a:
@@ -212,9 +243,12 @@ class Draft:
             d.spec.setdefault("gates", {})[a["name"]] = {"kind": a["kind"], "label": a["label"]}
             return d._summary(f"Gate {a['name']} defined")
 
-        @tool("add_edge", "Connects two nodes (agent or gate). 'when' is the condition in natural "
-              "language; if the edge already exists, it updates the condition.",
-              _schema({"from": _STR, "to": _STR, "when": _STR}, ["from", "to"]))
+        @tool("add_edge", "Connects two nodes (agent or gate). 'if' is an expression on the "
+              "inputs/outputs, checked by the studio (e.g. triage.severity == \"high\", "
+              "tests.failed > 0, approve_pr.decision == \"approve\"); 'when' is a condition in "
+              "natural language. Prefer 'if' when the data is in an output. If the edge already "
+              "exists, it updates the conditions.",
+              _schema({"from": _STR, "to": _STR, "when": _STR, "if": _STR}, ["from", "to"]))
         async def add_edge(a: dict) -> dict:
             missing = [n for n in (a["from"], a["to"]) if n not in d._nodes()]
             if missing:
@@ -222,8 +256,13 @@ class Draft:
             for e in d._edges():
                 if e["from"] == a["from"] and e["to"] == a["to"]:
                     e["when"] = a.get("when", e.get("when", ""))
-                    return d._summary("Condition updated")
-            d._edges().append({"from": a["from"], "to": a["to"], "when": a.get("when", "")})
+                    if "if" in a:
+                        e["if"] = a["if"]
+                    return d._summary("Conditions updated")
+            edge = {"from": a["from"], "to": a["to"], "when": a.get("when", "")}
+            if a.get("if"):
+                edge["if"] = a["if"]
+            d._edges().append(edge)
             return d._summary(f"Edge {a['from']} → {a['to']} created")
 
         @tool("remove_edge", "Removes the edge between two nodes.",
@@ -252,6 +291,12 @@ class Draft:
             for e in d._edges():
                 e["from"] = new if e["from"] == old else e["from"]
                 e["to"] = new if e["to"] == old else e["to"]
+                if e.get("if"):
+                    e["if"] = _rename_refs(e["if"], old, new)
+            for ag in (d.spec.get("agents") or {}).values():
+                for i in (ag.get("inputs") or {}).values():
+                    if isinstance(i, dict) and isinstance(i.get("from"), str):
+                        i["from"] = _rename_refs(i["from"], old, new)
             return d._summary(f"{old} renamed to {new}")
 
         @tool("remove_node", "Removes an agent or gate and its edges.",

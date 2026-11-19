@@ -5,9 +5,14 @@ title: Code review of a branch
 description: |
   Reads the changes of the current branch against {{base_branch}} and prepares a review (draft for
   human approval). Read-only: git through workspace.git, files through workspace.read/grep/glob.
-input:
-  label: Review id (e.g. the branch name)
-task: "Review the changes of the current branch against {{base_branch}} for run {input}."
+execution: graph
+inputs:
+  focus:
+    type: text
+    label: What to look at (optional)
+    required: false
+    description: e.g. security, error handling, the new API. Empty = all the changes.
+task: "Review the changes of the current branch against {{base_branch}}. Focus: {focus}."
 orchestrator: {prompt_file: prompts/orchestrator.md}
 autonomy: approve
 workspace: {path: "{{workspace}}", environment: dev}
@@ -19,30 +24,41 @@ agents:
     description: Reads the diff and the commits of the branch against the base branch and lists
       what changed and where the risk is. Use first.
     prompt_file: prompts/change_reader.md
-    tools: [workspace.git, workspace.read, artifacts.save_artifact]
-    writes:
-    - {name: 01_changes.json}
+    tools: [workspace.git, workspace.read]
+    outputs:
+      has_changes: {type: boolean}
+      branch: {type: text}
+      commits: {type: json, description: "list of {sha, subject}"}
+      files: {type: json, description: "list of {path, status, added, removed, summary}"}
+      risk_areas: {type: json, description: "list of {path, why}"}
+      tests_changed: {type: boolean}
   reviewer:
     description: Reviews the changed code with its context and writes the review (risks, likely
       bugs, missing tests, suggestions) with path:line evidence.
     prompt_file: prompts/reviewer.md
-    tools: [workspace.git, workspace.read, workspace.grep, workspace.glob,
-            artifacts.read_artifact, artifacts.save_artifact]
-    reads: [01_changes.json]
-    writes:
-    - {name: 02_review.md, draft: true}
+    tools: [workspace.git, workspace.read, workspace.grep, workspace.glob]
+    inputs:
+      files: {from: change_reader.files}
+      risk_areas: {from: change_reader.risk_areas}
+      commits: {from: change_reader.commits}
+      tests_changed: {from: change_reader.tests_changed}
+      focus: {from: input.focus, required: false}
+    outputs:
+      review: {type: markdown, draft: true}
+      blockers: {type: integer, min: 0, description: Number of blocker findings}
+      verdict: {type: choice, options: [ready, changes_needed, blocked]}
 
 gates:
   no_changes: {kind: stop, label: No changes against the base branch}
   approve_review: {kind: human, label: Check and approve the review}
 
 edges:
-- {from: change_reader, to: reviewer, when: there are changes to review}
-- {from: change_reader, to: no_changes, when: the branch has no changes against the base branch}
-- {from: reviewer, to: approve_review, when: the review is saved}
+- {from: change_reader, to: reviewer, if: change_reader.has_changes}
+- {from: change_reader, to: no_changes, if: not change_reader.has_changes}
+- {from: reviewer, to: approve_review}
 
 layout:
   change_reader: {x: 0, y: 0}
-  no_changes: {x: 300, y: 160}
-  reviewer: {x: 0, y: 160}
-  approve_review: {x: 0, y: 320}
+  no_changes: {x: 320, y: 200}
+  reviewer: {x: 0, y: 200}
+  approve_review: {x: 0, y: 420}

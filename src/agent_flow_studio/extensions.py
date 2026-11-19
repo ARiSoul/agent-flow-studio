@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-CORE_SERVERS = frozenset({"artifacts", "connections", "flow_control", "workspace"})
+CORE_SERVERS = frozenset({"artifacts", "connections", "flow_control", "io", "workspace"})
 
 
 @dataclass

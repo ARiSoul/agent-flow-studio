@@ -4,13 +4,18 @@ One run at a time (the `artifacts` module is configured by the active flow). Eve
 memory and in `runs/<input>/events.jsonl`; human decisions in `runs/<input>/decisions.jsonl`.
 A decision **runs nothing**: it is recorded and, if the gate has outgoing edges, the run resumes
 (same session) so that the orchestrator follows the graph. Drafts stay drafts.
+Graph flows (`execution: graph`) run through `engine.GraphEngine` instead: the engine state lives
+on the `Run`, and continue/decide resume it (the decision feeds the conditions of the gate's edges).
 Events do not keep tool arguments (they can contain personal data), only the tool name.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import re
+import shutil
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -29,11 +34,15 @@ from claude_agent_sdk import (
 )
 
 from ..builder import load_flow
-from ..builder.compile import GATE_TOOL
-from ..builder.spec import FlowSpec
+from ..builder.catalog import CONTRACTS
+from ..builder.compile import GATE_TOOL, CompiledFlow, load_graph
+from ..builder.spec import LEGACY_INPUT, FlowSpec
+from ..builder.types import check_value
 from ..config import settings
+from ..engine import GraphEngine, RouteFn
 from ..hooks import DELEGATION_TOOLS
 from ..policy import ApprovalRequest
+from ..tools import io as io_tool
 from ..tools.guards import safe_artifact_path
 
 Status = Literal["running", "gate", "paused", "done", "error", "stopped"]
@@ -49,6 +58,9 @@ AGENT_TEST = ("You are a TEST orchestrator. Delegate once to the subagent `{agen
 # Text of the policy's step-by-step denials (PT before the translation, EN after it).
 STEP_DENIAL = re.compile(r"\bmod[eo]\b", re.IGNORECASE)
 Decision = Literal["approve", "reject", "answer"]
+RUN_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+MAX_UPLOAD = 20 * 1024 * 1024  # all files of one run, after base64 decoding
+_FILE_NAME = re.compile(r"^[A-Za-z0-9 _.()-]{1,100}$")
 QueryFn = Callable[..., AsyncIterator[Any]]
 
 
@@ -70,19 +82,79 @@ class Run:
     done_agents: set[str] = field(default_factory=set)
     pending: dict[str, tuple[ApprovalRequest, asyncio.Future[tuple[bool, str]]]] = field(
         default_factory=dict)
+    engine: GraphEngine | None = None  # graph mode: the engine state (continue/decide resume it)
 
     def summary(self) -> dict[str, Any]:
-        return {"id": self.id, "flow": self.flow, "input": self.input, "status": self.status,
-                "session_id": self.session_id, "gate": self.gate, "cost": round(self.cost, 4),
-                "started": self.started, "events": len(self.events),
-                "pending_approvals": list(self.pending), "mode": self.mode,
-                "target": self.target, "done_agents": sorted(self.done_agents)}
+        out = {"id": self.id, "flow": self.flow, "input": self.input, "status": self.status,
+               "session_id": self.session_id, "gate": self.gate, "cost": round(self.cost, 4),
+               "started": self.started, "events": len(self.events),
+               "pending_approvals": list(self.pending), "mode": self.mode,
+               "target": self.target, "done_agents": sorted(self.done_agents)}
+        if self.engine is not None:
+            out["execution"] = "graph"
+            out["nodes"] = dict(self.engine.state)
+        return out
 
 
 class RunError(Exception):
-    def __init__(self, status: int, msg: str):
+    def __init__(self, status: int, msg: str, detail: Any = None):
         super().__init__(msg)
         self.status = status
+        self.detail = detail if detail is not None else msg
+
+
+def new_run_id(flow: str) -> str:
+    return f"{flow[:20]}-{time.strftime('%Y%m%d-%H%M%S')}"
+
+
+def _write_upload(rd: Path, name: str, f: Any, total: list[int]) -> dict[str, Any]:
+    """{"name", "content_b64"} → runs/<id>/inputs/<input>/<file>; returns the file reference."""
+    if not isinstance(f, dict) or "content_b64" not in f:
+        raise ValueError("a file is {name, content_b64}")
+    fname = str(f.get("name") or "file").strip()
+    if not _FILE_NAME.fullmatch(fname) or ".." in fname:
+        raise ValueError(f"invalid file name {fname!r}")
+    try:
+        data = base64.b64decode(str(f["content_b64"]), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError(f"{fname}: invalid base64") from None
+    total[0] += len(data)
+    if total[0] > MAX_UPLOAD:
+        raise ValueError(f"files larger than {MAX_UPLOAD // (1024 * 1024)} MB in total")
+    target = rd / "inputs" / name / fname
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return {"name": fname, "path": f"inputs/{name}/{fname}"}
+
+
+def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any]) -> dict[str, Any]:
+    """Validates the typed flow inputs (writing uploaded files first). RunError 422 with
+    {field: reason} when something is wrong. Nothing is kept when a value fails."""
+    rd = io_tool.run_dir(run_id)
+    fresh = not rd.exists()
+    unknown = set(raw) - set(spec.flow_inputs())
+    errors: dict[str, str] = {k: "not an input of this flow" for k in unknown}
+    values: dict[str, Any] = {}
+    total = [0]
+    for name, t in spec.flow_inputs().items():
+        v = raw.get(name)
+        try:
+            if t.type == "file" and v not in (None, "", []):
+                items = v if isinstance(v, list) else [v]
+                refs = [_write_upload(rd, name, f, total) for f in items]
+                v = refs if t.multiple else refs[0]
+            clean = check_value(t, v, run_dir=rd, contracts=CONTRACTS)
+        except ValueError as e:
+            errors[name] = str(e)
+            continue
+        if clean is not None and clean != []:
+            values[name] = clean
+    if errors:
+        if fresh:  # a new run folder: leave nothing behind
+            shutil.rmtree(rd, ignore_errors=True)
+        raise RunError(422, "invalid inputs: " + "; ".join(f"{k}: {v}" for k, v in errors.items()),
+                       {"inputs": errors})
+    return values
 
 
 def _text(content: Any) -> str:
@@ -98,10 +170,14 @@ def _short(name: str) -> str:
 
 
 class Runner:
-    def __init__(self, base: Path | None = None, query_fn: QueryFn = query):
+    def __init__(self, base: Path | None = None, query_fn: QueryFn = query,
+                 route_fn: RouteFn | None = None):
+        """query_fn: SDK sessions (the orchestrator, or each agent in graph mode); route_fn: the
+        router of `when` conditions in graph mode (default: a small model call via query_fn)."""
         self.base = base
         self.runs: dict[str, Run] = {}
         self._query = query_fn
+        self._route = route_fn
 
     # --- state
     def active(self) -> Run | None:
@@ -125,28 +201,64 @@ class Runner:
             pass  # the in-memory trace goes on; the file is only history
 
     # --- start and resume
-    def start(self, flow: str, run_input: str, mode: Mode = "full", target: str | None = None,
-              instruction: str = "") -> Run:
+    def start(self, flow: str, run_input: str | None = None, mode: Mode = "full",
+              target: str | None = None, instruction: str = "", *, run_id: str | None = None,
+              inputs: dict[str, Any] | None = None, given: dict[str, Any] | None = None) -> Run:
         """full: the whole flow · step: one agent at a time · until: runs step by step until
-        `target` finishes · agent: only the `target` agent, isolated (with the saved artifacts)."""
+        `target` finishes · agent: only the `target` agent, isolated (with the saved outputs).
+
+        Legacy flows: `run_input` is the one input and also the run id. Typed flows: `inputs`
+        (files as {name, content_b64}) and `run_id` (default: <flow>-<date>-<time>); `given`:
+        free inputs of the target agent in agent mode."""
         if self.active():
             raise RunError(409, "a run is already in progress; wait or stop it")
         compiled = load_flow(flow, base=self.base)  # validates flow and input before starting
-        prompt = compiled.task(run_input)
-        if mode in ("until", "agent") and target not in compiled.spec.agents:
+        spec = compiled.spec
+        if mode in ("until", "agent") and target not in spec.agents:
             raise RunError(400, f"agent {target!r} does not exist in the flow")
-        if mode in ("step", "until"):
-            prompt += STEP_HINT
-        if mode == "agent":
-            prompt = instruction.strip() or f"Run your step of the flow for {run_input}."
-        run = Run(uuid.uuid4().hex[:12], flow, run_input, self.base, mode=mode,
+        if spec.inputs:
+            rid = (run_id or "").strip() or new_run_id(flow)
+            if not RUN_ID.fullmatch(rid):
+                raise RunError(422, "invalid run id: letters, digits, - or _ (up to 40)",
+                               {"run_id": "letters, digits, - or _ (up to 40)"})
+            values = prepare_inputs(spec, rid, inputs or {})
+        else:
+            if run_input is None:
+                run_input = str((inputs or {}).get(LEGACY_INPUT, ""))
+            compiled.task(run_input)  # pattern check (FlowError)
+            rid, values = run_input, {LEGACY_INPUT: run_input}
+        io_tool.save_flow_inputs(rid, values)
+        if mode == "agent" and target and given:
+            io_tool.save_given(rid, target, given)
+        run = Run(uuid.uuid4().hex[:12], flow, rid, self.base, mode=mode,
                   target=target if mode in ("until", "agent") else None)
+        if spec.execution == "graph":
+            graph = load_graph(flow, base=self.base)
+            graph.policy.approver = self._approver(run)
+            run.engine = GraphEngine(graph, rid, host=run, emit=lambda ev: self._emit(run, ev),
+                                     query_fn=self._query, route_fn=self._route, mode=mode,
+                                     target=run.target, instruction=instruction)
+            self.runs[run.id] = run
+            self._emit(run, {"type": "start", "flow": flow, "input": rid, "mode": mode,
+                             "target": run.target, "mock": settings.mock,
+                             "model": graph.model, "execution": spec.execution})
+            self._spawn(run, self._drive_graph(run))
+            return run
+        prompt = self.first_prompt(compiled, rid, values, mode, instruction)
         self.runs[run.id] = run
-        self._emit(run, {"type": "start", "flow": flow, "input": run_input, "mode": mode,
+        self._emit(run, {"type": "start", "flow": flow, "input": rid, "mode": mode,
                          "target": run.target, "mock": settings.mock,
-                         "model": compiled.options.model})
+                         "model": compiled.options.model, "execution": spec.execution})
         self._launch(run, prompt, None)
         return run
+
+    @staticmethod
+    def first_prompt(compiled: CompiledFlow, run_id: str, values: dict[str, Any], mode: Mode,
+                     instruction: str) -> str:
+        if mode == "agent":
+            return instruction.strip() or f"Run your step of the flow for {run_id}."
+        prompt = compiled.task_for(run_id, values)
+        return prompt + STEP_HINT if mode in ("step", "until") else prompt
 
     def continue_(self, run_id: str, how: Literal["step", "full"]) -> Run:
         """Resumes a paused run: one more step, or up to the end."""
@@ -157,6 +269,10 @@ class Runner:
             raise RunError(409, "a run is already in progress")
         run.mode, run.status = how, "running"
         self._emit(run, {"type": "continue", "how": how})
+        if run.engine is not None:
+            run.engine.set_mode(how)
+            self._spawn(run, self._drive_graph(run))
+            return run
         self._launch(run, CONTINUE + (STEP_HINT if how == "step" else ""), run.session_id)
         return run
 
@@ -177,6 +293,11 @@ class Runner:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._emit(run, {"type": "decision", "gate": gate["gate"], "decision": decision,
                          "comment": comment})
+        io_tool.record_gate(run.input, gate["gate"], decision, comment)  # for `if` conditions
+        if run.engine is not None:  # graph mode: the engine follows the gate's edges
+            run.status, run.gate = "running", None
+            self._spawn(run, self._drive_graph(run, gate=gate["gate"]))
+            return run
         compiled = load_flow(run.flow, resume=run.session_id, base=run.base)
         if not compiled.spec.outgoing(gate["gate"]):
             run.status, run.gate = "done", None
@@ -193,13 +314,16 @@ class Runner:
         return run
 
     def _launch(self, run: Run, prompt: str, resume: str | None) -> None:
+        self._spawn(run, self._drive(run, prompt, resume))
+
+    def _spawn(self, run: Run, coro: Any) -> None:
         def finished(task: asyncio.Task[None]) -> None:
-            # cancelled before it started: _drive never handled the CancelledError
+            # cancelled before it started: the driver never handled the CancelledError
             if task.cancelled() and run.status == "running":
                 run.status = "stopped"
                 self._emit(run, {"type": "end", "status": "stopped"})
 
-        run.task = asyncio.create_task(self._drive(run, prompt, resume))
+        run.task = asyncio.create_task(coro)
         run.task.add_done_callback(finished)
 
     def _log_decision(self, run: Run, record: dict[str, Any]) -> None:
@@ -295,6 +419,27 @@ class Runner:
         except Exception as e:  # noqa: BLE001 — report in the trace instead of losing the run
             run.status = "error"
             self._emit(run, {"type": "end", "status": "error", "message": f"{type(e).__name__}: {e}"})
+
+    async def _drive_graph(self, run: Run, gate: str | None = None) -> None:
+        """Graph mode: runs the engine until it stops (end, gate, pause or error)."""
+        engine = run.engine
+        assert engine is not None
+        try:
+            if gate is not None:
+                await engine.resolve_gate(gate)
+            out = await engine.run()
+            run.status, run.gate = out.status, out.gate
+            ev: dict[str, Any] = {"type": "end", "status": out.status, "gate": out.gate}
+            if out.message:
+                ev["message"] = out.message
+            self._emit(run, ev)
+        except asyncio.CancelledError:
+            run.status = "stopped"
+            self._emit(run, {"type": "end", "status": "stopped"})
+        except Exception as e:  # noqa: BLE001 — report in the trace instead of losing the run
+            run.status = "error"
+            self._emit(run, {"type": "end", "status": "error",
+                             "message": f"{type(e).__name__}: {e}"})
 
     def _on_message(self, run: Run, msg: Any, delegations: dict[str, str], spec: FlowSpec) -> None:
         if isinstance(msg, AssistantMessage):

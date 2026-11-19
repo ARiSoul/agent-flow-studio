@@ -6,6 +6,36 @@ export interface ArtifactRaw {
   draft?: boolean;
 }
 
+/** Kinds of typed values (builder/types.py IOKind). */
+export const IO_KINDS = ["text", "markdown", "number", "integer", "boolean", "date", "datetime", "url",
+  "path", "file", "choice", "json"] as const;
+export type IOKind = (typeof IO_KINDS)[number];
+
+/** A typed value: flow input or agent output (builder/types.py IOType). */
+export interface IOTypeRaw {
+  type?: IOKind;
+  label?: string;
+  description?: string;
+  required?: boolean;
+  default?: unknown;
+  multiple?: boolean;
+  min?: number | null;
+  max?: number | null;
+  pattern?: string | null;
+  options?: string[];
+  accept?: string[];
+  contract?: string | null;
+  draft?: boolean;
+}
+
+/** An agent input: from a flow input (input.<x>) or an agent output (<agent>.<out>), or free. */
+export interface AgentInputRaw {
+  from?: string | null;
+  type?: IOKind | null;
+  description?: string;
+  required?: boolean;
+}
+
 export interface AgentRaw {
   description: string;
   prompt?: string | null;
@@ -19,6 +49,10 @@ export interface AgentRaw {
   connections?: string[];
   write_connections?: string[];
   autonomy?: Autonomy | null;
+  inputs?: Record<string, AgentInputRaw>;
+  outputs?: Record<string, IOTypeRaw>;
+  join?: "all" | "any";
+  max_runs?: number;
 }
 
 export interface GateRaw {
@@ -30,6 +64,7 @@ export interface EdgeRaw {
   from: string;
   to: string;
   when?: string;
+  if?: string;
 }
 
 export interface McpRaw {
@@ -61,6 +96,9 @@ export interface FlowRaw {
   description?: string;
   model?: string | null;
   max_turns?: number;
+  execution?: "orchestrator" | "graph";
+  max_parallel?: number;
+  inputs?: Record<string, IOTypeRaw>;
   input?: { label?: string; pattern?: string };
   task?: string;
   orchestrator?: { prompt?: string | null; prompt_file?: string | null };
@@ -137,4 +175,16 @@ export interface FlowTemplate {
   params: Record<string, TemplateParam>;
 }
 
-export type Selection = { kind: "node"; id: string } | { kind: "edge"; index: number } | null;
+/** Saved values of a run (GET /api/io/<run>?flow=). */
+export interface RunIO {
+  inputs: Record<string, unknown>;
+  outputs: Record<string, Record<string, unknown>>;
+  gates: Record<string, { decision: string; comment: string }>;
+  given: Record<string, Record<string, unknown>>;
+}
+
+export type Selection =
+  | { kind: "node"; id: string }
+  | { kind: "edge"; index: number }
+  | { kind: "data"; agent: string; input: string }  // a data link (an input's `from`)
+  | null;

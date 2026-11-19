@@ -8,9 +8,24 @@ approvals, connectors and writes with controlled autonomy.
 > Current state and next steps: [`STATUS.md`](STATUS.md).
 
 ## Concepts
-- **Flow** (`flows/<name>/flow.yaml` + `prompts/*.md`): a graph of **agents** (subagents with a
-  prompt, tools, model, skills, artifacts they read/write), **gates** (human approval or stop) and
-  **links** with a natural-language condition. An orchestrator receives the graph as instructions.
+- **Flow** (`flows/<name>/flow.yaml` + `prompts/*.md`): a graph of **agents** (with a prompt,
+  tools, model, skills), **gates** (human approval or stop) and **links** with conditions.
+- **Typed data**: the flow declares its **inputs** (text, markdown, number, integer, boolean,
+  date, datetime, url, path, file, choice, json — with required, default, min/max, pattern,
+  options, accept, contract, multiple); the Run panel shows them as a form. Each agent declares
+  **inputs** (`from: input.<x>` or `from: <agent>.<output>`) and typed **outputs**, which the
+  studio checks when the agent saves them (`io.set_output`): the output of one agent is the input
+  of the next. Values live in `runs/<run id>/io/`; the run id is separate from the inputs.
+- **Execution** (per flow): `orchestrator` — an LLM orchestrator receives the graph as
+  instructions and delegates to the agents (as before); `graph` — the studio runs the graph
+  itself: each agent is its own session, independent branches run **in parallel** (up to
+  `max_parallel`), a node with several incoming links waits for all of them (`join: any` waits
+  for the first), skipped branches propagate, and loops stop at `max_runs`.
+- **Conditions** on links: `if` — an expression on the inputs and outputs, evaluated by the studio
+  without an LLM (`triage.severity == "high"`, `tests.failed > 0`, `len(scan.items) > 0`,
+  `approve.decision == "approve"`); `when` — text, decided by the orchestrator (or by a small
+  router call in graph mode). Both on one link: both must hold.
+- **Artifacts** (`reads`/`writes`): free files in `runs/<id>/`, still supported.
 - **Tools**: `artifacts.*` (intermediate results in `runs/<id>/`, with optional contracts),
   `connections.http_get|http_write` (connectors), `workspace.read|glob|grep|edit|write|bash`
   (files/commands inside the flow's workspace), `workspace.git` (read-only git: status, diff,
@@ -32,10 +47,11 @@ approvals, connectors and writes with controlled autonomy.
   autonomy, workspace, external MCPs.
 - **Assistant**: a chat that creates/changes agents, links, prompts, MCPs… in a draft; you review
   and save. It does not approve MCPs or choose `auto` autonomy. It replies in the interface language.
-- **Run**: runs the saved flow with an input and shows the active agent, the finished ones and the
-  gate where it stopped, the trace, the cost and the artifacts. Modes: *full flow*, *step by step*
-  (pause after each agent), *until agent…* and *single agent (isolated)*. Gates and writes ask for
-  a live decision.
+- **Run**: a form for the flow inputs (files included) and the run id; it runs the saved flow
+  and shows the active agents (several at once in graph mode), the finished and skipped ones, the
+  gate where it stopped, the trace, the cost, the outputs of each agent and the artifacts. Modes:
+  *full flow*, *step by step*, *until agent…* and *single agent (isolated)* — with a form for that
+  agent's inputs. Gates and writes ask for a live decision.
 - **Connectors**: HTTP API, Azure Resource Manager, Azure DevOps, Microsoft Graph, GitHub, GitLab
   and Atlassian Cloud (Jira, Confluence), with environment, allowed paths, read/write access and
   "Test connection". Authentication: none, API key, bearer, basic, PAT, client credentials, CLI
