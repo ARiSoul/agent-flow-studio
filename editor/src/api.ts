@@ -1,4 +1,4 @@
-import type { Catalog, Doc, FlowSummary, Validation } from "./types";
+import type { Catalog, Doc, FlowSummary, FlowTemplate, Validation } from "./types";
 
 // Requests that change files carry X-Flow-Editor (the server rejects them without it).
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
@@ -30,12 +30,16 @@ export const api = {
       headers: MUTATE,
       body: JSON.stringify(doc),
     }).then((r) => r.data),
-  create: (name: string, title: string, copy_from?: string) =>
+  templates: () => call<FlowTemplate[]>("/api/templates").then((r) => r.data),
+  create: (name: string, title: string, from?: { copy_from?: string; template?: string; params?: Record<string, string> }) =>
     call<{ name: string }>("/api/flows", {
       method: "POST",
       headers: MUTATE,
-      body: JSON.stringify({ name, title, copy_from }),
-    }).then((r) => r.data),
+      body: JSON.stringify({ name, title, ...from }),
+    }).then((r) => {
+      if (r.status === 422) throw new Error(String((r.data as { detail?: unknown }).detail ?? "invalid"));
+      return r.data;
+    }),
   remove: (name: string) =>
     call<{ trashed: string }>(`/api/flows/${encodeURIComponent(name)}`, {
       method: "DELETE",

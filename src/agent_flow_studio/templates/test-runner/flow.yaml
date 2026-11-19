@@ -1,0 +1,59 @@
+# Template: run the tests and diagnose failures. Only the test runner runs a command
+# (workspace.bash, which follows the autonomy); nobody edits files.
+version: 1
+name: test-runner
+title: Run the tests and diagnose failures
+description: |
+  Runs `{{test_command}}` in the workspace and diagnoses the failures (draft for human approval).
+  With autonomy "approve" you approve the command before it runs.
+input:
+  label: Run id (e.g. test-001)
+task: "Run the tests of the workspace for run {input} and diagnose the failures."
+orchestrator: {prompt_file: prompts/orchestrator.md}
+autonomy: approve
+workspace: {path: "{{workspace}}", environment: dev}
+
+start: test_planner
+
+agents:
+  test_planner:
+    description: Checks how the repository runs its tests (config, folders, setup) before they
+      run. Use first.
+    prompt_file: prompts/test_planner.md
+    tools: [workspace.read, workspace.glob, workspace.grep, workspace.git, artifacts.save_artifact]
+    writes:
+    - {name: 01_test_plan.json}
+  test_runner:
+    description: Runs the test command once and records the results. The only agent that runs a
+      command.
+    prompt_file: prompts/test_runner.md
+    tools: [workspace.bash, artifacts.read_artifact, artifacts.save_artifact]
+    reads: [01_test_plan.json]
+    writes:
+    - {name: 02_test_results.json}
+  diagnoser:
+    description: Explains each failing test (likely cause with evidence and a proposed fix),
+      without changing files.
+    prompt_file: prompts/diagnoser.md
+    tools: [workspace.read, workspace.grep, workspace.glob, workspace.git,
+            artifacts.read_artifact, artifacts.save_artifact]
+    reads: [01_test_plan.json, 02_test_results.json]
+    writes:
+    - {name: 03_diagnosis.md, draft: true}
+
+gates:
+  all_passed: {kind: stop, label: All tests passed}
+  approve_diagnosis: {kind: human, label: Check the diagnosis of the failures}
+
+edges:
+- {from: test_planner, to: test_runner}
+- {from: test_runner, to: diagnoser, when: one or more tests failed or the run had errors}
+- {from: test_runner, to: all_passed, when: all tests passed}
+- {from: diagnoser, to: approve_diagnosis, when: the diagnosis is saved}
+
+layout:
+  test_planner: {x: 0, y: 0}
+  test_runner: {x: 0, y: 160}
+  all_passed: {x: 300, y: 320}
+  diagnoser: {x: 0, y: 320}
+  approve_diagnosis: {x: 0, y: 480}

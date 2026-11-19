@@ -1,0 +1,14 @@
+title: Run the tests and diagnose failures
+description: |
+  Checks how the repository runs its tests, runs the test command (a command in the workspace:
+  it follows the flow autonomy, so by default you approve it first) and, when tests fail, writes
+  a diagnosis with the likely cause and a proposed fix for each failure. It changes no code.
+params:
+  workspace:
+    label: Repository folder
+    kind: path
+    hint: Absolute path of the repository.
+  test_command:
+    label: Test command
+    kind: text
+    hint: "The exact command that runs the tests, e.g. pytest -q, npm test, dotnet test."

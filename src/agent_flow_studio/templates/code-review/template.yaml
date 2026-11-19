@@ -1,0 +1,15 @@
+title: Code review of a branch
+description: |
+  Reads the changes of the current branch against the base branch (read-only git) and prepares
+  a review with risks, likely bugs and suggestions, each with path:line as evidence. Nothing is
+  written: the review is a draft for human approval.
+params:
+  workspace:
+    label: Repository folder
+    kind: path
+    hint: Absolute path of the git repository to review.
+  base_branch:
+    label: Base branch
+    kind: branch
+    default: main
+    hint: The branch the changes will be merged into.

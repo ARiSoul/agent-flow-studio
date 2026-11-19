@@ -5,7 +5,7 @@ update "Current state" and "Next steps", add a line to the "Log" (date, machine/
 terms — no emails —, what was done) and commit + push.
 
 ## Current state (2026-11-19)
-Works and is tested (`pytest`: core 147 tests, without extensions):
+Works and is tested (`pytest`: core 175 tests, without extensions):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, choice saved in the
@@ -37,6 +37,11 @@ Works and is tested (`pytest`: core 147 tests, without extensions):
   commands.
 - **Local extensions** (`extensions/<name>/`, outside git) for domain tools/contracts.
 - Public example flow: `flows/repo-review` (repository review, read only).
+- **Flow templates** (New → "Start from", or `agent-flow-studio-flows new --template`):
+  `code-review` (branch vs base, read only), `test-runner` (runs the test command after approval,
+  diagnoses failures), `fix-and-pr` (issue → fix on `fix/<issue>` → tests → push → human check →
+  draft PR on GitHub / Azure DevOps / GitLab). Parameters per template; extensions can add
+  templates. New read-only tool `workspace.git`. Not yet run end to end with a real model.
 
 **Note for the other machine:** after the translation, the local flows and the extension there
 still have Portuguese prompts/texts (outside git — translate them there if you want). Defaults
@@ -51,7 +56,8 @@ the validation API is now `flow_section`. The assistant tools have English names
 3. [x] Connectors phase 2: sign-in on a page (browser session), managed identity, more types.
    - [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and
      Threads only accept an https redirect URI, so they need an https tunnel or a hosted editor.
-4. [ ] Code flow templates (review, tests, PR) using workspace + connectors.
+4. [x] Code flow templates (review, tests, PR) using workspace + connectors.
+   - [ ] Run each template once end to end on a real repository and tune the prompts.
 5. [ ] Writes through external MCPs (today read only).
 6. [ ] More flows/templates and skills (phase 4 of the builder).
 7. [ ] (Optional) Translate backend messages (validation, errors) to the UI language.
@@ -78,3 +84,6 @@ SDK authentication: Claude Code login on this machine (or `ANTHROPIC_API_KEY` in
 - 2026-11-19 · second machine (account B) · Connectors phase 2: sign-in on a page (OAuth 2 +
   PKCE) with presets (Facebook, Instagram, Threads, WhatsApp, Reddit), managed identity, new types
   Microsoft Graph, GitLab, Atlassian Cloud.
+- 2026-11-19 · second machine (account B) · Code flow templates (code-review, test-runner,
+  fix-and-pr), template engine with parameters (editor, API, CLI, extensions), read-only
+  `workspace.git` tool.

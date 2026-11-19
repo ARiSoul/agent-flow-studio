@@ -9,6 +9,8 @@ import { useI18n } from "./i18n";
 export interface ConfirmOpts { title: string; message?: string; ok?: string; danger?: boolean }
 export interface FieldOpts {
   key: string; label: string; value?: string; placeholder?: string; hint?: string;
+  /** A select instead of a text input. */
+  options?: { value: string; label: string }[];
   /** Returns an error text, or null when the value is valid. */
   validate?: (v: string) => string | null;
 }
@@ -57,7 +59,7 @@ function DialogBox({ open }: { open: Open }) {
   useEffect(() => {
     // destructive confirm: focus Cancel, so Enter does not delete by accident
     const first = box.current?.querySelector<HTMLElement>(
-      open.kind === "confirm" && open.opts.danger ? "button.dialog-cancel" : "input, button.primary");
+      open.kind === "confirm" && open.opts.danger ? "button.dialog-cancel" : "input, select, button.primary");
     first?.focus();
     if (first instanceof HTMLInputElement) first.select();
     const back = restore.current;
@@ -91,9 +93,13 @@ function DialogBox({ open }: { open: Open }) {
         {fields.map((f) => (
           <label key={f.key} className="field">
             <span className="field-label">{f.label}</span>
-            <input value={values[f.key] ?? ""} placeholder={f.placeholder}
-              className={touched && errors[f.key] ? "bad" : ""}
-              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} />
+            {f.options
+              ? <select value={values[f.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}>
+                {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              : <input value={values[f.key] ?? ""} placeholder={f.placeholder}
+                className={touched && errors[f.key] ? "bad" : ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} />}
             {touched && errors[f.key]
               ? <span className="field-err">{errors[f.key]}</span>
               : f.hint && <span className="field-hint">{f.hint}</span>}
@@ -109,7 +115,7 @@ function DialogBox({ open }: { open: Open }) {
 }
 
 function trapFocus(e: KeyboardEvent, box: HTMLElement | null) {
-  const items = [...(box?.querySelectorAll<HTMLElement>("input, button") ?? [])];
+  const items = [...(box?.querySelectorAll<HTMLElement>("input, select, button") ?? [])];
   if (!items.length) return;
   const first = items[0], last = items[items.length - 1];
   if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }

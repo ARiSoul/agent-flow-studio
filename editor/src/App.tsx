@@ -13,7 +13,7 @@ import { LANGS, useI18n, type Lang } from "./i18n";
 import { THEMES, useTheme, type Theme } from "./theme";
 import { autoLayout, clone, ensureLayout, newAgent, newGate, removeNode, tidy, uniqueName } from "./model";
 import { nodeTypes } from "./nodes";
-import type { Catalog, Doc, FlowSummary, Selection, Validation } from "./types";
+import type { Catalog, Doc, FlowSummary, FlowTemplate, Selection, Validation } from "./types";
 
 const PALETTE = [
   { kind: "agent", label: "palette.agent", hint: "palette.agentHint", base: "agent" },
@@ -30,6 +30,7 @@ function Editor() {
   const dialog = useDialog();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [flows, setFlows] = useState<FlowSummary[]>([]);
+  const [templates, setTemplates] = useState<FlowTemplate[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [doc, setDoc] = useState<Doc | null>(null);
   const [saved, setSaved] = useState<string>("");
@@ -54,6 +55,7 @@ function Editor() {
   useEffect(() => {
     api.catalog().then(setCatalog).catch((e) => flash(String(e), true));
     refreshFlows().then(() => undefined);
+    api.templates().then(setTemplates).catch(() => undefined);
   }, [refreshFlows]);
   useEffect(() => {
     if (!current && flows.length) setCurrent(flows[0].name);
@@ -220,8 +222,11 @@ function Editor() {
     const r = await dialog.form({
       title: copyFrom ? t("app.duplicateTitle") : t("app.newFlowTitle"),
       message: copyFrom ? t("app.newFlowCopy", { name: copyFrom }) : undefined,
-      ok: t("app.create"),
+      ok: copyFrom ? t("app.create") : t("app.next"),
       fields: [
+        ...(copyFrom ? [] : [{ key: "from", label: t("app.startFrom"), value: "",
+          options: [{ value: "", label: t("app.blankFlow") },
+            ...templates.map((x) => ({ value: x.id, label: t("app.templateOption", { title: x.title }) }))] }]),
         { key: "name", label: t("app.flowName"), hint: t("app.flowNameHint"), placeholder: "my-flow",
           validate: (v) => !FLOW_NAME.test(v.trim()) ? t("app.flowNameHint")
             : flows.some((f) => f.name === v.trim()) ? t("app.flowExists") : null },
@@ -231,8 +236,34 @@ function Editor() {
     });
     if (!r) return;
     const { name } = r;
-    try { await api.create(name, r.title || name, copyFrom); await refreshFlows(); setCurrent(name); flash(t("app.created", { name })); }
-    catch (e) { flash(String(e), true); }
+    const tmpl = templates.find((x) => x.id === r.from);
+    let params: Record<string, string> | undefined;
+    if (tmpl && Object.keys(tmpl.params).length) {
+      const p = await dialog.form({
+        title: t("app.templateParams", { title: tmpl.title }), message: tmpl.description, ok: t("app.create"),
+        fields: Object.entries(tmpl.params).map(([key, prm]) => {
+          const conns = Object.entries(catalog?.connections ?? {}).filter(([, c]) =>
+            (!prm.connector_types.length || prm.connector_types.includes(c.type))
+            && (!prm.connector_access || prm.connector_access === "read" || c.access === "write"));
+          const useSelect = prm.kind === "connector" && conns.length > 0;
+          return {
+            key, label: prm.required ? prm.label : `${prm.label} (${t("app.optional")})`,
+            value: prm.default ?? (useSelect ? conns[0][0] : ""),
+            hint: prm.kind === "connector" && !conns.length ? `${prm.hint} ${t("app.noMatchingConnector")}` : prm.hint,
+            placeholder: prm.kind === "path" ? "D:\\repos\\app" : undefined,
+            options: useSelect ? conns.map(([n, c]) => ({ value: n, label: `${n} · ${c.type}` })) : undefined,
+            validate: (v: string) => (prm.required && !v.trim() ? t("app.required") : null),
+          };
+        }),
+      });
+      if (!p) return;
+      params = p;
+    }
+    try {
+      await api.create(name, r.title || name, copyFrom ? { copy_from: copyFrom } : tmpl ? { template: tmpl.id, params } : undefined);
+      await refreshFlows(); setCurrent(name); flash(t("app.created", { name }));
+    }
+    catch (e) { flash(String((e as Error).message ?? e), true); }
   };
   const deleteFlow = async () => {
     if (!current || !(await dialog.confirm({ title: t("app.deleteTitle"), message: t("app.confirmDelete", { name: current }),

@@ -115,7 +115,7 @@ class ExternalMcp(_Strict):
 class WorkspaceSpec(_Strict):
     """Repository/folder where agents with workspace.* tools work."""
 
-    path: str = Field(min_length=1)  # absolute, or relative to the folder where the investigator runs
+    path: str = Field(min_length=1)  # absolute, or relative to the folder where the studio runs
     environment: Literal["dev", "staging", "prod"] = "dev"
     description: str = ""
     protected_branches: list[str] = Field(default_factory=lambda: ["main", "master"])

@@ -21,6 +21,7 @@ from ..connections import store as connection_store
 from ..hooks import DELEGATION_TOOL, make_guard, make_hooks
 from ..policy import WritePolicy
 from ..tools import artifacts
+from ..tools import git as git_tool
 from ..tools.common import err, ok
 from .catalog import BUILTIN_SERVERS, BUILTIN_TOOLS, CONTRACTS
 from .spec import AgentSpec, ExternalMcp, FlowSpec
@@ -280,6 +281,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
                  for w in a.writes if w.contract}
     if configure_artifacts:
         artifacts.configure(names, contracts)
+        git_tool.configure(ws)
 
     policy = WritePolicy(
         flow_autonomy=spec.autonomy,

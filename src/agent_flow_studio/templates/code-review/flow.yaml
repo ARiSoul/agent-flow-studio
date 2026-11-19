@@ -1,0 +1,48 @@
+# Template: code review of a branch (read-only). {{...}} values are filled in on creation.
+version: 1
+name: code-review
+title: Code review of a branch
+description: |
+  Reads the changes of the current branch against {{base_branch}} and prepares a review (draft for
+  human approval). Read-only: git through workspace.git, files through workspace.read/grep/glob.
+input:
+  label: Review id (e.g. the branch name)
+task: "Review the changes of the current branch against {{base_branch}} for run {input}."
+orchestrator: {prompt_file: prompts/orchestrator.md}
+autonomy: approve
+workspace: {path: "{{workspace}}", environment: dev}
+
+start: change_reader
+
+agents:
+  change_reader:
+    description: Reads the diff and the commits of the branch against the base branch and lists
+      what changed and where the risk is. Use first.
+    prompt_file: prompts/change_reader.md
+    tools: [workspace.git, workspace.read, artifacts.save_artifact]
+    writes:
+    - {name: 01_changes.json}
+  reviewer:
+    description: Reviews the changed code with its context and writes the review (risks, likely
+      bugs, missing tests, suggestions) with path:line evidence.
+    prompt_file: prompts/reviewer.md
+    tools: [workspace.git, workspace.read, workspace.grep, workspace.glob,
+            artifacts.read_artifact, artifacts.save_artifact]
+    reads: [01_changes.json]
+    writes:
+    - {name: 02_review.md, draft: true}
+
+gates:
+  no_changes: {kind: stop, label: No changes against the base branch}
+  approve_review: {kind: human, label: Check and approve the review}
+
+edges:
+- {from: change_reader, to: reviewer, when: there are changes to review}
+- {from: change_reader, to: no_changes, when: the branch has no changes against the base branch}
+- {from: reviewer, to: approve_review, when: the review is saved}
+
+layout:
+  change_reader: {x: 0, y: 0}
+  no_changes: {x: 300, y: 160}
+  reviewer: {x: 0, y: 160}
+  approve_review: {x: 0, y: 320}

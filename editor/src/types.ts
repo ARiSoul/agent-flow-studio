@@ -119,4 +119,22 @@ export interface FlowSummary {
   error?: string;
 }
 
+export interface TemplateParam {
+  label: string;
+  kind: "path" | "branch" | "connector" | "text";
+  default: string | null;
+  required: boolean;
+  hint: string;
+  connector_types: string[];
+  connector_access: "read" | "write" | null;
+}
+
+export interface FlowTemplate {
+  id: string;
+  source: string;
+  title: string;
+  description: string;
+  params: Record<string, TemplateParam>;
+}
+
 export type Selection = { kind: "node"; id: string } | { kind: "edge"; index: number } | null;

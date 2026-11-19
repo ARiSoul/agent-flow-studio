@@ -1,0 +1,31 @@
+title: Fix an issue and open a draft PR
+description: |
+  Reads an issue (GitHub issue, Azure DevOps work item or GitLab issue) through a connector, plans
+  the fix with evidence, changes the code on a work branch, runs the tests, pushes the branch and,
+  after your approval, opens a draft pull request. Writes follow the flow autonomy (by default you
+  approve each one); protected branches and force pushes are always refused.
+params:
+  workspace:
+    label: Repository folder
+    kind: path
+    hint: Absolute path of the git repository (a clone with a remote named origin).
+  base_branch:
+    label: Base branch
+    kind: branch
+    default: main
+    hint: The branch the pull request goes into.
+  connector:
+    label: Connector (with write access)
+    kind: connector
+    connector_types: [github, azure_devops, gitlab]
+    connector_access: write
+    hint: Reads the issue and opens the pull request. Create it first in Connectors.
+  repository:
+    label: Repository at the provider
+    kind: text
+    hint: "GitHub: owner/repo · Azure DevOps: project/repository · GitLab: group/project"
+  test_command:
+    label: Test command
+    kind: text
+    required: false
+    hint: "Optional, e.g. pytest -q. Empty: the coder finds out how the tests run."

@@ -28,6 +28,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from ..builder.catalog import BUILTIN_SERVERS, BUILTIN_TOOLS, CONTRACTS
 from ..builder.compile import FlowError, flows_dir
 from ..builder.spec import FlowSpec
+from ..builder.templates import TemplateError, templates_dict
+from ..builder.templates import render as render_template
 from ..config import settings
 from ..connections import client as conn_client
 from ..connections import oauth as conn_oauth
@@ -105,6 +107,8 @@ class NewFlow(BaseModel):
     name: str
     title: str = Field(min_length=1, max_length=120)
     copy_from: str | None = None
+    template: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,39}$")
+    params: dict[str, str] = Field(default_factory=dict)
 
 
 def _blank(name: str, title: str) -> dict[str, Any]:
@@ -440,11 +444,31 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         except FileNotFoundError as e:
             raise HTTPException(404, "artifact does not exist") from e
 
+    @app.get("/api/templates")
+    def templates() -> list[dict[str, Any]]:
+        try:
+            return templates_dict()
+        except TemplateError as e:
+            raise HTTPException(500, str(e)) from e
+
     @app.post("/api/flows", dependencies=[Depends(csrf)], status_code=201)
     def create(body: NewFlow) -> dict[str, Any]:
         d = _flow_dir(base, body.name, must_exist=False)
         if d.exists():
             raise HTTPException(409, f"a flow {body.name!r} already exists")
+        if body.template and body.copy_from:
+            raise HTTPException(400, "give either 'template' or 'copy_from'")
+        if body.template:
+            try:
+                tspec, prompts = render_template(body.template, body.name, body.title, body.params)
+            except TemplateError as e:
+                raise HTTPException(422, str(e)) from e
+            for rel, text in prompts.items():
+                if not PROMPT_PATH.fullmatch(rel):
+                    raise HTTPException(500, f"template prompt with an invalid path: {rel}")
+                _atomic_write(d / rel, text)
+            _atomic_write(d / "flow.yaml", dump_flow(tspec))
+            return {"name": body.name}
         if body.copy_from:
             src = _flow_dir(base, body.copy_from)
             shutil.copytree(src, d, ignore=shutil.ignore_patterns("*.bak", "*.tmp"))

@@ -17,6 +17,9 @@ CONTRACTS = {"Customer": TypeAdapter(models.Customer)}  # contracts for JSON art
 REPORTS = {"my-flow": lambda run_id: ...}               # optional report at the end of a run (CLI)
 ```
 
+A `templates/` folder inside the extension adds flow templates (same format as
+`src/agent_flow_studio/templates/<id>/`); their ids must not collide with the core ones.
+
 Rules: server names must not collide with the core ones (`artifacts`, `connections`,
 `flow_control`, `workspace`) or between extensions; tools return `ok(...)`/`err(...)` from
 `agent_flow_studio.tools.common`; tests go in `extensions/<name>/tests/` (the root `pytest` picks

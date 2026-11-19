@@ -7,6 +7,8 @@ that can expose:
 - `CONTRACTS: dict[str, TypeAdapter]` — contracts that JSON artifacts can require;
 - `REPORTS: dict[str, Callable[[str], Path]]` — flow → function that writes a run report.
 
+A `templates/` folder inside the extension adds flow templates (see builder/templates.py).
+
 Extensions do not go into the public repository (see `.gitignore`): they hold internal code.
 Names cannot collide with the core names or between extensions.
 """
@@ -29,6 +31,7 @@ class Loaded:
     tool_groups: dict[str, list[Any]] = field(default_factory=dict)
     contracts: dict[str, Any] = field(default_factory=dict)
     reports: dict[str, Callable[[str], Path]] = field(default_factory=dict)
+    template_dirs: list[tuple[str, Path]] = field(default_factory=list)  # (extension, folder)
 
 
 def extensions_dir() -> Path:
@@ -54,6 +57,8 @@ def _load() -> Loaded:
                 raise RuntimeError(f"extension {d.name}: duplicate contract {name!r}")
             out.contracts[name] = adapter
         out.reports.update(getattr(mod, "REPORTS", None) or {})
+        if (d / "templates").is_dir():
+            out.template_dirs.append((d.name, d / "templates"))
     return out
 
 

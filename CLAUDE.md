@@ -58,7 +58,12 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
 ## Architecture
 - `builder/`: `spec.py` (flow format + validation), `catalog.py` (tools, contracts),
   `compile.py` (flow → `ClaudeAgentOptions`; the orchestrator's "Flow" section is generated from
-  the graph).
+  the graph), `templates.py` (flow templates: `templates/<id>/` with `template.yaml`, `flow.yaml`,
+  `prompts/`; `{{param}}` filled in only inside YAML string values, after parsing). Templates are
+  generic and public, start with autonomy `approve`, and company templates go in
+  `extensions/<name>/templates/`.
+- `tools/git.py`: `workspace.git`, read-only git (closed list of subcommands and options, no
+  `-c`/`--output`/external diff, fsmonitor off). Writing with git stays in `workspace.bash`.
 - `hooks.py` (guard + audit) and `policy.py` (writes, workspace, Bash, autonomy, approvals,
   delegation limit for step-by-step tests).
 - `connections/`: profiles in `connections.yaml` (outside git), `keyring`/`${VAR}` secrets,
@@ -86,5 +91,6 @@ Subagents accept MCP tools by their full name `mcp__server__tool`.
 ## Commands
 - `pytest` · `AFS_NO_EXTENSIONS=1 pytest tests` · `ruff check .`
 - `agent-flow-studio <input> --flow <flow> [--resume <session_id>]`
-- `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog`
+- `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog|templates`
+- `agent-flow-studio-flows new <flow> --template <id> --set <param>=<value>`
 - `agent-flow-studio-editor [--port 8765] [--flows <folder>]` · frontend: `cd editor && npm run build`

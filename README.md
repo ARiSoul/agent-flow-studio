@@ -13,7 +13,8 @@ approvals, connectors and writes with controlled autonomy.
   **links** with a natural-language condition. An orchestrator receives the graph as instructions.
 - **Tools**: `artifacts.*` (intermediate results in `runs/<id>/`, with optional contracts),
   `connections.http_get|http_write` (connectors), `workspace.read|glob|grep|edit|write|bash`
-  (files/commands inside the flow's workspace), approved external MCPs and extension tools.
+  (files/commands inside the flow's workspace), `workspace.git` (read-only git: status, diff,
+  log, show, branch, ls-files, blame), approved external MCPs and extension tools.
 - **Security** (does not depend on the model): closed list of tools per flow and per subagent in the
   hook, no native tools outside the workspace, `dontAsk`, no user settings, secrets outside files,
   audit in `runs/audit.jsonl` (no file contents).
@@ -44,6 +45,25 @@ approvals, connectors and writes with controlled autonomy.
   Reddit (each needs an app that you register with the provider). Secrets and tokens live in the
   system Credential Manager (keyring) or as `${VAR}`.
 
+## Flow templates
+**New** in the editor (or `agent-flow-studio-flows new`) can start from a template; you fill in its
+parameters (repository folder, base branch, connector…):
+- **code-review** — reviews the current branch against the base branch (read-only git) and writes
+  the review as a draft for approval.
+- **test-runner** — runs your test command (you approve it first) and diagnoses each failure,
+  without changing code.
+- **fix-and-pr** — reads an issue (GitHub, Azure DevOps or GitLab) through a connector, fixes it
+  on `fix/<issue>`, runs the tests, pushes the branch and, after your approval, opens a draft PR.
+
+Templates live in `src/agent_flow_studio/templates/<id>/` (`template.yaml` + `flow.yaml` +
+`prompts/`); `{{param}}` placeholders are filled in on creation. An extension can add its own in
+`extensions/<name>/templates/`. All templates start with autonomy "approve each write".
+
+```bash
+agent-flow-studio-flows templates
+agent-flow-studio-flows new review-app --template code-review --set workspace=D:/repos/app
+```
+
 ## Writes with autonomy
 In the flow you set the **autonomy** (approve each write · approve only in production · autonomous)
 and the **workspace** (folder/repository, environment, protected branches); each agent can override
@@ -72,10 +92,11 @@ Authentication: Claude Code login on the machine or `ANTHROPIC_API_KEY`. Fronten
 ## Layout
 ```
 src/agent_flow_studio/
-  builder/        spec.py (format + validation), catalog.py, compile.py
+  builder/        spec.py (format + validation), catalog.py, compile.py, templates.py
+  templates/      flow templates (code-review, test-runner, fix-and-pr)
   editor/         server.py (API), assistant.py, runner.py, validation.py, yaml_io.py, static/ (build)
   connections/    model.py, store.py (keyring/${VAR}), client.py
-  tools/          artifacts.py, connections.py, guards.py, common.py
+  tools/          artifacts.py, connections.py, git.py (read-only), guards.py, common.py
   hooks.py        guard (closed list) + audit · policy.py  writes, workspace, autonomy
   extensions.py   loading of local extensions · registry.py  in-process MCP servers
   main.py · orchestrator.py · flows_cli.py
