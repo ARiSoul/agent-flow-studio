@@ -16,6 +16,12 @@ If `CLAUDE.local.md` exists (outside git), follow those local instructions too.
   the other languages must have the same keys. A new language = a new file + an entry in
   `editor/src/i18n/index.tsx`. Backend messages (validation, errors) are in English.
 
+## Editor themes
+Colors only through CSS tokens (`var(--bg)`, `var(--accent)`, `var(--on-accent)`…) in
+`editor/src/styles.css` — no hard-coded colors in components. Each theme is a
+`[data-theme="<id>"]` block with the same tokens. A new theme = that block + an entry in `THEMES`
+(`editor/src/theme.tsx`) + its id in `editor/public/theme-init.js` + `theme.<id>` in every i18n file.
+
 ## Goal
 A studio to build, test and run **agent flows** (Claude Agent SDK, Python): flows in YAML, visual
 editor (React Flow + FastAPI), chat-based build assistant, execution with trace, human approvals,

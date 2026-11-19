@@ -9,6 +9,7 @@ import { Connections } from "./Connections";
 import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
+import { THEMES, useTheme, type Theme } from "./theme";
 import { autoLayout, clone, ensureLayout, newAgent, newGate, removeNode, tidy, uniqueName } from "./model";
 import { nodeTypes } from "./nodes";
 import type { Catalog, Doc, FlowSummary, Selection, Validation } from "./types";
@@ -23,6 +24,7 @@ type PaletteKind = (typeof PALETTE)[number]["kind"];
 function Editor() {
   const rf = useReactFlow();
   const { t, tn, lang, setLang } = useI18n();
+  const { theme, setTheme, base } = useTheme();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
@@ -253,6 +255,10 @@ function Editor() {
           onChange={(e) => setLang(e.target.value as Lang)}>
           {Object.entries(LANGS).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
         </select>
+        <select className="theme" value={theme} title={t("app.theme")} aria-label={t("app.theme")}
+          onChange={(e) => setTheme(e.target.value as Theme)}>
+          {(Object.keys(THEMES) as Theme[]).map((k) => <option key={k} value={k}>{t(`theme.${k}`)}</option>)}
+        </select>
         <button className="primary" onClick={save} disabled={!dirty} title="Ctrl+S">
           {dirty ? t("app.save") : t("app.saved")}
         </button>
@@ -280,7 +286,7 @@ function Editor() {
 
       <main className={`canvas${assistBusy ? " busy" : ""}`} onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}>
         {doc && (
-          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode="system"
+          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode={base}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onDelete={onDelete}
             onBeforeDelete={async ({ nodes: ns, edges: es }) => ({ nodes: ns.filter((n) => n.id !== doc.spec.start), edges: es })}
             onNodeDragStart={() => { if (doc) { past.current.push(doc); future.current = []; } }}

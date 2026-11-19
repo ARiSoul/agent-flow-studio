@@ -22,6 +22,8 @@ approvals, connectors and writes with controlled autonomy.
 `agent-flow-studio-editor` opens http://127.0.0.1:8765:
 - **Language**: the interface is available in Portuguese, English and Spanish (selector in the
   toolbar; the choice is saved in the browser).
+- **Theme**: System (follows light/dark of the OS), Light, Dark, Sepia, Ocean and High contrast
+  (selector in the toolbar; saved in the browser).
 - **Canvas**: drag agents and gates, link nodes, arrange, undo/redo; live validation with the same
   rules as the runtime; only valid flows are saved (copy in `flow.yaml.bak`; delete →
   `flows/.trash/`).

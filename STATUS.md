@@ -12,6 +12,10 @@ Works and is tested (`pytest`: core 123 tests, without extensions):
   browser (`localStorage` `afs.lang`), first default from the browser language. Strings in
   `editor/src/i18n/<lang>.ts` (`en.ts` is the reference; `tsc` fails if a language misses a key).
   The assistant gets `lang` and replies in that language. Backend messages are English only.
+- **Editor themes**: System (OS light/dark), Light, Dark, Sepia, Ocean, High contrast; selector in
+  the toolbar, saved in `localStorage` `afs.theme`. Tokens in `editor/src/styles.css`, list in
+  `editor/src/theme.tsx`; `editor/public/theme-init.js` sets the theme before render (no flash,
+  no inline script, so the CSP stays strict).
 - **Flows in YAML** (`flows/<name>/flow.yaml`): agents, gates (human approval / stop), links with
   conditions, artifacts with contracts, approved external MCPs, workspace and autonomy.
 - **Visual editor** (`agent-flow-studio-editor`, http://127.0.0.1:8765): React Flow canvas, palette,
@@ -36,7 +40,7 @@ the validation API is now `flow_section`. The assistant tools have English names
 
 ## Next steps (backlog, in suggested order)
 1. [x] Multilingual interface: pt, en, es (to start with).
-2. [ ] Theme choice (light/dark/system, and others).
+2. [x] Theme choice (light/dark/system, and others).
 3. [ ] Connectors phase 2: sign-in on a page (browser session), managed identity, more types.
 4. [ ] Code flow templates (review, tests, PR) using workspace + connectors.
 5. [ ] Writes through external MCPs (today read only).
@@ -60,3 +64,5 @@ SDK authentication: Claude Code login on this machine (or `ANTHROPIC_API_KEY` in
 - 2026-11-19 · second machine (account B) · Whole repository translated to English (rule in
   CLAUDE.md: repo in English, chat in Portuguese); multilingual editor UI (pt/en/es) with
   `editor/src/i18n/`; assistant replies in the UI language (`lang` in `/api/assist`).
+- 2026-11-19 · second machine (account B) · Editor themes: System, Light, Dark, Sepia, Ocean, High
+  contrast (CSS tokens + `theme.tsx` + `public/theme-init.js`).
