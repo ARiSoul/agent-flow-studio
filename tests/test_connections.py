@@ -74,7 +74,8 @@ def test_store_roundtrip_without_secrets(cfile: Path, fake_keyring, monkeypatch)
     loaded = store.load()
     assert loaded["devops"] == c
     assert store.get_secret("devops", c, "token") == "pat-super-secret"
-    assert store.secret_status("devops", c) == {"field": "token", "source": "keyring", "set": True}
+    assert store.secret_status("devops", c) == {"field": "token", "source": "keyring", "set": True,
+                                                    "optional": False}
 
 
 def test_devops_pat_get(cfile, transport, monkeypatch):
@@ -136,7 +137,8 @@ def test_editor_connections_api(tmp_path, cfile, fake_keyring, transport):
     assert c.put("/api/connections/devops", json=body, headers=H).json()["secret"]["set"] is False
     assert c.put("/api/connections/devops", json={**body, "type": "nope"}, headers=H).status_code == 422
     r = c.put("/api/connections/devops/secret", json={"value": "pat-xyz"}, headers=H)
-    assert r.json()["secret"] == {"field": "token", "source": "keyring", "set": True}
+    assert r.json()["secret"] == {"field": "token", "source": "keyring", "set": True,
+                                  "optional": False}
     listing = c.get("/api/connections")
     assert "pat-xyz" not in listing.text and "pat-xyz" not in cfile.read_text(encoding="utf-8")
     assert listing.json()["connections"]["devops"]["secrets"] == {"token": "keyring"}

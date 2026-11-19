@@ -35,10 +35,14 @@ approvals, connectors and writes with controlled autonomy.
   gate where it stopped, the trace, the cost and the artifacts. Modes: *full flow*, *step by step*
   (pause after each agent), *until agent…* and *single agent (isolated)*. Gates and writes ask for
   a live decision.
-- **Connectors**: HTTP API (no auth, key, bearer, basic, client credentials), Azure Resource
-  Manager (az login, client credentials), Azure DevOps (PAT, az login, client credentials) and
-  GitHub (PAT, gh auth login), with environment, allowed paths, read/write access and "Test
-  connection". Secrets in the system Credential Manager (keyring) or as `${VAR}`.
+- **Connectors**: HTTP API, Azure Resource Manager, Azure DevOps, Microsoft Graph, GitHub, GitLab
+  and Atlassian Cloud (Jira, Confluence), with environment, allowed paths, read/write access and
+  "Test connection". Authentication: none, API key, bearer, basic, PAT, client credentials, CLI
+  session (az login, gh auth login), Azure managed identity and **sign-in on a page** (OAuth 2
+  with PKCE: the provider's page opens, you sign in, and the tokens go to the keyring and renew
+  themselves). HTTP API has presets for Facebook, Instagram, Threads, WhatsApp Business and
+  Reddit (each needs an app that you register with the provider). Secrets and tokens live in the
+  system Credential Manager (keyring) or as `${VAR}`.
 
 ## Writes with autonomy
 In the flow you set the **autonomy** (approve each write · approve only in production · autonomous)

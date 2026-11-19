@@ -6,6 +6,7 @@ import {
 import { api } from "./api";
 import { Chat } from "./Chat";
 import { Connections } from "./Connections";
+import { useDialog } from "./Dialog";
 import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
@@ -20,11 +21,13 @@ const PALETTE = [
   { kind: "stop", label: "palette.stop", hint: "palette.stopHint", base: "stop" },
 ] as const;
 type PaletteKind = (typeof PALETTE)[number]["kind"];
+const FLOW_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;  // same rule as the server
 
 function Editor() {
   const rf = useReactFlow();
   const { t, tn, lang, setLang } = useI18n();
   const { theme, setTheme, base } = useTheme();
+  const dialog = useDialog();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
@@ -209,18 +212,31 @@ function Editor() {
   };
 
   // ---- flow management
-  const confirmDiscard = () => !dirty || confirm(t("app.discard"));
-  const switchFlow = (name: string) => { if (confirmDiscard()) setCurrent(name); };
+  const confirmDiscard = async () => !dirty || dialog.confirm({
+    title: t("app.discardTitle"), message: t("app.discard"), ok: t("app.discardOk"), danger: true });
+  const switchFlow = async (name: string) => { if (await confirmDiscard()) setCurrent(name); };
   const createFlow = async (copyFrom?: string) => {
-    if (!confirmDiscard()) return;
-    const name = prompt(copyFrom ? t("app.newFlowCopy", { name: copyFrom }) : t("app.newFlowName"), "");
-    if (!name) return;
-    const title = prompt(t("app.title"), copyFrom ? t("app.copySuffix", { title: doc?.spec.title ?? copyFrom }) : name) || name;
-    try { await api.create(name, title, copyFrom); await refreshFlows(); setCurrent(name); flash(t("app.created", { name })); }
+    if (!(await confirmDiscard())) return;
+    const r = await dialog.form({
+      title: copyFrom ? t("app.duplicateTitle") : t("app.newFlowTitle"),
+      message: copyFrom ? t("app.newFlowCopy", { name: copyFrom }) : undefined,
+      ok: t("app.create"),
+      fields: [
+        { key: "name", label: t("app.flowName"), hint: t("app.flowNameHint"), placeholder: "my-flow",
+          validate: (v) => !FLOW_NAME.test(v.trim()) ? t("app.flowNameHint")
+            : flows.some((f) => f.name === v.trim()) ? t("app.flowExists") : null },
+        { key: "title", label: t("app.flowTitle"),
+          value: copyFrom ? t("app.copySuffix", { title: doc?.spec.title ?? copyFrom }) : "" },
+      ],
+    });
+    if (!r) return;
+    const { name } = r;
+    try { await api.create(name, r.title || name, copyFrom); await refreshFlows(); setCurrent(name); flash(t("app.created", { name })); }
     catch (e) { flash(String(e), true); }
   };
   const deleteFlow = async () => {
-    if (!current || !confirm(t("app.confirmDelete", { name: current }))) return;
+    if (!current || !(await dialog.confirm({ title: t("app.deleteTitle"), message: t("app.confirmDelete", { name: current }),
+      ok: t("app.delete"), danger: true }))) return;
     try {
       const r = await api.remove(current);
       flash(t("app.trashed", { path: r.trashed }));

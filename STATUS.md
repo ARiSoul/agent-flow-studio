@@ -5,7 +5,7 @@ update "Current state" and "Next steps", add a line to the "Log" (date, machine/
 terms — no emails —, what was done) and commit + push.
 
 ## Current state (2026-11-19)
-Works and is tested (`pytest`: core 123 tests, without extensions):
+Works and is tested (`pytest`: core 147 tests, without extensions):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, choice saved in the
@@ -23,8 +23,15 @@ Works and is tested (`pytest`: core 123 tests, without extensions):
 - **Chat assistant** in the editor: builds/changes the flow in a draft (never saves on its own).
 - **Run** in the editor: live trace on the canvas, artifacts, gates with a decision, live write
   approvals, and test modes: full flow, step by step, until an agent, single agent.
-- **Connectors** (Connectors button): HTTP API, Azure ARM, Azure DevOps, GitHub; secrets in the
-  keyring or `${VAR}`; test connection; `http_get` per agent; `http_write` with `access: write`.
+- **Connectors** (Connectors button): HTTP API, Azure ARM, Azure DevOps, Microsoft Graph,
+  GitHub, GitLab, Atlassian Cloud; secrets in the keyring or `${VAR}`; test connection;
+  `http_get` per agent; `http_write` with `access: write`.
+- **Connectors phase 2**: **sign-in on a page** (`oauth_browser`: OAuth 2 + PKCE, "Sign in"
+  button, callback `/api/oauth/callback`, tokens only in the keyring, refresh token renewal,
+  Meta long-lived token exchange, token in header or `?access_token=`) for Entra ID (Azure,
+  DevOps, Graph), GitHub, GitLab and any HTTP API; presets for Facebook, Instagram, Threads,
+  WhatsApp Business and Reddit. **Azure managed identity** (IMDS and App Service/Container Apps).
+  Tested with mocked providers only: no real sign-in was tried yet (needs app registrations).
 - **Writes with autonomy** (`approve` / `approve_prod` / `auto`) and a confined workspace; the hook
   denies paths outside the workspace, force pushes/pushes to protected branches and destructive
   commands.
@@ -41,7 +48,9 @@ the validation API is now `flow_section`. The assistant tools have English names
 ## Next steps (backlog, in suggested order)
 1. [x] Multilingual interface: pt, en, es (to start with).
 2. [x] Theme choice (light/dark/system, and others).
-3. [ ] Connectors phase 2: sign-in on a page (browser session), managed identity, more types.
+3. [x] Connectors phase 2: sign-in on a page (browser session), managed identity, more types.
+   - [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and
+     Threads only accept an https redirect URI, so they need an https tunnel or a hosted editor.
 4. [ ] Code flow templates (review, tests, PR) using workspace + connectors.
 5. [ ] Writes through external MCPs (today read only).
 6. [ ] More flows/templates and skills (phase 4 of the builder).
@@ -66,3 +75,6 @@ SDK authentication: Claude Code login on this machine (or `ANTHROPIC_API_KEY` in
   `editor/src/i18n/`; assistant replies in the UI language (`lang` in `/api/assist`).
 - 2026-11-19 · second machine (account B) · Editor themes: System, Light, Dark, Sepia, Ocean, High
   contrast (CSS tokens + `theme.tsx` + `public/theme-init.js`).
+- 2026-11-19 · second machine (account B) · Connectors phase 2: sign-in on a page (OAuth 2 +
+  PKCE) with presets (Facebook, Instagram, Threads, WhatsApp, Reddit), managed identity, new types
+  Microsoft Graph, GitLab, Atlassian Cloud.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from .model import SLUG, Connection
+from .model import OAUTH_TOKEN_FIELD, OPTIONAL_SECRET, SLUG, Connection
 
 SERVICE = "agent-flow-studio"  # service name in the Credential Manager
 
@@ -74,13 +75,45 @@ def delete_secrets(name: str, conn: Connection) -> None:
         if ref == "keyring":
             with contextlib.suppress(Exception):  # already gone
                 _keyring().delete_password(SERVICE, f"{name}/{field}")
+    delete_oauth_tokens(name)
 
 
 def secret_status(name: str, conn: Connection) -> dict[str, Any]:
     """Says whether the required secret is set, without ever returning it."""
     field = conn.secret_field
+    optional = conn.auth.method in OPTIONAL_SECRET
     if field is None:
-        return {"field": None, "source": None, "set": True}
+        return {"field": None, "source": None, "set": True, "optional": False}
     ref = conn.secrets.get(field)
     present = bool(get_secret(name, conn, field)) if ref else False
-    return {"field": field, "source": ref, "set": present}
+    return {"field": field, "source": ref, "set": present, "optional": optional}
+
+
+# --- sign-in on a page: tokens (JSON) only in the keyring, never in connections.yaml ------------
+def get_oauth_tokens(name: str) -> dict[str, Any] | None:
+    raw = _keyring().get_password(SERVICE, f"{name}/{OAUTH_TOKEN_FIELD}")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_oauth_tokens(name: str, tokens: dict[str, Any]) -> None:
+    _keyring().set_password(SERVICE, f"{name}/{OAUTH_TOKEN_FIELD}", json.dumps(tokens))
+
+
+def delete_oauth_tokens(name: str) -> None:
+    with contextlib.suppress(Exception):  # not signed in, or no keyring backend
+        _keyring().delete_password(SERVICE, f"{name}/{OAUTH_TOKEN_FIELD}")
+
+
+def oauth_status(name: str, conn: Connection) -> dict[str, Any] | None:
+    """Sign-in state for the editor, without the tokens. None when the method is not OAuth."""
+    if conn.auth.method != "oauth_browser":
+        return None
+    t = get_oauth_tokens(name) or {}
+    return {"signed_in": bool(t.get("access_token")), "expires_at": t.get("expires_at"),
+            "refreshable": bool(t.get("refresh_token"))}

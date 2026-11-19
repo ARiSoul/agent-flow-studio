@@ -8,17 +8,20 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import shutil
 import time
 from typing import Any
 
 import httpx
 
-from . import store
+from . import oauth, store
 from .model import Connection
 
 MAX_BODY = 100_000
 TIMEOUT = 30.0
+USER_AGENT = "agent-flow-studio"
+IMDS_URL = "http://169.254.169.254/metadata/identity/oauth2/token"  # Azure VM / AKS
 _tokens: dict[str, tuple[str, float]] = {}  # key → (token, expires at)
 _transport: httpx.AsyncBaseTransport | None = None  # tests: httpx.MockTransport
 
@@ -75,6 +78,59 @@ async def _azure_cli(conn: Connection) -> str:
     return json.loads(out)["accessToken"]
 
 
+async def _managed_identity(name: str, conn: Connection) -> str:
+    """Azure managed identity: App Service/Functions/Container Apps (IDENTITY_ENDPOINT) or IMDS."""
+    key = f"{name}:mi"
+    cached = _tokens.get(key)
+    if cached and cached[1] > time.time() + 60:
+        return cached[0]
+    resource = (conn.resolved_scope() or "").removesuffix("/.default")
+    endpoint, secret = os.getenv("IDENTITY_ENDPOINT"), os.getenv("IDENTITY_HEADER")
+    if endpoint and secret:
+        url, headers = endpoint, {"X-IDENTITY-HEADER": secret}
+        params = {"resource": resource, "api-version": "2019-08-01"}
+    else:
+        url, headers = IMDS_URL, {"Metadata": "true"}
+        params = {"resource": resource, "api-version": "2018-02-01"}
+    if conn.auth.client_id:  # user-assigned identity
+        params["client_id"] = conn.auth.client_id
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False,
+                                     transport=_transport) as c:
+            r = await c.get(url, params=params, headers=headers)
+    except httpx.HTTPError:
+        raise ConnectorError("managed identity is not available here (not running on Azure, "
+                             "or no identity assigned)") from None
+    if r.status_code != 200:
+        raise ConnectorError(f"managed identity token failed (HTTP {r.status_code})")
+    body = r.json()
+    if body.get("expires_on"):
+        expires = float(body["expires_on"])
+    else:
+        expires = time.time() + float(body.get("expires_in", 300))
+    _tokens[key] = (body["access_token"], expires)
+    return body["access_token"]
+
+
+async def _oauth(name: str, conn: Connection) -> str:
+    try:
+        return await oauth.access_token(name, conn)
+    except oauth.OAuthError as e:
+        raise ConnectorError(str(e)) from None
+    except httpx.HTTPError as e:
+        raise ConnectorError(f"renewing the sign-in failed: {type(e).__name__}") from None
+
+
+async def auth_params(name: str, conn: Connection) -> tuple[dict[str, str], dict[str, str]]:
+    """(headers, query) that authenticate a request. Only sign-in with token_in: query uses query."""
+    if conn.auth.method == "oauth_browser":
+        token = await _oauth(name, conn)
+        if conn.auth.token_in == "query":
+            return {}, {"access_token": token}
+        return {"Authorization": f"Bearer {token}"}, {}
+    return await auth_headers(name, conn), {}
+
+
 async def auth_headers(name: str, conn: Connection) -> dict[str, str]:
     m = conn.auth.method
     if m == "none":
@@ -97,7 +153,33 @@ async def auth_headers(name: str, conn: Connection) -> dict[str, str]:
         return {"Authorization": f"Bearer {await _azure_cli(conn)}"}
     if m == "gh_cli":
         return {"Authorization": f"Bearer {await _cli('gh', 'auth', 'token')}"}
+    if m == "managed_identity":
+        return {"Authorization": f"Bearer {await _managed_identity(name, conn)}"}
+    if m == "oauth_browser":
+        return {"Authorization": f"Bearer {await _oauth(name, conn)}"}
     raise ConnectorError(f"unknown method {m!r}")
+
+
+def _scrub(text: str, hidden: list[str]) -> str:
+    for h in hidden:
+        if h:
+            text = text.replace(h, "***")
+    return text
+
+
+async def _send(conn: Connection, method: str, path: str, headers: dict[str, str],
+                params: dict[str, str], auth_query: dict[str, str], body: Any = None
+                ) -> httpx.Response:
+    """Sends the request; transport errors never show the token (it may be in the query)."""
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False,
+                                     transport=_transport) as c:
+            return await c.request(method, conn.resolved_base_url() + path, headers=headers,
+                                   params={**params, **auth_query},
+                                   json=body if body is not None else None)
+    except httpx.HTTPError as e:
+        hidden = [*auth_query.values(), *headers.values()]
+        raise ConnectorError(_scrub(f"{type(e).__name__}: {e}", hidden)[:300]) from None
 
 
 def check_path(conn: Connection, path: str) -> None:
@@ -116,15 +198,13 @@ async def get(name: str, path: str, query: dict[str, Any] | None = None,
     if conn is None:
         raise ConnectorError(f"connector {name!r} is not configured")
     check_path(conn, path)
-    headers = {"Accept": "application/json", "User-Agent": "flow-investigator",
-               **await auth_headers(name, conn)}
+    auth_h, auth_q = await auth_params(name, conn)
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT, **auth_h}
     if conn.type == "github":
         headers["X-GitHub-Api-Version"] = "2022-11-28"
-    url = conn.resolved_base_url() + path
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, transport=_transport) as c:
-        r = await c.get(url, params={k: str(v) for k, v in (query or {}).items()},
-                        headers=headers)
+    r = await _send(conn, "GET", path, headers, {k: str(v) for k, v in (query or {}).items()},
+                    auth_q)
     text = r.text
     try:
         body: Any = r.json()
@@ -153,17 +233,15 @@ async def write(name: str, method: str, path: str, body: Any = None,
     if method not in WRITE_METHODS:
         raise ConnectorError(f"invalid method {method!r}; use {', '.join(WRITE_METHODS)}")
     check_path(conn, path)
-    headers = {"Accept": "application/json", "User-Agent": "flow-investigator",
-               **await auth_headers(name, conn)}
+    auth_h, auth_q = await auth_params(name, conn)
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT, **auth_h}
     if conn.type == "github":
         headers["X-GitHub-Api-Version"] = "2022-11-28"
     if conn.type == "azure_devops" and method == "PATCH" and "/wit/" in path:
         headers["Content-Type"] = "application/json-patch+json"
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, transport=_transport) as c:
-        r = await c.request(method, conn.resolved_base_url() + path, headers=headers,
-                            params={k: str(v) for k, v in (query or {}).items()},
-                            json=body if body is not None else None)
+    r = await _send(conn, method, path, headers, {k: str(v) for k, v in (query or {}).items()},
+                    auth_q, body)
     text = r.text
     try:
         text = json.dumps(r.json(), ensure_ascii=False, indent=1)

@@ -241,3 +241,15 @@ input.bad { border-color: var(--bad); }
 
 /* high contrast: always-visible focus */
 [data-theme="contrast"] :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* connectors: sign-in on a page */
+.redirect { display: block; user-select: all; word-break: break-all; padding: 4px 6px; background: var(--panel-2); border-radius: 4px; }
+
+/* in-app dialogs (Dialog.tsx), above any other window */
+.dialog-layer { z-index: 60; }
+.modal-box.dialog { width: min(440px, 100%); padding: 18px 20px 16px; }
+.dialog-title { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 0 0 8px; }
+.dialog-message { margin: 0 0 6px; white-space: pre-wrap; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+button.danger.strong { background: var(--stop); border-color: var(--stop); color: var(--on-accent); font-weight: 600; }
+.new-conn-group { margin: 8px 0 2px; }

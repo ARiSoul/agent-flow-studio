@@ -22,6 +22,10 @@ Colors only through CSS tokens (`var(--bg)`, `var(--accent)`, `var(--on-accent)`
 `[data-theme="<id>"]` block with the same tokens. A new theme = that block + an entry in `THEMES`
 (`editor/src/theme.tsx`) + its id in `editor/public/theme-init.js` + `theme.<id>` in every i18n file.
 
+No native browser dialogs (`alert`/`confirm`/`prompt`): use `useDialog()` from
+`editor/src/Dialog.tsx` (`confirm` for yes/no, `form` for text input with validation). Only the
+browser's own "leave page?" warning stays native.
+
 ## Goal
 A studio to build, test and run **agent flows** (Claude Agent SDK, Python): flows in YAML, visual
 editor (React Flow + FastAPI), chat-based build assistant, execution with trace, human approvals,
@@ -35,6 +39,7 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
    With no one to approve (CLI), writes that need approval are denied. Drafts live in `runs/<id>/`.
 2. **Secrets** only in environment variables/`.env` or the system keyring (connectors) — never in
    code, flows, `connections.yaml`, the UI or logs. In a flow, secrets are always `${VAR}`.
+   OAuth tokens from a sign-in on a page live only in the keyring; errors never show them.
    Do not record PII or file contents in `runs/audit.jsonl`.
 3. **Every conclusion has evidence**: each agent cites its source (file:line, request, record).
 4. Internal tools follow the pattern in `src/agent_flow_studio/tools/` and are registered in
@@ -57,7 +62,10 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
 - `hooks.py` (guard + audit) and `policy.py` (writes, workspace, Bash, autonomy, approvals,
   delegation limit for step-by-step tests).
 - `connections/`: profiles in `connections.yaml` (outside git), `keyring`/`${VAR}` secrets,
-  `http_get` (read) and `http_write` (write, only with `access: write`).
+  `http_get` (read) and `http_write` (write, only with `access: write`); `oauth.py` = sign-in on
+  a page (authorization code + PKCE, single-use `state`, callback `/api/oauth/callback`, tokens
+  only in the keyring); managed identity in `client.py`. Provider presets are data
+  (`OAUTH_PRESETS` in `model.py`), never code paths per provider.
 - `editor/`: `server.py` (local API, 127.0.0.1, local Hosts, `X-Flow-Editor` header on writes),
   `assistant.py` (chat: only changes an in-memory draft), `runner.py` (full/step/until/agent runs,
   gates, live approvals, decisions in `runs/<id>/decisions.jsonl`), `yaml_io.py`, `validation.py`.

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialog } from "./Dialog";
 import { useI18n, type I18n } from "./i18n";
 import type { Doc } from "./types";
 
@@ -65,6 +66,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
 }) {
   const i18n = useI18n();
   const { t } = i18n;
+  const dialog = useDialog();
   const [mode, setMode] = useState<RunMode>("full");
   const [target, setTarget] = useState("");
   const [instruction, setInstruction] = useState("");
@@ -120,7 +122,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     setError(null);
     const inp = input.trim();
     if (!inp) return;
-    if (!mock && !confirm(t("run.confirmReal"))) return;
+    if (!mock && !(await dialog.confirm({ title: t("run.realTitle"), message: t("run.confirmReal"), ok: t("run.realOk"), danger: true }))) return;
     try {
       if ((mode === "until" || mode === "agent") && !target) throw new Error(t("run.pickAgent"));
       const r = await post<RunInfo>("/api/runs", { flow, input: inp, mode, target: target || null, instruction: mode === "agent" ? instruction : "" });

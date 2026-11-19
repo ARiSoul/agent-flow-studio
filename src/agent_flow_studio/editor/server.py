@@ -4,10 +4,12 @@ It only edits files in flows/<name>/ (flow.yaml and prompts/*.md). It does not r
 never expands `${VAR}`: secrets stay out of the flows. It listens on 127.0.0.1 by default, accepts
 only local Hosts and requires the X-Flow-Editor header on requests that change files (an external
 site in the browser cannot send it without a CORS preflight, which is not accepted here).
+The one GET that changes state is the OAuth callback, protected by its single-use `state`.
 """
 from __future__ import annotations
 
 import argparse
+import html
 import re
 import shutil
 import time
@@ -15,6 +17,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -27,6 +30,7 @@ from ..builder.compile import FlowError, flows_dir
 from ..builder.spec import FlowSpec
 from ..config import settings
 from ..connections import client as conn_client
+from ..connections import oauth as conn_oauth
 from ..connections import store as conn_store
 from ..connections.model import SLUG as CONN_SLUG
 from ..connections.model import Connection, types_meta
@@ -77,6 +81,19 @@ class DecisionBody(BaseModel):
 class ApprovalBody(BaseModel):
     approve: bool
     comment: str = Field(default="", max_length=5_000)
+
+
+OAUTH_CALLBACK = "/api/oauth/callback"
+
+
+def _oauth_page(ok: bool, text: str) -> HTMLResponse:
+    """Small page for the end of a sign-in. Plain HTML, no scripts (the CSP has none)."""
+    title = "Signed in" if ok else "Sign-in failed"
+    body = (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{title}</title>"
+            "<style>body{font:15px system-ui,sans-serif;margin:15vh auto;max-width:560px;"
+            "padding:0 20px}h1{font-size:20px}</style></head>"
+            f"<body><h1>{'✓' if ok else '✗'} {title}</h1><p>{html.escape(text)}</p></body></html>")
+    return HTMLResponse(body, status_code=200 if ok else 400)
 
 
 class SecretBody(BaseModel):
@@ -186,12 +203,56 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         return name
 
     # --- connectors ---------------------------------------------------------------------------
+    def _redirect_uri(request: Request) -> str:
+        # the origin the editor was opened at (the Host is already limited to local hosts)
+        return str(request.base_url).rstrip("/") + OAUTH_CALLBACK
+
     @app.get("/api/connections")
-    def connections() -> dict[str, Any]:
+    def connections(request: Request) -> dict[str, Any]:
         conns = _conns()
         return {**types_meta(), "file": str(conn_store.connections_file()),
+                "oauth_redirect_uri": _redirect_uri(request),
                 "connections": {n: c.model_dump(mode="json") | {
-                    "secret": conn_store.secret_status(n, c)} for n, c in conns.items()}}
+                    "secret": conn_store.secret_status(n, c),
+                    "oauth": conn_store.oauth_status(n, c)} for n, c in conns.items()}}
+
+    # --- sign-in on a page (OAuth 2 + PKCE) ------------------------------------------------------
+    @app.post("/api/connections/{name}/oauth/start", dependencies=[Depends(csrf)])
+    def oauth_start(name: str, request: Request) -> dict[str, Any]:
+        c = _conns().get(_conn_name(name))
+        if c is None:
+            raise HTTPException(404, "connector does not exist")
+        redirect = _redirect_uri(request)
+        try:
+            url = conn_oauth.start(name, c, redirect)
+        except conn_oauth.OAuthError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"url": url, "redirect_uri": redirect}
+
+    @app.delete("/api/connections/{name}/oauth", dependencies=[Depends(csrf)])
+    def oauth_sign_out(name: str) -> dict[str, Any]:
+        c = _conns().get(_conn_name(name))
+        if c is None:
+            raise HTTPException(404, "connector does not exist")
+        conn_store.delete_oauth_tokens(name)
+        return {"oauth": conn_store.oauth_status(name, c)}
+
+    @app.get(OAUTH_CALLBACK, response_class=HTMLResponse)
+    async def oauth_callback(state: str = "", code: str = "", error: str = "",
+                             error_description: str = "") -> HTMLResponse:
+        if error or not code:
+            name = conn_oauth.cancel(state)  # a refused sign-in cannot be reused
+            detail = (error or "no code") + (f" — {error_description}" if error_description else "")
+            return _oauth_page(False, f"The provider did not sign in {name or 'the connector'}: "
+                                      f"{detail[:300]}")
+        try:
+            name = await conn_oauth.finish(state, code, _conns())
+        except conn_oauth.OAuthError as e:
+            return _oauth_page(False, str(e))
+        except httpx.HTTPError as e:
+            return _oauth_page(False, f"could not reach the provider: {type(e).__name__}")
+        return _oauth_page(True, f"Connector {name} is signed in. You can close this tab and go "
+                                 "back to the editor.")
 
     @app.put("/api/connections/{name}", dependencies=[Depends(csrf)])
     def save_connection(name: str, body: dict[str, Any]) -> dict[str, Any]:
