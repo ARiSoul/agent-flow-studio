@@ -16,6 +16,10 @@ interface Props {
   select: (s: Selection) => void;
   remove: (s: Selection) => void;
   testAgent?: (id: string) => void;
+  library?: {
+    state: (id: string) => string; has: (lib: string) => boolean;
+    update: (id: string) => void; detach: (id: string) => void; save: (id: string) => void;
+  };
 }
 
 const AUTONOMY = ["approve", "approve_prod", "auto"] as const;
@@ -148,7 +152,7 @@ function WritesEditor({ writes, catalog, set }: { writes: ArtifactRaw[]; catalog
   );
 }
 
-function AgentPanel({ id, doc, catalog, update, select, testAgent, focus }: { id: string; focus?: string } & Omit<Props, "sel" | "remove" | "val">) {
+function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, library, val }: { id: string; focus?: string } & Omit<Props, "sel" | "remove">) {
   const { t } = useI18n();
   const spec = doc.spec;
   const a = spec.agents[id];
@@ -162,6 +166,18 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus }: { id
         <div className="row test-row">
           <button className="small" onClick={() => testAgent(id)} title={t("insp.testAgentTitle")}>{t("insp.testAgent")}</button>
           <button className="small" onClick={() => testAgent(`until:${id}`)} title={t("insp.runUntilTitle")}>{t("insp.runUntil")}</button>
+        </div>)}
+      {library && (
+        <div className="lib-box">
+          {a.origin
+            ? <span>{t("lib.from", { lib: val?.origins?.[id]?.title ?? a.origin.agent })} · <b>{library.state(id)}</b></span>
+            : <span className="muted">{t("lib.notFrom")}</span>}
+          <div className="row">
+            {a.origin && <button className="small" disabled={!library.has(a.origin.agent)}
+              onClick={() => library.update(id)}>{t("lib.update")}</button>}
+            {a.origin && <button className="small" onClick={() => library.detach(id)}>{t("lib.detach")}</button>}
+            <button className="small" onClick={() => library.save(id)}>{t("lib.save")}</button>
+          </div>
         </div>)}
       <Field label={t("insp.name")} hint={t("insp.nameHint")}>
         <CommitInput value={id} pattern={SLUG} onCommit={(v) => {

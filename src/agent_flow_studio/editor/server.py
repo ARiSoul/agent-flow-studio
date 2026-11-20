@@ -28,6 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..builder.catalog import BUILTIN_SERVERS, BUILTIN_TOOLS, CONTRACTS
 from ..builder.compile import FlowError, flows_dir
+from ..builder.library import LibraryError, agents_dict, save_local
 from ..builder.spec import SLUG, FlowSpec
 from ..builder.templates import TemplateError, templates_dict
 from ..builder.templates import render as render_template
@@ -107,6 +108,14 @@ def _oauth_page(ok: bool, text: str) -> HTMLResponse:
 class SecretBody(BaseModel):
     value: str | None = Field(default=None, min_length=1, max_length=10_000)  # goes to the keyring
     env: str | None = Field(default=None, pattern=r"^[A-Z_][A-Z0-9_]*$")  # or ${VAR}
+
+
+class LibraryBody(BaseModel):
+    id: str = Field(min_length=1, max_length=40)
+    title: str = Field(default="", max_length=80)
+    agent: dict[str, Any]
+    prompt: str = Field(max_length=MAX_PROMPT)
+    overwrite: bool = False
 
 
 class NewFlow(BaseModel):
@@ -486,6 +495,22 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             return templates_dict()
         except TemplateError as e:
             raise HTTPException(500, str(e)) from e
+
+    @app.get("/api/agents")
+    def library() -> list[dict[str, Any]]:
+        try:
+            return agents_dict()
+        except LibraryError as e:
+            raise HTTPException(500, str(e)) from e
+
+    @app.post("/api/agents", dependencies=[Depends(csrf)], status_code=201)
+    def save_to_library(body: LibraryBody) -> dict[str, Any]:
+        """Saves an agent of a flow to the local library (agents/, outside git)."""
+        try:
+            a, notes = save_local(body.id, body.title, body.agent, body.prompt, body.overwrite)
+        except LibraryError as e:
+            raise HTTPException(409 if "already exists" in str(e) else 422, str(e)) from e
+        return {"id": a.id, "hash": a.hash, "source": a.source, "notes": notes}
 
     @app.post("/api/flows", dependencies=[Depends(csrf)], status_code=201)
     def create(body: NewFlow) -> dict[str, Any]:

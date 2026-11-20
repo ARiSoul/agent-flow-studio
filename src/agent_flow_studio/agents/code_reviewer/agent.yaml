@@ -1,0 +1,13 @@
+# Library agent: reviews code with evidence (read only).
+title: Code reviewer
+description: Reviews code of the workspace (risks, likely bugs, missing tests, suggestions) and
+  writes the review with path:line evidence. Read only.
+icon: shield
+tools: [workspace.git, workspace.read, workspace.grep, workspace.glob]
+inputs:
+  scope: {type: text, description: "What to review: files, folders, a change or a question"}
+  context: {type: markdown, required: false, description: What is already known about the code}
+outputs:
+  review: {type: markdown, draft: true}
+  blockers: {type: integer, min: 0, description: Number of blocker findings}
+  verdict: {type: choice, options: [ready, changes_needed, blocked]}

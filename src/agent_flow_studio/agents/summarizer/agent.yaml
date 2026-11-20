@@ -1,0 +1,10 @@
+# Library agent: summarizes a text for a given audience (no tools).
+title: Summarizer
+description: Summarizes a text (a report, a review, notes) for a given audience, keeping the
+  facts and their sources. No tools.
+icon: doc
+inputs:
+  text: {type: markdown, description: The text to summarize}
+  audience: {type: text, required: false, description: "Who reads the summary (default: a technical team)"}
+outputs:
+  summary: {type: markdown}

@@ -1,0 +1,11 @@
+# Library agent: reads a repository and describes it (read only).
+title: Repository explorer
+description: Explores the workspace repository (read only) and summarizes its structure,
+  technologies and entry points. Use first, before agents that need context about the code.
+icon: search
+tools: [workspace.read, workspace.grep, workspace.glob]
+inputs:
+  focus: {type: text, required: false, description: Part of the repository to look at first}
+outputs:
+  overview: {type: markdown, description: "Structure, technologies, entry points, how to build and test"}
+  main_language: {type: text}

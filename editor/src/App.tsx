@@ -10,7 +10,7 @@ import { Chat } from "./Chat";
 import { Connections } from "./Connections";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
-import { Icon, ICON_IDS } from "./icons";
+import { AgentIcon, Icon, ICON_IDS } from "./icons";
 import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
@@ -20,7 +20,9 @@ import {
   renameNode, SLUG, sourceIO, tidy, uniqueKey, uniqueName,
 } from "./model";
 import { nodeTypes, type Port } from "./nodes";
-import type { AgentRaw, Catalog, Doc, FlowSummary, FlowTemplate, GateRaw, Selection, Validation } from "./types";
+import type {
+  AgentRaw, Catalog, Doc, FlowSummary, FlowTemplate, GateRaw, LibraryAgent, Selection, Validation,
+} from "./types";
 
 /** A copied node (in memory, for paste and duplicate). */
 type Clip = { base: string; agent?: AgentRaw; gate?: GateRaw; prompt?: string };
@@ -56,6 +58,7 @@ function Editor() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [templates, setTemplates] = useState<FlowTemplate[]>([]);
+  const [library, setLibrary] = useState<LibraryAgent[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [doc, setDoc] = useState<Doc | null>(null);
   const [saved, setSaved] = useState<string>("");
@@ -92,6 +95,7 @@ function Editor() {
     api.catalog().then(setCatalog).catch((e) => flash(String(e), true));
     refreshFlows().then(() => undefined);
     api.templates().then(setTemplates).catch(() => undefined);
+    api.library().then(setLibrary).catch((e) => flash(String(e), true));
   }, [refreshFlows]);
   useEffect(() => {
     if (!current && flows.length) setCurrent(flows[0].name);
@@ -191,7 +195,7 @@ function Editor() {
           id, type: "agent", position: pos(id), measured: dims[id],
           selected: sel?.kind === "node" && sel.id === id,
           data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace[id], ins, outs,
-            style: nodeStyle },
+            style: nodeStyle, lib: a.origin ? val?.origins?.[id] : undefined },
         };
       }),
       ...Object.entries(s.gates ?? {}).map(([id, g]) => ({
@@ -200,7 +204,7 @@ function Editor() {
         data: { name: id, gate: g, error: errNodes.has(id), run: trace[id], style: nodeStyle },
       })),
     ];
-  }, [doc, sel, errNodes, dims, trace, nodeStyle]);
+  }, [doc, sel, errNodes, dims, trace, nodeStyle, val]);
   const edges: Edge[] = useMemo(() => {
     if (!doc) return [];
     const s = doc.spec;
@@ -309,8 +313,93 @@ function Editor() {
   };
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
+    const at = rf.screenToFlowPosition({ x: e.clientX - 120, y: e.clientY - 40 });
     const kind = e.dataTransfer.getData("application/x-flow-node") as PaletteKind;
-    if (kind) addNode(kind, rf.screenToFlowPosition({ x: e.clientX - 120, y: e.clientY - 40 }));
+    if (kind) addNode(kind, at);
+    const lib = library.find((l) => l.id === e.dataTransfer.getData("application/x-flow-library"));
+    if (lib) insertLibrary(lib, at);
+  };
+
+  // ---- agent library: copies with an origin (the flow never changes when the library does)
+  const promptOf = (d: Doc, a: AgentRaw) => (a.prompt_file ? d.prompts[a.prompt_file] ?? "" : a.prompt ?? "");
+  /** The library agent as a flow agent: its prompt in prompts/<id>.md (or `path`), with an origin. */
+  const fromLibrary = (d: Doc, l: LibraryAgent, id: string, path?: string | null): AgentRaw => {
+    const a = clone(l.agent);
+    const file = path ?? uniqueKey(Object.keys(d.prompts), `prompts/${id}.md`);
+    d.prompts[file] = l.agent.prompt ?? "";
+    delete a.prompt;
+    return { ...a, prompt_file: file, origin: { agent: l.id, hash: l.hash } };
+  };
+  const insertLibrary = (l: LibraryAgent, at?: { x: number; y: number }) => {
+    if (!doc) return;
+    const id = uniqueKey([...nodeNames(doc.spec), ...Object.keys(doc.spec.mcp_servers ?? {})], l.id);
+    const p = at ?? rf.screenToFlowPosition({ x: window.innerWidth / 2 - 120, y: window.innerHeight / 2 - 50 });
+    update((d) => {
+      d.spec.agents[id] = fromLibrary(d, l, id);
+      d.spec.layout = { ...d.spec.layout, [id]: { x: Math.round(p.x), y: Math.round(p.y) } };
+    });
+    showProps({ kind: "node", id });
+    flash(t("lib.inserted", { name: l.title }));
+  };
+  const updateFromLibrary = async (id: string) => {
+    const a = doc?.spec.agents[id], l = library.find((x) => x.id === a?.origin?.agent);
+    if (!doc || !a || !l) return;
+    if (val?.origins?.[id]?.changed !== false && !(await dialog.confirm({
+      title: t("lib.updateTitle", { name: id }), message: t("lib.updateConfirm", { lib: l.title }),
+      ok: t("lib.updateOk"), danger: true }))) return;
+    update((d) => {
+      const old = d.spec.agents[id];
+      const n = fromLibrary(d, l, id, old.prompt_file);
+      // what belongs to this flow stays: where each input comes from, join, loops and the icon
+      for (const [k, i] of Object.entries(n.inputs ?? {})) if (old.inputs?.[k]?.from) i.from = old.inputs[k].from;
+      if (old.join !== undefined) n.join = old.join;
+      if (old.max_runs !== undefined) n.max_runs = old.max_runs;
+      if (old.icon) n.icon = old.icon;
+      d.spec.agents[id] = n;
+    });
+    flash(t("lib.updated", { name: id }));
+  };
+  const detachFromLibrary = (id: string) => {
+    update((d) => { delete d.spec.agents[id].origin; });
+    flash(t("lib.detached", { name: id }));
+  };
+  const saveToLibrary = async (id: string) => {
+    const a = doc?.spec.agents[id];
+    if (!doc || !a) return;
+    const mine = library.find((l) => l.id === a.origin?.agent && l.source === "local");
+    const r = await dialog.form({
+      title: t("lib.saveTitle", { name: id }), message: t("lib.saveMessage"), ok: t("lib.saveOk"),
+      fields: [
+        { key: "id", label: t("lib.saveId"), value: mine?.id ?? id, hint: t("lib.saveIdHint"),
+          validate: (v) => !SLUG.test(v.trim()) ? t("insp.nameHint")
+            : library.some((l) => l.id === v.trim() && l.source !== "local") ? t("lib.idTaken") : null },
+        { key: "title", label: t("lib.saveTitleField"), value: mine?.title ?? id },
+      ],
+    });
+    if (!r) return;
+    const exists = library.some((l) => l.id === r.id);
+    if (exists && !(await dialog.confirm({ title: t("lib.overwriteTitle", { name: r.id }),
+      message: t("lib.overwrite"), ok: t("lib.overwriteOk"), danger: true }))) return;
+    try {
+      // without `from`, an input has no source to take its type from: keep the resolved one
+      const agent = clone(a);
+      for (const i of Object.values(agent.inputs ?? {})) i.type = inputKind(doc.spec, i);
+      const res = await api.saveToLibrary({ id: r.id, title: r.title, agent, prompt: promptOf(doc, a), overwrite: exists });
+      update((d) => {
+        const x = d.spec.agents[id];
+        x.origin = { agent: res.id, hash: res.hash };
+        for (const [k, i] of Object.entries(x.inputs ?? {})) i.type = agent.inputs![k].type;  // same as saved
+      });
+      setLibrary(await api.library());
+      flash([t("lib.saved", { name: res.id }), ...res.notes].join(" · "));
+    } catch (e) { flash(String((e as Error).message ?? e), true); }
+  };
+  const libState = (id: string) => {
+    const o = val?.origins?.[id];
+    if (!o) return "…";
+    if (o.missing) return t("lib.state.missing");
+    if (o.changed && o.update) return t("lib.state.both");
+    return t(o.changed ? "lib.state.changed" : o.update ? "lib.state.update" : "lib.state.same");
   };
 
   // ---- node operations (context menu and shortcuts)
@@ -401,6 +490,14 @@ function Editor() {
       })) },
       { label: t("menu.addInput"), onSelect: () => addPort(id, "in") },
       { label: t("menu.addOutput"), onSelect: () => addPort(id, "out") },
+      { kind: "sep" },
+      ...(a.origin ? [
+        { kind: "label" as const, label: `${t("lib.from", { lib: val?.origins?.[id]?.title ?? a.origin.agent })} · ${libState(id)}` },
+        { label: t("lib.update"), disabled: !library.some((l) => l.id === a.origin!.agent),
+          onSelect: () => updateFromLibrary(id) },
+        { label: t("lib.detach"), onSelect: () => detachFromLibrary(id) },
+      ] : []),
+      { label: t("lib.save"), onSelect: () => saveToLibrary(id) },
     );
     if (g) items.push(
       { kind: "sep" },
@@ -593,6 +690,17 @@ function Editor() {
           </div>
         ))}
         <p className="muted small">{t("palette.help")}</p>
+        <h2 title={t("palette.libraryHint")}>{t("palette.library")}</h2>
+        {library.length === 0 && <p className="muted small">{t("palette.libraryEmpty")}</p>}
+        {library.map((l) => (
+          <div key={l.id} className="pal lib" draggable title={`${l.description}\n${t("palette.libraryHint")}`}
+            onDragStart={(e) => { e.dataTransfer.setData("application/x-flow-library", l.id); e.dataTransfer.effectAllowed = "copy"; }}
+            onClick={() => insertLibrary(l)}>
+            <b><AgentIcon icon={l.icon} size={14} /> {l.title}</b>
+            <span>{l.description}</span>
+            <span className="pal-src">{l.source === "core" ? t("palette.libCore") : l.source === "local" ? t("palette.libLocal") : l.source}</span>
+          </div>
+        ))}
         <h2>{t("palette.tools")}</h2>
         <ul className="catalog">
           {catalog.servers.map((s) => (
@@ -645,6 +753,8 @@ function Editor() {
         </div>
         {doc && <div className="right-body" hidden={right !== "props"}>
           <Inspector doc={doc} sel={sel} catalog={catalog} val={val} update={update} select={setSel} remove={remove}
+            library={{ state: libState, update: updateFromLibrary, detach: detachFromLibrary, save: saveToLibrary,
+              has: (lib) => library.some((l) => l.id === lib) }}
             testAgent={(id) => {
               const until = id.startsWith("until:");
               setRunReq({ mode: until ? "until" : "agent", target: until ? id.slice(6) : id, nonce: Date.now() });

@@ -6,6 +6,7 @@ import sys
 from .builder import FlowError, list_flows, load_spec
 from .builder.catalog import catalog_dict
 from .builder.compile import compile_flow, flow_section, flows_dir
+from .builder.library import LibraryError, agents_dict
 from .builder.templates import TemplateError, render, templates_dict
 from .editor.validation import _atomic_write
 from .editor.yaml_io import dump_flow
@@ -21,6 +22,7 @@ def main() -> None:
     s.add_argument("flow")
     sub.add_parser("catalog", help="available tools and contracts (JSON)")
     sub.add_parser("templates", help="list the flow templates and their parameters")
+    sub.add_parser("agents", help="list the agent library (copied into flows in the editor)")
     n = sub.add_parser("new", help="create a flow from a template")
     n.add_argument("flow", help="name of the new flow (folder in flows/)")
     n.add_argument("--template", required=True)
@@ -45,6 +47,12 @@ def main() -> None:
                 extra = f" (default {prm['default']})" if prm["default"] else ""
                 need = "" if prm["required"] else " (optional)"
                 print(f"    --set {k}=…  {prm['label']}{extra}{need}")
+    elif a.cmd == "agents":
+        try:
+            for ag in agents_dict():
+                print(f"{ag['id']:20} {ag['title']}  [{ag['source']}]")
+        except LibraryError as e:
+            raise SystemExit(f"INVALID: {e}") from e
     elif a.cmd == "new":
         _new(a.flow, a.template, a.title, a.set)
     else:

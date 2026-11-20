@@ -25,3 +25,9 @@ def _runs_dir(tmp_path, monkeypatch):
     s = replace(settings, runs_dir=tmp_path / "runs")
     for mod in (hooks, runner_mod, artifacts, io_tool):
         monkeypatch.setattr(mod, "settings", s)
+
+
+@pytest.fixture(autouse=True)
+def _agents_dir(tmp_path, monkeypatch):
+    """Safety net: the local agent library of the tests is a temporary folder."""
+    monkeypatch.setenv("AFS_AGENTS_DIR", str(tmp_path / "agents"))

@@ -3,14 +3,29 @@ import { useI18n } from "./i18n";
 import { AgentIcon, Icon } from "./icons";
 import type { NodeStyle } from "./model";
 import type { NodeRun } from "./RunPanel";
-import type { AgentRaw, GateRaw, IOKind } from "./types";
+import type { AgentRaw, GateRaw, IOKind, OriginState } from "./types";
 
 /** One typed port: an input (left, handle `in:<name>`) or an output (right, handle `out:<name>`). */
 export type Port = { name: string; type: IOKind; multiple: boolean; from?: string | null; linked?: boolean };
 export type AgentNodeData = {
   name: string; agent: AgentRaw; start: boolean; error: boolean; run?: NodeRun;
-  ins: Port[]; outs: Port[]; style?: NodeStyle;
+  ins: Port[]; outs: Port[]; style?: NodeStyle; lib?: OriginState;
 };
+
+/** "lib" badge of an agent copied from the library (↑ when the library has another version). */
+function LibBadge({ agent, lib }: { agent: AgentRaw; lib?: OriginState }) {
+  const { t } = useI18n();
+  if (!agent.origin) return null;
+  const state = !lib ? "" : lib.missing ? t("lib.state.missing")
+    : lib.changed && lib.update ? t("lib.state.both")
+    : t(lib.changed ? "lib.state.changed" : lib.update ? "lib.state.update" : "lib.state.same");
+  return (
+    <span className={`badge lib${lib?.update || lib?.missing ? " warn" : ""}`}
+      title={`${t("lib.from", { lib: lib?.title ?? agent.origin.agent })}${state ? ` · ${state}` : ""}`}>
+      {t("node.lib")}{lib?.update ? " ↑" : lib?.changed ? " *" : ""}
+    </span>
+  );
+}
 export type GateNodeData = { name: string; gate: GateRaw; error: boolean; run?: NodeRun; style?: NodeStyle };
 export type AgentNodeT = Node<AgentNodeData, "agent">;
 export type GateNodeT = Node<GateNodeData, "gate">;
@@ -123,6 +138,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
         <div className="avatar-name">{data.name}</div>
         <div className="avatar-badges">
           {data.start && <span className="badge start">{t("node.start")}</span>}
+          <LibBadge agent={a} lib={data.lib} />
           <RunningBadge run={data.run} />
         </div>
         <KitBar run={data.run} />
@@ -138,8 +154,9 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
           <span className="node-name">{data.name}</span>
           <RunDot run={data.run} />
         </div>
-        {(data.start || data.run === "active") && <div className="node-head">
+        {(data.start || data.run === "active" || a.origin) && <div className="node-head">
           {data.start && <span className="badge start">{t("node.start")}</span>}
+          <LibBadge agent={a} lib={data.lib} />
           <RunningBadge run={data.run} />
         </div>}
         <Ports ins={data.ins} outs={data.outs} compact />
@@ -157,6 +174,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
         <RunningBadge run={data.run} />
         <RunDot run={data.run} />
         {data.start && <span className="badge start">{t("node.start")}</span>}
+        <LibBadge agent={a} lib={data.lib} />
         {a.join === "any" && <span className="badge" title={t("node.joinAnyTitle")}>{t("node.joinAny")}</span>}
         {a.model && <span className="badge">{a.model}</span>}
       </div>

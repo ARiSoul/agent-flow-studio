@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from ..builder.compile import FlowError, compile_flow, flow_section
+from ..builder.library import origin_status
 from ..builder.spec import FlowSpec
 
 
@@ -46,7 +47,12 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 def _validate(raw: dict[str, Any], prompts: dict[str, str]) -> dict[str, Any]:
-    """Validates format, graph and prompts (full compilation, without resolving secrets)."""
+    """Validates format, graph and prompts (full compilation, without resolving secrets), plus the
+    state of the agents copied from the library (`origins`)."""
+    return _check(raw, prompts) | {"origins": origin_status(raw, prompts)}
+
+
+def _check(raw: dict[str, Any], prompts: dict[str, str]) -> dict[str, Any]:
     try:
         spec = FlowSpec.model_validate(raw)
     except ValidationError as e:

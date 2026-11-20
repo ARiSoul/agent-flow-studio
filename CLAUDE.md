@@ -61,7 +61,12 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   the graph), `templates.py` (flow templates: `templates/<id>/` with `template.yaml`, `flow.yaml`,
   `prompts/`; `{{param}}` filled in only inside YAML string values, after parsing). Templates are
   generic and public, start with autonomy `approve`, and company templates go in
-  `extensions/<name>/templates/`.
+  `extensions/<name>/templates/`. `library.py` (agent library: `agents/<id>/` with `agent.yaml` +
+  `prompt.md`; core in `src/agent_flow_studio/agents/`, extensions in `extensions/<name>/agents/`,
+  local in `agents/` outside git). Agents are **copied** into flows with an `origin`
+  (`{agent, hash}`); `fingerprint` ignores flow-only fields (`from`, `join`, `max_runs`, icon) and
+  the validation returns `origins` (changed here / newer in the library). Library agents have no
+  `from` and never `autonomy: auto`.
 - Typed data: `builder/types.py` (`IOType`, `check_value`), `builder/expr.py` (safe `if`
   expressions: `ast` with a whitelist, never `eval`), `tools/io.py` (MCP `io`: `get_inputs`,
   `set_output`, `read_file`; values in `runs/<id>/io/`; the hook checks that `agent` is the caller).
@@ -99,6 +104,6 @@ Subagents accept MCP tools by their full name `mcp__server__tool`.
 ## Commands
 - `pytest` · `AFS_NO_EXTENSIONS=1 pytest tests` · `ruff check .`
 - `agent-flow-studio <input> --flow <flow> [--resume <session_id>]`
-- `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog|templates`
+- `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog|templates|agents`
 - `agent-flow-studio-flows new <flow> --template <id> --set <param>=<value>`
 - `agent-flow-studio-editor [--port 8765] [--flows <folder>]` · frontend: `cd editor && npm run build`

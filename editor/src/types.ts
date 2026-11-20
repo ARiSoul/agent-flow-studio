@@ -54,6 +54,28 @@ export interface AgentRaw {
   join?: "all" | "any";
   max_runs?: number;
   icon?: string | null;  // a built-in icon id (icons.tsx) or an emoji
+  origin?: { agent: string; hash: string } | null;  // copied from the agent library
+}
+
+/** An agent of the library (GET /api/agents): copied into flows, then tuned there. */
+export interface LibraryAgent {
+  id: string;
+  title: string;
+  source: string;  // "core", "local" or an extension name
+  hash: string;
+  description: string;
+  icon?: string | null;
+  agent: AgentRaw;  // prompt inline
+}
+
+/** State of an agent copied from the library (validation `origins`). */
+export interface OriginState {
+  agent: string;
+  title: string;
+  source: string | null;
+  missing: boolean;
+  changed: boolean | null;  // changed in this flow since it was copied (null = unknown for now)
+  update: boolean;  // the library has another version now
 }
 
 export interface GateRaw {
@@ -129,6 +151,7 @@ export interface Validation {
   errors: FlowError[];
   flow_section?: string;
   allowed_tools?: string[];
+  origins?: Record<string, OriginState>;
 }
 
 export interface ToolInfo {

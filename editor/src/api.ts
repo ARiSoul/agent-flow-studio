@@ -1,4 +1,4 @@
-import type { Catalog, Doc, FlowSummary, FlowTemplate, RunIO, Validation } from "./types";
+import type { AgentRaw, Catalog, Doc, FlowSummary, FlowTemplate, LibraryAgent, RunIO, Validation } from "./types";
 
 // Requests that change files carry X-Flow-Editor (the server rejects them without it).
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
@@ -38,6 +38,16 @@ export const api = {
       method: "POST",
       headers: MUTATE,
       body: JSON.stringify({ name, title, ...from }),
+    }).then((r) => {
+      if (r.status === 422) throw new Error(String((r.data as { detail?: unknown }).detail ?? "invalid"));
+      return r.data;
+    }),
+  library: () => call<LibraryAgent[]>("/api/agents").then((r) => r.data),
+  saveToLibrary: (body: { id: string; title: string; agent: AgentRaw; prompt: string; overwrite?: boolean }) =>
+    call<{ id: string; hash: string; source: string; notes: string[] }>("/api/agents", {
+      method: "POST",
+      headers: MUTATE,
+      body: JSON.stringify(body),
     }).then((r) => {
       if (r.status === 422) throw new Error(String((r.data as { detail?: unknown }).detail ?? "invalid"));
       return r.data;

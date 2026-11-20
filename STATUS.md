@@ -5,22 +5,25 @@ update "Current state" and "Next steps", add a line to the "Log" (date, machine/
 terms — no emails —, what was done) and commit + push.
 
 ## Where we stopped (2026-11-20, second machine / account B)
-- Last work: **right-click context menu** on the canvas (`editor/src/ContextMenu.tsx`, wired in
-  `App.tsx`): on agents (properties, test this agent, run until here, rename, set as start, icon
-  grid, add input/output, copy, duplicate, delete), on gates (rename, human ⇄ stop), on links (edit
-  / clear condition, delete; data links: properties, delete) and on the empty canvas (add agent /
-  approval / stop here, paste, arrange, fit, flow properties). Keyboard: Shift+F10 / context-menu
-  key on a focused node, arrows/Home/End/Enter/Escape in the menu; shortcuts Ctrl+C / Ctrl+V /
-  Ctrl+D / F2 on the selected node. Copies get their own `prompts/<name>.md` and do not keep
-  `writes` (one writer per artifact). Checked in the browser (dark + light, en + pt).
-- First real run done here: `repo-review`, agent `explorer` alone (graph mode), worked
-  (≈ 0.40 USD). The full flows and the templates have not run end to end with the model yet.
-- After you pull on the other machine: `cd editor; npm run build` (the built editor is not in git)
-  and restart `agent-flow-studio-editor`. No new Python or npm dependencies.
+- Last work: **agent library** (generic agents copied into flows and tuned there). Palette →
+  "Agent library" (drag/click to copy), "lib" badge on the node (`*` changed here, `↑` newer in the
+  library), a box in the agent properties and items in the right-click menu: Update from library
+  (asks first when changed here; keeps input links, join, loops, icon), Detach, Save to library….
+  Backend `builder/library.py`, `origin: {agent, hash}` on agents, `origins` in the validation,
+  `GET/POST /api/agents`, `agent-flow-studio-flows agents`. Built-in agents: `repo_explorer`,
+  `code_reviewer`, `summarizer` (`src/agent_flow_studio/agents/`). Local library in `agents/`
+  (outside git, except the README). Chosen with the user: **copy with origin**, not a live
+  reference (a library change never changes a flow by itself).
+- Before that: right-click context menu on the canvas (see the Log).
+- After you pull on the other machine: `cd editor; npm run build` and restart
+  `agent-flow-studio-editor`. No new dependencies. Your local `agents/` folder starts empty.
+- Known: the local extension's `test_save_artifact_marks_drafts` fails on the
+  work machine (the core draft marker is English since the translation; the extension test still
+  expects the Portuguese one). Fix it there, in the extension (outside git).
 - Next suggested task: item 1 below (run the graph flow and templates end to end with the model).
 
 ## Current state
-Works and is tested (`pytest`: core 289 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 297 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -60,6 +63,9 @@ Works and is tested (`pytest`: core 289 tests, without extensions; `ruff` clean;
 - **Writes with autonomy** (`approve` / `approve_prod` / `auto`) and a confined workspace; the hook
   denies paths outside the workspace, force pushes/pushes to protected branches and destructive
   commands. **`workspace.git`**: read-only git.
+- **Agent library**: generic agents (`builder/library.py`; core in `src/agent_flow_studio/agents/`,
+  extensions in `extensions/<name>/agents/`, local in `agents/`) copied into flows with an `origin`;
+  the editor shows changed-here / newer-in-library and can update, detach or save to the library.
 - **Flow templates** (New → "Start from", or `agent-flow-studio-flows new --template`):
   `code-review`, `test-runner`, `fix-and-pr` (typed IO, graph mode); extensions can add templates.
 - **Local extensions** (`extensions/<name>/`, outside git) for domain tools/contracts/templates.
@@ -80,12 +86,13 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
 3. [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and Threads
    only accept an https redirect URI, so they need an https tunnel or a hosted editor.
 4. [ ] Writes through external MCPs (today read only).
-5. [ ] More flows/templates and skills (phase 4 of the builder).
+5. [ ] More flows/templates, library agents and skills (phase 4 of the builder); let the chat
+   assistant use the agent library.
 6. [ ] (Optional) Translate backend messages (validation, errors, input reasons such as
    "required") to the UI language.
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
-· editor polish · context menu (see the Log).
+· editor polish · context menu · agent library (see the Log).
 
 ## Getting started on a new machine
 ```powershell
@@ -135,3 +142,6 @@ start the editor or the CLI (the studio does not read `.env`).
   item 1 added (right-click context menu on the canvas and cards).
 - 2026-11-20 · second machine (account B) · Right-click context menu on nodes, links and the
   canvas (keyboard accessible, themed, pt/en/es), copy/paste/duplicate of nodes, F2 rename.
+- 2026-11-20 · second machine (account B) · Agent library: generic agents copied into flows with an
+  origin (changed here / newer in the library, update, detach, save to library), 3 built-in agents,
+  `GET/POST /api/agents`, CLI `agents`.

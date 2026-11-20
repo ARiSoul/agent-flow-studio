@@ -74,6 +74,14 @@ class AgentInput(_Strict):
 Autonomy = Literal["approve", "approve_prod", "auto"]
 
 
+class AgentOrigin(_Strict):
+    """Where a copied agent came from: a library agent (builder/library.py) and the fingerprint
+    of that library version when it was copied. Only used to show differences and updates."""
+
+    agent: str = Field(pattern=SLUG)
+    hash: str = Field(pattern=r"^[0-9a-f]{8,64}$")
+
+
 class AgentSpec(_Strict):
     description: str = Field(min_length=1)
     prompt: str | None = None
@@ -92,6 +100,7 @@ class AgentSpec(_Strict):
     icon: str | None = Field(default=None, max_length=16)  # editor only: built-in id or emoji
     join: Literal["all", "any"] = "all"  # graph: wait for all incoming branches, or the first
     max_runs: int = Field(default=3, ge=1, le=20)  # graph: limit for loops (back edges)
+    origin: AgentOrigin | None = None  # copied from the agent library (editor only)
 
     @field_validator("icon")
     @classmethod

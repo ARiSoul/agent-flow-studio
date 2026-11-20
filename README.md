@@ -83,6 +83,25 @@ agent-flow-studio-flows templates
 agent-flow-studio-flows new review-app --template code-review --set workspace=D:/repos/app
 ```
 
+## Agent library
+Generic agents you reuse across flows. In the editor, palette → **Agent library**: drag or click
+an agent to **copy** it into the flow, then tune it there (prompt, tools, model…); link its inputs
+and place it wherever the flow needs it. A copy remembers where it came from (`origin` in
+`flow.yaml`), so the node shows a "lib" badge and the properties say whether it was changed in this
+flow and whether the library has a newer version. Nothing in a flow changes when the library
+changes: **Update from library** (on the node's right-click menu or in its properties) brings the
+new version in on request, keeping the input links, join, loops and icon; **Detach** drops the
+link. **Save to library…** stores any agent of a flow in your local library.
+
+Sources: built-in generic agents in `src/agent_flow_studio/agents/<id>/` (`agent.yaml` +
+`prompt.md`; repo explorer, code reviewer, summarizer), an extension's `extensions/<name>/agents/`
+and the local library `agents/` (outside git, or `AFS_AGENTS_DIR`), the only one the editor writes
+to. Library inputs have no `from` and the library never keeps autonomy "autonomous".
+
+```bash
+agent-flow-studio-flows agents
+```
+
 ## Writes with autonomy
 In the flow you set the **autonomy** (approve each write · approve only in production · autonomous)
 and the **workspace** (folder/repository, environment, protected branches); each agent can override
@@ -114,8 +133,9 @@ the Run panel says so and shows these steps. Frontend development: `cd editor &&
 ## Layout
 ```
 src/agent_flow_studio/
-  builder/        spec.py (format + validation), catalog.py, compile.py, templates.py
+  builder/        spec.py (format + validation), catalog.py, compile.py, templates.py, library.py
   templates/      flow templates (code-review, test-runner, fix-and-pr)
+  agents/         built-in agent library (repo_explorer, code_reviewer, summarizer)
   editor/         server.py (API), assistant.py, runner.py, validation.py, yaml_io.py, static/ (build)
   connections/    model.py, store.py (keyring/${VAR}), client.py
   tools/          artifacts.py, connections.py, git.py (read-only), guards.py, common.py
@@ -125,5 +145,6 @@ src/agent_flow_studio/
 editor/           frontend (Vite + React + React Flow; strings in src/i18n/)
 flows/            flows (example: repo-review)
 extensions/       local extensions (outside git, except the README)
+agents/           local agent library saved from the editor (outside git, except the README)
 tests/            core tests (generic flow in tests/fixtures/flows/pipeline)
 ```

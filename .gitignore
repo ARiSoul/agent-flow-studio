@@ -20,6 +20,10 @@ runs/*
 extensions/*
 !extensions/README.md
 
+# Local agent library (saved from the editor): only the README is public
+agents/*
+!agents/README.md
+
 # Flows: editor trash and backups
 flows/.trash/
 *.bak

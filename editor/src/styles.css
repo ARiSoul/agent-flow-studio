@@ -388,6 +388,17 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 .node.style-avatar.run-stopped { box-shadow: none; }
 .node.style-avatar.run-stopped .avatar { border-style: dashed; }
 
+/* ---- agent library (palette, node badge, properties) */
+.pal.lib { border-left-color: var(--ok); cursor: grab; }
+.pal.lib b { display: flex; align-items: center; gap: 6px; }
+.pal-src { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.badge.lib { color: var(--ok); border-color: var(--ok); }
+.badge.lib.warn { color: var(--human); border-color: var(--human); }
+.lib-box {
+  display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; padding: 8px;
+  border: 1px dashed var(--border); border-radius: 6px; background: var(--panel-2);
+}
+
 /* ---- context menu (ContextMenu.tsx) */
 .ctx-menu {
   position: fixed; z-index: 55; min-width: 210px; max-width: 300px; padding: 4px;
