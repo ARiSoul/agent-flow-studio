@@ -5,88 +5,42 @@ update "Current state" and "Next steps", add a line to the "Log" (date, machine/
 terms — no emails —, what was done) and commit + push.
 
 ## Where we stopped (2026-11-20, work machine / account A)
-- Last work (agreed with the user as phases 1–3):
-  1. **Connector actions** = permissions: named operations with typed params on a connector
-     (`connections/actions.py`, YAML editor in the Connectors window, "Only these actions").
-     `run_action` comes implicitly with connectors that have actions; `policy.py` checks the
-     action, read vs write (write = approval as http_write); `actions_only` refuses http_get/
-     http_write; the prompt lists the actions; the assistant sees them. Connectors without actions
-     still need http_get/http_write (now checked in `compile`, no longer in `spec`).
-  2. **Website connector** (`type: website`, `connections/web.py`): the person signs in in a
-     visible browser window (profile outside git, `~/.agent-flow-studio/browser/<name>`); actions
-     run declared steps headless (goto/click/fill/select/press/wait_for/extract*); read actions
-     block non-GET requests; navigation must stay on the site/allowed paths; expired sessions are
-     detected. Optional dependency `pip install -e ".[web]"` (Playwright with the installed Edge).
-     A real-browser test runs against a local page (skipped without Playwright); installed here.
-  3. **`show_if` on flow inputs** (run form shows/requires a field only when it holds) and the
-     template **`ticket-triage`** (text / URL / number → intake → fetcher with the connector action
-     → triage, join any → human review).
-- **Save with problems**: Save on an invalid flow lists the problems and asks "Save anyway"; the
-  server writes it as it is (`yaml_io.dump_raw`, `force: true`) and it opens again with its
-  problems; it does not run until fixed. A secret written in the flow is never saved.
-- **First real website connector** configured on the work machine (local only, in its
-  `connections.yaml`; details in CLAUDE.local.md there): read-only `get_json` action with a field
-  list, `redact: [phone]`, sign-in in Edge; `get_ticket` works on a real ticket. Fixes found on the
-  way: the JSON is opened by the browser (Playwright's own HTTP client did not trust the company CA)
-  and session cookies are saved from the sign-in window (they are dropped when it closes).
-- **Where things live**: `flows/*` is ignored by git (public examples listed one by one, today
-  `repo-review`); flows, library agents and connector definitions can live in an extension
-  (`extensions/<name>/flows`, `agents`, `connections.yaml`; "Where to keep it" in the editor);
-  the flow picker marks public flows; `private_terms.txt` (outside git, or per extension) makes a
-  public save ask first. An extension can be its own private git repo to sync company work.
-  Then **Public (git)** as an explicit location (`publish.py`) for flows (`.gitignore`
-  exception), library agents (built-in library) and connectors (`connections.public.yaml`); private
-  terms block it. Flows move between places from the location tag; an **agent library window**
-  (palette → Manage) edits (YAML definition + prompt), duplicates, moves and deletes agents.
-  **On the other machine**: local flows outside `repo-review` are now ignored by git (check
-  `git status` after pulling; nothing is deleted).
-- Next: run `ticket-triage` end to end with the model using that connector (not done yet).
-- After you pull: `pip install -e ".[dev,web]"` (Playwright, optional), `cd editor; npm run build`,
-  and **restart** `agent-flow-studio-editor`.
-- Then: the **chat assistant knows the library**: tools `view_library` (read only),
-  `add_library_agent` (copy into the draft with an origin) and `update_from_library` (keeps input
-  links, join, loops, icon); helpers `copy_into` / `refresh_copy` in `builder/library.py`; the
-  assistant prompt says to check the library before writing a new agent. It can also **create
-  and edit library agents**: `propose_library_agent` (from scratch, `from_agent` or
-  `from_library`; checked with `library.check`, which also requires catalog tools only) → a card in
-  the chat with "Save to library" that the user presses (overwrite asks first). Built-in and
-  extension agents are read only. Tested with the tools directly and the card in the browser with a
-  simulated reply; not tried yet in a real chat with the model.
-- The editor remembers the last open flow in the browser (`afs.flow`) instead of the first one.
-- **Saved assistant commands**: "☆ Save" (next to Send or on a sent message) → a form with name,
-  message, instructions (multi-line) and favorite; chips above the chat input (favorites first),
-  a click fills the input and attaches the instructions (sent with `command` to `/api/assist`,
-  `assistant.with_command`); "⋯" opens a window to see details, use, edit, favorite, delete.
-  Stored in `assistant_commands.yaml` (outside git; `editor/commands.py`, `/api/commands`).
-  `Dialog.form` now has `multiline` and `checkbox` fields. Checked in the browser (reply simulated).
-- **Conversation history** of the assistant per flow (`editor/chats.py`, `runs/chats/<flow>/`,
-  `/api/chats`): saved after each reply with the model session id; the last one reopens with the
-  flow and continues (resume); "New conversation" keeps the old one; "History" opens, renames,
-  deletes. Checked in the browser with simulated replies (a real resume after a server restart
-  depends on the CLI keeping its session; not tried with the model yet).
-- When the page is newer than the running server (a route is missing), the editor now says
-  "restart agent-flow-studio-editor" instead of "Not Found". **After pulling, restart the editor
-  server**, not only `npm run build`.
-- **Resizable panels** (`editor/src/Splitter.tsx`): drag the edge of the right panel, the palette
-  or the bottom panel (double click = default; arrow keys too); sizes saved in the browser
-  (`afs.panels`). **Markdown in the chat** (`editor/src/Markdown.tsx`, React elements only, no raw
-  HTML): headings, bold/italic, code, lists (nested), quotes, tables, links.
-- **Show/hide panels**: toolbar buttons (palette, bottom, right) and Ctrl+B / Ctrl+J / Ctrl+Alt+B
-  (physical keys, so AltGr layouts work); saved in the browser (`afs.hiddenPanels`); opening a
-  tab from elsewhere (Properties, Test agent) shows the right panel again. Fixed: the splitter
-  overlays reused the `pal`/`bottom` class names and covered the palette and the bottom panel.
-- **Connector instructions** (`Connection.instructions`, Connectors window, "Insert an outline"):
-  added to the prompt of every agent with that connector (read or write, `compile._instructions_section`)
-  and shown to the assistant; secret-like text refused (`model._SECRET_LIKE`); a change writes
-  `connector_instructions_changed` with the size only to `runs/audit.jsonl`. Write-only connectors
-  are now also checked at compile time (must exist on this machine).
-- Before that: right-click context menu on the canvas (see the Log).
-- After you pull on the other machine: `cd editor; npm run build` and restart
-  `agent-flow-studio-editor`. No new dependencies. Your local `agents/` folder starts empty.
-- Known: the local extension's `test_save_artifact_marks_drafts` fails on the
-  work machine (the core draft marker is English since the translation; the extension test still
-  expects the Portuguese one). Fix it there, in the extension (outside git).
-- Next suggested task: item 1 below (run the graph flow and templates end to end with the model).
+Last commit: `dcb9990` (all the work of this session; pushed by the user).
+
+**After you pull on the other machine**
+1. `.\.venv\Scripts\python -m pip install -e ".[dev,web]"` (`web` = Playwright, optional: only for
+   website connectors; it uses the installed Edge/Chrome, no browser download).
+2. `cd editor; npm run build; cd ..` and **restart** `agent-flow-studio-editor` (the server has new
+   routes; with an old server the editor says "restart agent-flow-studio-editor").
+3. `git status`: flows in `flows/` other than `repo-review` are now **ignored by git** (nothing is
+   deleted). Create `private_terms.txt` there too (outside git) with the words that must never be
+   published.
+
+**What this session added** (details in "Current state" and the Log)
+- Assistant: agent library tools (view / copy / update, and proposals of new or edited library
+  agents saved by the user), saved commands, conversation history per flow, Markdown in the chat.
+- Editor: last open flow remembered, resizable and hideable panels, save with problems (asks
+  first; never with a literal secret), agent library window (palette → Manage).
+- Connectors: instructions for the agents; named **actions** as permissions (`run_action`,
+  policy, "only these actions"); **website** connector type (sign-in by the person, declared steps
+  or `get_json`, read actions cannot write, `redact`).
+- Flows: `show_if` on inputs; template `ticket-triage` (text / URL / number → one ticket text).
+- **Where things live**: local by default (`flows/*` ignored); an extension (can be its own private
+  repo) or, explicitly, public (git) for flows, library agents and connectors; private terms
+  block anything public.
+
+**Real use on the work machine (local only, not in git)**: one website connector to the internal
+ticket platform works (`get_ticket` on a real ticket, phones redacted); details in
+`CLAUDE.local.md` there.
+
+**Not tried yet**: `ticket-triage` end to end with the model; the assistant's new tools in a real
+chat with the model; resuming a conversation after a server restart.
+
+**Known**: the local extension's `test_save_artifact_marks_drafts` fails on the
+work machine (the core draft marker is English since the translation; the extension test expects
+the Portuguese one). Fix it in the extension (outside git).
+
+**Next suggested task**: item 1 of the backlog.
 
 ## Current state
 Works and is tested (`pytest`: core 371 tests, without extensions; `ruff` clean; `npm run build`):
@@ -120,25 +74,34 @@ Works and is tested (`pytest`: core 371 tests, without extensions; `ruff` clean;
   artifacts; gates with a decision; live write approvals; a card with the `claude` → `/login`
   steps when the CLI is not signed in.
 - **Chat assistant** in the editor: builds/changes the flow in a draft (never saves on its own);
-  knows typed IO, `if` conditions, execution modes and icons.
+  knows typed IO, `if` conditions, execution modes, icons, the agent library (copy, update,
+  propose new/edited library agents) and the connectors' instructions and actions. Saved
+  commands (message + instructions, favorites), conversation history per flow (`runs/chats/`,
+  resumable), Markdown replies.
 - **Connectors**: HTTP API, Azure ARM, Azure DevOps, Microsoft Graph, GitHub, GitLab, Atlassian
-  Cloud; secrets in the keyring or `${VAR}`; test connection; `http_get`/`http_write` per agent.
+  Cloud and **Website** (your sign-in in a browser, Playwright optional); secrets in the keyring or
+  `${VAR}`; test connection; `http_get`/`http_write` per agent; **instructions** for the agents;
+  named **actions** with typed params (`run_action`, checked by the policy; "only these actions";
+  website actions run declared steps or `get_json`, `redact` for phones/emails).
   **Sign-in on a page** (OAuth 2 + PKCE, tokens only in the keyring) with presets for Facebook,
   Instagram, Threads, WhatsApp Business, Reddit; **Azure managed identity**. Tested with mocked
   providers only.
 - **Writes with autonomy** (`approve` / `approve_prod` / `auto`) and a confined workspace; the hook
   denies paths outside the workspace, force pushes/pushes to protected branches and destructive
   commands. **`workspace.git`**: read-only git.
-- **Saved assistant commands** (message + instructions, favorites) in the chat; local file
-  `assistant_commands.yaml`.
-- **Conversation history** per flow (`runs/chats/`), resumable.
-- **Connector actions** (permissions with typed params, `run_action`), **website connectors**
-  (Playwright, your own sign-in), `show_if` inputs, template `ticket-triage`.
+- **Where things live**: local by default (`flows/*` ignored by git, `agents/`, `connections.yaml`,
+  `assistant_commands.yaml`, `runs/`); an extension (`extensions/<name>/flows`, `agents`,
+  `connections.yaml`) or, explicitly, **public (git)** (`publish.py`); the location tag next to the
+  flow picker moves a flow; `private_terms.txt` blocks anything public that names those words.
+- **Editor**: resizable and hideable panels (Ctrl+B / Ctrl+J / Ctrl+Alt+B), last open flow
+  remembered, save with problems after a confirmation, `show_if` fields in the run form.
 - **Agent library**: generic agents (`builder/library.py`; core in `src/agent_flow_studio/agents/`,
   extensions in `extensions/<name>/agents/`, local in `agents/`) copied into flows with an `origin`;
-  the editor shows changed-here / newer-in-library and can update, detach or save to the library.
+  the editor shows changed-here / newer-in-library and can update, detach or save to the library;
+  the library window (palette → Manage) edits, duplicates, moves and deletes agents.
 - **Flow templates** (New → "Start from", or `agent-flow-studio-flows new --template`):
-  `code-review`, `test-runner`, `fix-and-pr` (typed IO, graph mode); extensions can add templates.
+  `code-review`, `test-runner`, `fix-and-pr`, `ticket-triage` (typed IO, graph mode); extensions can
+  add templates.
 - **Local extensions** (`extensions/<name>/`, outside git) for domain tools/contracts/templates.
   `AFS_MOCK` only affects extension tools (the core never uses it).
 - Public example flow: `flows/repo-review` (repository review, read only, graph mode).
@@ -150,11 +113,12 @@ section "## Fluxo" → "## Flow", the validation API key `fluxo` → `flow_secti
 have English names. No YAML key, enum value, tool id or env var changed, so old flows still load.
 
 ## Next steps (backlog, in suggested order)
-1. [ ] Website/API actions, next steps: record the steps by clicking on the site; the assistant
+1. [ ] Run `ticket-triage` end to end with the model and a real connector (work machine), then the
+   other templates and a graph flow (check `tools=[]` per agent session, the router, parallel
+   sessions); tune the template prompts. Try the assistant's library tools in a real chat.
+2. [ ] Website/API actions, next steps: record the steps by clicking on the site; the assistant
    proposes actions for a connector (as proposals the user saves); a "guided" mode (the model
    browses read-only following instructions, URL allow list, screenshots in the audit).
-2. [ ] Run a graph flow and each template end to end with the real model (check `tools=[]` per
-   agent session, the router, parallel sessions) and tune the template prompts.
 3. [ ] Canvas: highlight followed / not followed edges from the `edge` events (today only in the
    trace).
 4. [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and Threads
@@ -165,12 +129,13 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
    "required") to the UI language.
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
-· editor polish · context menu · agent library (see the Log).
+· editor polish · context menu · agent library · assistant commands/history · connector actions
+and website connectors · local by default / extensions / public (see the Log).
 
 ## Getting started on a new machine
 ```powershell
 git clone <url> agent-flow-studio; cd agent-flow-studio
-python -m venv .venv; .\.venv\Scripts\python -m pip install -e ".[dev]"
+python -m venv .venv; .\.venv\Scripts\python -m pip install -e ".[dev,web]"   # web: optional
 cd editor; npm install; npm run build; cd ..
 .\.venv\Scripts\pytest
 .\.venv\Scripts\agent-flow-studio-editor
