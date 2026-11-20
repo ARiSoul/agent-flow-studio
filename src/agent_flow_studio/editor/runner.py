@@ -33,7 +33,7 @@ from claude_agent_sdk import (
     query,
 )
 
-from ..builder import load_flow
+from ..builder import expr, load_flow
 from ..builder.catalog import CONTRACTS
 from ..builder.compile import GATE_TOOL, CompiledFlow, load_graph
 from ..builder.spec import LEGACY_INPUT, FlowSpec
@@ -137,6 +137,16 @@ def _write_upload(rd: Path, name: str, f: Any, total: list[int]) -> dict[str, An
     return {"name": fname, "path": f"inputs/{name}/{fname}"}
 
 
+def input_visible(t: IOType, values: dict[str, Any]) -> bool:
+    """show_if on the values of the inputs before it (an expression that fails: shown)."""
+    if not t.show_if:
+        return True
+    try:
+        return expr.evaluate(t.show_if, {"input": values})
+    except expr.ExprError:
+        return True
+
+
 def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any], *,
                    partial: bool = False) -> dict[str, Any]:
     """Validates the typed flow inputs (writing uploaded files first). RunError 422 with
@@ -151,6 +161,9 @@ def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any], *,
     total = [0]
     for name, t in spec.flow_inputs().items():
         v = raw.get(name)
+        if not input_visible(t, values):  # hidden by show_if: no value, not required
+            values.pop(name, None)
+            continue
         if partial:
             if v in (None, "", []) and (name in values or t.default is None):
                 continue  # keep the saved value, if there is one

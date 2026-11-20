@@ -189,6 +189,25 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   useEffect(() => { onTrace(traceOf(events)); end.current?.scrollIntoView({ block: "nearest" }); }, [events, onTrace]);
   useEffect(() => () => onTrace({}), [onTrace]);
 
+  // inputs hidden by their show_if for the values typed so far (the server evaluates it)
+  const [hiddenIn, setHiddenIn] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const defs = spec.inputs ?? {};
+    if (!Object.values(defs).some((x) => x.show_if)) { setHiddenIn(new Set()); return; }
+    const cur: Record<string, unknown> = {};
+    for (const [n, x] of Object.entries(defs)) {
+      if (x.type === "file") continue;
+      const r = sendValue(x, values[n] ?? formValue(x, x.default));
+      if (r.value !== undefined) cur[n] = r.value;
+    }
+    const tm = setTimeout(() => {
+      fetch("/api/inputs/visible", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs: defs, values: cur }) })
+        .then((r) => r.json()).then((d: { hidden?: string[] }) => setHiddenIn(new Set(d.hidden ?? [])))
+        .catch(() => undefined);
+    }, 150);
+    return () => clearTimeout(tm);
+  }, [spec.inputs, values]);
   // new flow inputs (edited in the Inspector) get their default
   useEffect(() => {
     setValues((v) => {
@@ -260,6 +279,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     const errs: Record<string, string> = {};
     const out: Record<string, unknown> = {};
     if (typed && mode !== "agent") for (const [n, x] of Object.entries(spec.inputs ?? {})) {
+      if (hiddenIn.has(n)) continue;  // hidden by show_if: not sent
       const r = sendValue(x, values[n] ?? formValue(x, x.default));
       if (r.error) errs[n] = t("run.form.badJson");
       else if (r.value !== undefined) out[n] = r.value;
@@ -395,7 +415,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
                     .filter(([n, x]) => x.type !== "file" && n in saved!.inputs).map(([n, x]) => [n, formValue(x, saved!.inputs[n])])) }));
                 }}>{t("run.form.useSaved")}</button>}
             </summary>
-            {Object.entries(spec.inputs ?? {}).map(([n, x]) => (
+            {Object.entries(spec.inputs ?? {}).filter(([n]) => !hiddenIn.has(n)).map(([n, x]) => (
               <ValueField key={n} name={n} t={x} value={values[n] ?? formValue(x, x.default)} disabled={running}
                 error={fieldErr[n]} saved={saved?.inputs[n]}
                 onChange={(v) => { setValues((p) => ({ ...p, [n]: v })); setFieldErr(({ [n]: _, ...rest }) => rest); }} />

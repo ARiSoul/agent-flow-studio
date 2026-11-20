@@ -24,6 +24,10 @@ extensions/*
 agents/*
 !agents/README.md
 
+# Flows: local by default (they may name internal systems). Public examples are listed one by one.
+flows/*
+!flows/repo-review/
+
 # Flows: editor trash and backups
 flows/.trash/
 *.bak
@@ -32,3 +36,9 @@ flows/.trash/
 # Frontend
 editor/node_modules/
 src/agent_flow_studio/editor/static/
+
+# Saved assistant commands (editor; may hold internal instructions)
+assistant_commands.yaml
+
+# Words that must not go to the public repo (one per line; checked when a public flow is saved)
+private_terms.txt

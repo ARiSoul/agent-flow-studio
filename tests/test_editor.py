@@ -41,8 +41,8 @@ def test_catalog_and_list(client: TestClient):
     assert "artifacts.read_artifact" in {t["id"] for t in cat["tools"]}
     assert isinstance(cat["contracts"], dict)
     flows = client.get("/api/flows").json()
-    assert flows == [{"name": "pipeline", "title": "Example pipeline (tests)",
-                      "valid": True, "agents": 7, "gates": 6}]
+    assert flows == [{"name": "pipeline", "title": "Example pipeline (tests)", "valid": True,
+                      "location": "local", "public": False, "agents": 7, "gates": 6}]
 
 
 def test_get_flow_returns_prompts_and_flow_section(client: TestClient):
@@ -174,3 +174,26 @@ def test_secrets_never_expanded(client: TestClient, base: Path, monkeypatch):
     text = (base / "pipeline/flow.yaml").read_text(encoding="utf-8")
     assert "${EXT_TOKEN}" in text and "real-secret" not in text
     assert "real-secret" not in r.text
+
+
+def test_save_with_problems_only_when_forced_and_never_with_secrets(client: TestClient, base: Path):
+    spec = client.get("/api/flows/pipeline").json()["spec"]
+    before = (base / "pipeline" / "flow.yaml").read_text(encoding="utf-8")
+    half = {**spec, "agents": {**spec["agents"], "draft_agent": {"description": "unfinished",
+                                                                  "prompt": "todo"}}}
+    r = client.put("/api/flows/pipeline", json={"spec": half, "prompts": {}}, headers=H)
+    assert r.status_code == 422 and r.json()["saved"] is False  # not without asking
+    assert (base / "pipeline" / "flow.yaml").read_text(encoding="utf-8") == before
+    r = client.put("/api/flows/pipeline", json={"spec": half, "prompts": {}, "force": True}, headers=H)
+    assert r.status_code == 200 and r.json()["saved"] and r.json()["with_problems"]
+    text = (base / "pipeline" / "flow.yaml").read_text(encoding="utf-8")
+    assert text.startswith("# Flow: ") and "draft_agent" in text
+    again = client.get("/api/flows/pipeline").json()
+    assert "draft_agent" in again["spec"]["agents"] and again["ok"] is False  # opens with its problems
+    assert any(f["name"] == "pipeline" and not f["valid"] for f in client.get("/api/flows").json())
+
+    leak = {**half, "mcp_servers": {"crm": {"type": "stdio", "command": "npx", "tools": ["x"],
+                                            "env": {"TOKEN": "abc123literal"}}}}
+    r = client.put("/api/flows/pipeline", json={"spec": leak, "prompts": {}, "force": True}, headers=H)
+    assert r.status_code == 422 and r.json()["blocked_by_secret"] is True
+    assert "abc123literal" not in (base / "pipeline" / "flow.yaml").read_text(encoding="utf-8")

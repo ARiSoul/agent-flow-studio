@@ -26,6 +26,7 @@ export interface IOTypeRaw {
   accept?: string[];
   contract?: string | null;
   draft?: boolean;
+  show_if?: string | null;  // flow inputs: shown only when this expression on earlier inputs holds
 }
 
 /** An agent input: from a flow input (input.<x>) or an agent output (<agent>.<out>), or free. */
@@ -62,11 +63,36 @@ export interface LibraryAgent {
   id: string;
   title: string;
   source: string;  // "core", "local" or an extension name
+  location?: string;  // "public" (the built-in library), "local" or an extension
+  agent_yaml?: string;  // the definition as the library window edits it
+  prompt?: string;
   hash: string;
   description: string;
   icon?: string | null;
   agent: AgentRaw;  // prompt inline
 }
+
+/** A saved assistant command (GET /api/commands): a message plus instructions sent with it. */
+export interface SavedCommand {
+  id: string;
+  name: string;
+  text: string;
+  instructions: string;
+  favorite: boolean;
+}
+
+/** A saved assistant conversation (runs/chats/<flow>/<id>.json); items as the chat shows them. */
+export interface SavedChat {
+  id: string;
+  title: string;
+  session_id: string | null;
+  cost: number;
+  created: number;
+  updated: number;
+  items: Record<string, unknown>[];
+}
+
+export interface ChatSummary { id: string; title: string; created: number; updated: number; messages: number }
 
 /** State of an agent copied from the library (validation `origins`). */
 export interface OriginState {
@@ -170,6 +196,7 @@ export interface Catalog {
   models: string[];
   mock: boolean;
   connections: Record<string, { type: string; environment: string; description: string; access: string }>;
+  locations?: string[];  // where things can be kept: "local" and the loaded extensions
 }
 
 export interface FlowSummary {
@@ -179,6 +206,8 @@ export interface FlowSummary {
   agents?: number;
   gates?: number;
   error?: string;
+  location?: string;  // "local" (flows/) or an extension
+  public?: boolean;  // git would publish it (flows/ entries not ignored)
 }
 
 export interface TemplateParam {

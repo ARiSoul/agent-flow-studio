@@ -5,6 +5,7 @@ The guard hook makes sure each subagent uses only the connectors the flow assign
 import httpx
 from claude_agent_sdk import tool
 
+from ..connections import actions
 from ..connections.client import WRITE_METHODS, ConnectorError, get, write
 from ..connections.store import ConnectorConfigError
 from .common import err, ok
@@ -47,5 +48,24 @@ async def http_write(args):
         r = await write(args["connection"], args["method"], args["path"], args.get("body"),
                         args.get("query"))
     except (ConnectorError, ConnectorConfigError, httpx.HTTPError) as e:
+        return err(f"{type(e).__name__}: {e}")
+    return ok(r)
+
+
+@tool(
+    "run_action",
+    "Runs a named action of a connector (the actions listed in your instructions, with their "
+    "parameters). The studio checks the values and builds the request; write actions follow the "
+    "flow autonomy (they may wait for approval or be denied).",
+    {"type": "object", "properties": {
+        "connection": {"type": "string"},
+        "action": {"type": "string"},
+        "params": {"type": "object"},
+    }, "required": ["connection", "action"]},
+)
+async def run_action(args):
+    try:
+        r = await actions.run(args["connection"], args["action"], args.get("params"))
+    except (actions.ActionError, ConnectorError, ConnectorConfigError, httpx.HTTPError) as e:
         return err(f"{type(e).__name__}: {e}")
     return ok(r)

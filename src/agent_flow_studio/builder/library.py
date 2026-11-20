@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,9 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from ..extensions import LOADED
+from ..extensions import LOADED, extension_agent_dirs, extension_root
+from ..publish import PUBLIC, check_public
+from .catalog import BUILTIN_TOOLS
 from .spec import SLUG, AgentSpec
 
 CORE_DIR = Path(__file__).resolve().parent.parent / "agents"
@@ -54,7 +57,24 @@ def local_dir() -> Path:
 
 
 def agent_dirs() -> list[tuple[str, Path]]:
-    return [("core", CORE_DIR), *LOADED.agent_dirs, ("local", local_dir())]
+    return [("core", CORE_DIR), *extension_agent_dirs(), ("local", local_dir())]
+
+
+def _source(location: str) -> str:
+    """The "public" location is the built-in library (source "core")."""
+    return "core" if location == PUBLIC else location
+
+
+def save_dir(location: str) -> Path:
+    """Where "Save to library" writes: the local library, an extension's agents/ folder, or the
+    built-in library in the package (public: git publishes it)."""
+    if location == "local":
+        return local_dir()
+    if location == PUBLIC:
+        return CORE_DIR
+    if location not in LOADED.names:
+        raise LibraryError(f"unknown location {location!r} (local, public or a loaded extension)")
+    return extension_root(location) / "agents"
 
 
 def _norm_prompt(text: str) -> str:
@@ -101,6 +121,9 @@ def _parse(agent_id: str, raw: Any, prompt: str, where: str) -> AgentSpec:
         raise LibraryError(f"{where}: flow-only field(s) {sorted(bad)}")
     if not _norm_prompt(prompt):
         raise LibraryError(f"{where}: prompt.md is empty")
+    unknown = [t for t in raw.get("tools") or [] if t not in BUILTIN_TOOLS]
+    if unknown:  # external MCP tools belong to a flow (approved there), not to the library
+        raise LibraryError(f"{where}: tool(s) not in the catalog: {', '.join(map(str, unknown))}")
     try:
         return AgentSpec.model_validate({k: v for k, v in raw.items() if k != "title"}
                                         | {"prompt": prompt})
@@ -146,9 +169,57 @@ def agent_data(a: LibraryAgent) -> dict[str, Any]:
 def agents_dict() -> list[dict[str, Any]]:
     """For the editor and the CLI."""
     return [{"id": a.id, "title": a.title, "source": a.source, "hash": a.hash,
+             "location": PUBLIC if a.source == "core" else a.source,
              "description": " ".join(a.spec.description.split()), "icon": a.spec.icon,
-             "agent": agent_data(a)}
+             "agent": agent_data(a), "agent_yaml": agent_yaml(a), "prompt": a.prompt}
             for a in list_agents().values()]
+
+
+def _unique(used: set[str], base: str) -> str:
+    if base not in used:
+        return base
+    return next(f"{base}_{i}" for i in range(2, 1000) if f"{base}_{i}" not in used)
+
+
+def copy_into(spec: dict[str, Any], prompts: dict[str, str], a: LibraryAgent,
+              name: str | None = None) -> str:
+    """Copies a library agent into a raw flow (prompt in prompts/<name>.md, with an origin).
+    Returns the node name: `name`, or the library id (made unique) when not given."""
+    used = set(spec.get("agents") or {}) | set(spec.get("gates") or {}) | set(
+        spec.get("mcp_servers") or {})
+    if name is not None:
+        if not AGENT_ID.fullmatch(name):
+            raise LibraryError(f"invalid node name {name!r} (use {SLUG})")
+        if name in used:
+            raise LibraryError(f"a node {name!r} already exists")
+    node = name or _unique(used, a.id)
+    files = {p.removeprefix("prompts/").removesuffix(".md") for p in prompts}
+    path = f"prompts/{_unique(files, node)}.md"
+    prompts[path] = a.prompt
+    data = {k: v for k, v in agent_data(a).items() if k != "prompt"}
+    spec.setdefault("agents", {})[node] = data | {"prompt_file": path,
+                                                  "origin": {"agent": a.id, "hash": a.hash}}
+    return node
+
+
+def refresh_copy(spec: dict[str, Any], prompts: dict[str, str], name: str, a: LibraryAgent) -> None:
+    """Replaces a copied agent with the current library version, keeping what belongs to the flow:
+    where each input comes from, join, max_runs and the icon (and the prompt file's path)."""
+    old = (spec.get("agents") or {}).get(name)
+    if not isinstance(old, dict):
+        raise LibraryError(f"agent {name!r} does not exist")
+    new = {k: v for k, v in agent_data(a).items() if k != "prompt"}
+    path = old.get("prompt_file") or f"prompts/{name}.md"
+    prompts[path] = a.prompt
+    old_inputs = old.get("inputs") or {}
+    for k, i in (new.get("inputs") or {}).items():
+        src = (old_inputs.get(k) or {}).get("from")
+        if src:
+            i["from"] = src
+    for k in ("join", "max_runs", "icon"):
+        if old.get(k) is not None:
+            new[k] = old[k]
+    spec["agents"][name] = new | {"prompt_file": path, "origin": {"agent": a.id, "hash": a.hash}}
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -158,10 +229,22 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def save_local(agent_id: str, title: str, raw: dict[str, Any], prompt: str,
-               overwrite: bool = False) -> tuple[LibraryAgent, list[str]]:
-    """Saves an agent (from a flow) to the local library. Core and extension agents cannot be
-    replaced; an existing local agent only with `overwrite`."""
+@dataclass(frozen=True)
+class Checked:
+    """A library agent checked but not saved (see `check`)."""
+    id: str
+    title: str
+    spec: AgentSpec
+    data: dict[str, Any]  # library form (raw), without the prompt
+    prompt: str
+    notes: list[str]
+    exists: bool  # a local library agent with this id exists (saving replaces it)
+
+
+def check(agent_id: str, title: str, raw: dict[str, Any], prompt: str,
+          location: str = "local") -> Checked:
+    """Everything `save_local` checks, without writing: id, title, prompt, the agent itself, and
+    that the id is not a core or extension agent."""
     if not AGENT_ID.fullmatch(agent_id):
         raise LibraryError(f"invalid library agent id {agent_id!r} (use {SLUG})")
     title = title.strip() or agent_id
@@ -170,13 +253,26 @@ def save_local(agent_id: str, title: str, raw: dict[str, Any], prompt: str,
     if len(prompt) > MAX_PROMPT:
         raise LibraryError("prompt too long")
     existing = list_agents().get(agent_id)
-    if existing and existing.source != "local":
-        raise LibraryError(f"{agent_id!r} is a {existing.source} library agent; choose another id")
-    if existing and not overwrite:
-        raise LibraryError(f"library agent {agent_id!r} already exists")
+    save_dir(location)  # a known location
+    if existing and existing.source != _source(location):
+        where = "public (built-in)" if existing.source == "core" else existing.source
+        raise LibraryError(f"{agent_id!r} is a {where} library agent; choose another id")
     data, notes = _clean(raw)
     spec = _parse(agent_id, data, prompt, f"library agent {agent_id!r}")
-    folder = local_dir() / agent_id
+    return Checked(agent_id, title, spec, data, prompt, notes, existing is not None)
+
+
+def save_local(agent_id: str, title: str, raw: dict[str, Any], prompt: str,
+               overwrite: bool = False, location: str = "local") -> tuple[LibraryAgent, list[str]]:
+    """Saves an agent (from a flow) to the local library. Core and extension agents cannot be
+    replaced; an existing local agent only with `overwrite`."""
+    c = check(agent_id, title, raw, prompt, location)
+    if c.exists and not overwrite:
+        raise LibraryError(f"library agent {agent_id!r} already exists")
+    title, spec, notes = c.title, c.spec, c.notes
+    if location == PUBLIC:  # git publishes it: no private words in it
+        check_public("\n".join([agent_id, title, json.dumps(c.data, ensure_ascii=False), prompt]))
+    folder = save_dir(location) / agent_id
     body = {"title": title, **spec.model_dump(mode="json", by_alias=True, exclude_defaults=True,
                                               exclude={"prompt", "prompt_file"})}
     header = (f"# Library agent: {title.replace(chr(10), ' ')}\n"
@@ -184,7 +280,41 @@ def save_local(agent_id: str, title: str, raw: dict[str, Any], prompt: str,
     _atomic_write(folder / "agent.yaml",
                   header + yaml.safe_dump(body, allow_unicode=True, sort_keys=False, width=100))
     _atomic_write(folder / "prompt.md", _norm_prompt(prompt) + "\n")
-    return _load_one("local", folder), notes
+    return _load_one(_source(location), folder), notes
+
+
+def delete_agent(agent_id: str) -> str:
+    """Deletes a library agent (its folder); returns where it was."""
+    a = list_agents().get(agent_id)
+    if a is None:
+        raise LibraryError(f"library agent {agent_id!r} does not exist")
+    shutil.rmtree(a.folder)
+    return a.source
+
+
+def move_agent(agent_id: str, location: str) -> LibraryAgent:
+    """Moves a library agent between this machine, an extension and public (the built-in one)."""
+    a = list_agents().get(agent_id)
+    if a is None:
+        raise LibraryError(f"library agent {agent_id!r} does not exist")
+    if _source(location) == a.source:
+        return a
+    target = save_dir(location) / agent_id
+    if target.exists():
+        raise LibraryError(f"{target} already exists")
+    if location == PUBLIC:
+        check_public("\n".join(f.read_text(encoding="utf-8") for f in sorted(a.folder.glob("*"))
+                               if f.is_file()))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(a.folder), target)
+    return _load_one(_source(location), target)
+
+
+def agent_yaml(a: LibraryAgent) -> str:
+    """The definition as the library window edits it (everything but the title and the prompt)."""
+    data = a.spec.model_dump(mode="json", by_alias=True, exclude_defaults=True,
+                             exclude={"prompt", "prompt_file"})
+    return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=100)
 
 
 def origin_status(raw: dict[str, Any], prompts: dict[str, str]) -> dict[str, dict[str, Any]]:

@@ -31,9 +31,14 @@ const P: Record<string, string[]> = {
   hand: ["M8 11V5a1.5 1.5 0 0 1 3 0v5", "M11 10V4a1.5 1.5 0 0 1 3 0v6", "M14 10V5.5a1.5 1.5 0 0 1 3 0V14",
     "M8 11l-1.5-1.5a1.5 1.5 0 0 0-2.1 2.1L9 17c1.2 1.6 2.6 3 5 3h.5a4.5 4.5 0 0 0 4.5-4.5V14"],
   stop: ["M8 3h8l5 5v8l-5 5H8l-5-5V8z", "M9 9l6 6", "M15 9l-6 6"],
+  // editor layout (toolbar), not agent icons
+  panelLeft: ["M3 4h18v16H3z", "M9 4v16"],
+  panelRight: ["M3 4h18v16H3z", "M15 4v16"],
+  panelBottom: ["M3 4h18v16H3z", "M3 14h18"],
 };
 
-export const ICON_IDS = Object.keys(P).filter((k) => k !== "hand" && k !== "stop");
+const NOT_AGENT = new Set(["hand", "stop", "panelLeft", "panelRight", "panelBottom"]);
+export const ICON_IDS = Object.keys(P).filter((k) => !NOT_AGENT.has(k));
 
 export function Icon({ id, size = 18, className }: { id: string; size?: number; className?: string }) {
   const paths = P[id] ?? P.robot;

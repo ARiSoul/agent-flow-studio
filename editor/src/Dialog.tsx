@@ -11,6 +11,10 @@ export interface FieldOpts {
   key: string; label: string; value?: string; placeholder?: string; hint?: string;
   /** A select instead of a text input. */
   options?: { value: string; label: string }[];
+  /** A multi-line text area (Enter adds a line; Ctrl+Enter accepts the dialog). */
+  multiline?: boolean;
+  /** A checkbox: the value is "1" when ticked, "" otherwise. */
+  checkbox?: boolean;
   /** Returns an error text, or null when the value is valid. */
   validate?: (v: string) => string | null;
 }
@@ -85,15 +89,28 @@ function DialogBox({ open }: { open: Open }) {
           // stops here: an Escape must not also close the window behind (e.g. Connectors)
           e.stopPropagation();
           if (e.key === "Escape") { e.preventDefault(); cancel(); }
-          if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); accept(); }
+          const inArea = e.target instanceof HTMLTextAreaElement;
+          if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement) && (!inArea || e.ctrlKey || e.metaKey)) {
+            e.preventDefault(); accept();
+          }
           if (e.key === "Tab") trapFocus(e, box.current);
         }}>
         <h2 id="dialog-title" className="dialog-title">{title}</h2>
         {message && <p className="dialog-message">{message}</p>}
-        {fields.map((f) => (
+        {fields.map((f) => f.checkbox ? (
+          <label key={f.key} className="check">
+            <input type="checkbox" checked={values[f.key] === "1"}
+              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.checked ? "1" : "" }))} />
+            {f.label}
+          </label>
+        ) : (
           <label key={f.key} className="field">
             <span className="field-label">{f.label}</span>
-            {f.options
+            {f.multiline
+              ? <textarea rows={f.key === "instructions" ? 7 : 3} value={values[f.key] ?? ""} placeholder={f.placeholder}
+                className={touched && errors[f.key] ? "bad" : ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} />
+              : f.options
               ? <select value={values[f.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}>
                 {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
@@ -115,7 +132,7 @@ function DialogBox({ open }: { open: Open }) {
 }
 
 function trapFocus(e: KeyboardEvent, box: HTMLElement | null) {
-  const items = [...(box?.querySelectorAll<HTMLElement>("input, select, button") ?? [])];
+  const items = [...(box?.querySelectorAll<HTMLElement>("input, select, textarea, button") ?? [])];
   if (!items.length) return;
   const first = items[0], last = items[items.length - 1];
   if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }

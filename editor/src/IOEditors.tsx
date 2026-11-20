@@ -131,7 +131,13 @@ export function IOListEditor({ root, doc, catalog, update }: { root: string; doc
                 <Field label={t("io.default")}>
                   <DefaultInput t={it} set={(v) => setOpt(name, "default", v as IOTypeRaw["default"])} />
                 </Field>)}
+              {flow && (
+                <Field label={t("io.showIf")} hint={t("io.showIfHint")}>
+                  <input className="mono" value={it.show_if ?? ""} placeholder={'input.source == "platform"'}
+                    onChange={(e) => setOpt(name, "show_if", e.target.value || null)} />
+                </Field>)}
             </details>
+            {flow && it.show_if && <span className="muted small">{t("io.shownWhen", { expr: it.show_if })}</span>}
           </div>
         );
       })}

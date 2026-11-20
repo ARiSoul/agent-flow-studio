@@ -102,7 +102,7 @@ def test_assist_endpoint_streams_ndjson(tmp_path: Path, monkeypatch):
     before = (tmp_path / "pipeline/flow.yaml").read_text(encoding="utf-8")
     seen = {}
 
-    async def fake_chat(message, flow, spec, prompts, session_id=None, lang=None):
+    async def fake_chat(message, flow, spec, prompts, session_id=None, lang=None, command=None):
         seen.update(message=message, flow=flow, n_prompts=len(prompts), session=session_id,
                     lang=lang)
         yield {"type": "text", "text": "Hello"}
@@ -169,3 +169,71 @@ def test_rename_updates_from_refs_and_expressions(draft: Draft):
     edge = next(e for e in draft.spec["edges"] if e["from"] == "sorting"
                 and e["to"] == "diagnostician")
     assert edge["if"] == 'sorting.severity == "high" and not xtriage.a'
+
+
+def test_library_tools(draft: Draft):
+    ok, text = call(draft, "view_library")
+    assert ok and "summarizer" in text and "Summarizer" in text and not draft.changed
+    ok, text = call(draft, "view_library", id="summarizer")
+    assert ok and "Summarize" in text  # the prompt
+    assert not call(draft, "view_library", id="nope")[0]
+
+    ok, text = call(draft, "add_library_agent", id="summarizer")
+    assert ok and "copied from the library agent summarizer" in text and draft.changed
+    a = draft.spec["agents"]["summarizer"]
+    assert a["origin"]["agent"] == "summarizer" and a["prompt_file"] == "prompts/summarizer.md"
+    assert draft.prompts["prompts/summarizer.md"].startswith("Summarize")
+    assert call(draft, "add_library_agent", id="summarizer")[0]  # a second copy: summarizer_2
+    assert "summarizer_2" in draft.spec["agents"]
+    assert not call(draft, "add_library_agent", id="summarizer", name="triage")[0]  # name taken
+
+    # tuned here, then updated from the library: the input link and icon stay, the rest returns
+    call(draft, "set_agent", name="summarizer", model="haiku", icon="chat", prompt="Mine.",
+         inputs={"text": {"from": "triage.summary"}})
+    assert _origins(draft)["summarizer"]["changed"] is True
+    ok, _ = call(draft, "update_from_library", name="summarizer")
+    a = draft.spec["agents"]["summarizer"]
+    assert ok and "model" not in a and a["icon"] == "chat"
+    assert a["inputs"]["text"]["from"] == "triage.summary"
+    assert draft.prompts["prompts/summarizer.md"].startswith("Summarize")
+    assert _origins(draft)["summarizer"]["changed"] is False
+    assert not call(draft, "update_from_library", name="triage")[0]  # not from the library
+
+
+def _origins(d: Draft) -> dict:
+    from agent_flow_studio.editor.validation import _validate
+    return _validate(d.spec, d.prompts)["origins"]
+
+
+def test_propose_library_agent_creates_and_edits_without_saving(draft: Draft, tmp_path):
+    from agent_flow_studio.builder import library
+
+    # new, from scratch: checked, not saved, not a flow change
+    ok, text = call(draft, "propose_library_agent", id="ticket_triage", title="Ticket triage",
+                    description="Classifies a ticket.", prompt="Classify the ticket.",
+                    inputs={"ticket": {"type": "markdown"}},
+                    outputs={"severity": {"type": "choice", "options": ["low", "high"]}})
+    assert ok and "not saved yet" in text and not draft.changed
+    p = draft.library_proposals["ticket_triage"]
+    assert p["exists"] is False and p["prompt"] == "Classify the ticket."
+    assert not (tmp_path / "agents" / "ticket_triage").exists()
+
+    # from an agent of the flow: flow-only fields are dropped
+    ok, _ = call(draft, "propose_library_agent", id="my_triage", from_agent="triage")
+    assert ok and "prompt_file" not in draft.library_proposals["my_triage"]["agent"]
+    assert draft.library_proposals["my_triage"]["prompt"] == draft.prompts["prompts/triage.md"]
+
+    # edit a local library agent: same id, marked as replacing it
+    library.save_local("notes", "Notes", {"description": "Takes notes."}, "Write notes.")
+    ok, _ = call(draft, "propose_library_agent", id="notes", from_library="notes",
+                 description="Takes short notes.")
+    p = draft.library_proposals["notes"]
+    assert ok and p["exists"] is True and p["title"] == "Notes"
+    assert p["agent"]["description"] == "Takes short notes." and p["prompt"].strip() == "Write notes."
+
+    # built-in agents cannot be changed; invalid agents are reported
+    assert "(built-in) library agent" in call(draft, "propose_library_agent", id="summarizer",
+                                        from_library="summarizer", model="haiku")[1]
+    assert "not in the catalog" in call(draft, "propose_library_agent", id="bad", description="x",
+                                        prompt="p", tools=["crm.list_items"])[1]
+    assert not call(draft, "propose_library_agent", id="empty", description="x")[0]  # no prompt

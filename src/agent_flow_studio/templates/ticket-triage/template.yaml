@@ -1,0 +1,17 @@
+title: Ticket triage (text, URL or ticket number)
+description: |
+  Takes a ticket as pasted text, as a URL of the ticket platform, or as a ticket number, and
+  triages it (summary, category, priority, next steps) as a draft for human review. For a URL or
+  a number, an agent reads the ticket through a connector action (read only); from then on the
+  flow is the same whatever the source. The connector needs a read action that takes the ticket
+  number, e.g. get_ticket(number) on an API connector or open_ticket(number) on a website one.
+params:
+  connector:
+    label: Ticket platform connector
+    kind: connector
+    hint: A connector with a read action that opens a ticket by its number (Connectors → Actions).
+  ticket_action:
+    label: Action that reads a ticket
+    kind: text
+    default: get_ticket
+    hint: The name of that action on the connector; it must take a parameter called number.

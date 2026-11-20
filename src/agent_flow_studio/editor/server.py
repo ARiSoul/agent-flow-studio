@@ -9,10 +9,12 @@ The one GET that changes state is the OAuth callback, protected by its single-us
 from __future__ import annotations
 
 import argparse
+import asyncio
 import html
 import json
 import re
 import shutil
+import subprocess
 import time
 import webbrowser
 from pathlib import Path
@@ -27,22 +29,34 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..builder.catalog import BUILTIN_SERVERS, BUILTIN_TOOLS, CONTRACTS
-from ..builder.compile import FlowError, flows_dir
-from ..builder.library import LibraryError, agents_dict, save_local
+from ..builder.compile import FlowError, find_flow, flow_locations, flows_dir
+from ..builder.library import LibraryError, agents_dict, delete_agent, move_agent, save_local
 from ..builder.spec import SLUG, FlowSpec
 from ..builder.templates import TemplateError, templates_dict
 from ..builder.templates import render as render_template
+from ..builder.types import IOType
 from ..config import settings
 from ..connections import client as conn_client
 from ..connections import oauth as conn_oauth
 from ..connections import store as conn_store
+from ..connections import web as conn_web
 from ..connections.model import SLUG as CONN_SLUG
 from ..connections.model import Connection, types_meta
+from ..extensions import LOADED
+from ..publish import (
+    PUBLIC,
+    PrivateTermsError,
+    check_public,
+    set_flow_public,
+    terms_in,
+)
 from ..tools import io as io_tool
 from . import assistant
-from .runner import RunError, Runner, list_artifacts, read_artifact_text
+from . import chats as assist_chats
+from . import commands as assist_commands
+from .runner import RunError, Runner, input_visible, list_artifacts, read_artifact_text
 from .validation import _atomic_write, _public, _structured, _validate
-from .yaml_io import dump_flow, spec_to_data
+from .yaml_io import dump_flow, dump_raw, spec_to_data
 
 STATIC = Path(__file__).parent / "static"
 FLOW_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
@@ -51,11 +65,14 @@ MAX_PROMPT = 100_000
 MODELS = ["inherit", "sonnet", "opus", "haiku"]
 CSRF_HEADER = "x-flow-editor"
 SLUG_RE = re.compile(SLUG)
+# validation errors about secrets written in the flow: a flow is never saved with one of these
+SECRET_ERROR = re.compile(r"secrets? (stay|go) out|looks like a secret|\$\{VAR\}", re.IGNORECASE)
 
 
 class FlowBody(BaseModel):
     spec: dict[str, Any]
     prompts: dict[str, str] = Field(default_factory=dict)
+    force: bool = False  # save even with problems (the person confirmed); secrets never
 
 
 class AssistBody(BaseModel):
@@ -65,6 +82,7 @@ class AssistBody(BaseModel):
     prompts: dict[str, str] = Field(default_factory=dict)
     session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9-]{1,80}$")
     lang: str | None = Field(default=None, max_length=10)  # "pt" | "en" | "es"; else English
+    command: str | None = Field(default=None, pattern=r"^[a-z0-9]{6,32}$")  # saved command used
 
 
 class RunBody(BaseModel):
@@ -113,14 +131,17 @@ class SecretBody(BaseModel):
 class LibraryBody(BaseModel):
     id: str = Field(min_length=1, max_length=40)
     title: str = Field(default="", max_length=80)
-    agent: dict[str, Any]
+    agent: dict[str, Any] | None = None
+    agent_yaml: str | None = Field(default=None, max_length=50_000)  # or the definition as YAML
     prompt: str = Field(max_length=MAX_PROMPT)
     overwrite: bool = False
+    location: str = Field(default="local", max_length=40)  # local library or an extension
 
 
 class NewFlow(BaseModel):
     name: str
     title: str = Field(min_length=1, max_length=120)
+    location: str = Field(default="local", max_length=40)  # flows/ or an extension's flows/
     copy_from: str | None = None
     template: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,39}$")
     params: dict[str, str] = Field(default_factory=dict)
@@ -141,12 +162,52 @@ def _blank(name: str, title: str) -> dict[str, Any]:
 
 # --- files ---------------------------------------------------------------------------------------
 def _flow_dir(base: Path, name: str, must_exist: bool = True) -> Path:
+    """An existing flow's folder (in flows/ or in an extension), or base/name for a new one."""
     if not FLOW_NAME.fullmatch(name):
         raise HTTPException(400, "invalid flow name")
-    d = base / name
-    if must_exist and not (d / "flow.yaml").is_file():
+    found = find_flow(name, base)
+    if found:
+        return found[1]
+    if must_exist:
         raise HTTPException(404, f"flow {name!r} does not exist")
-    return d
+    return base / name
+
+
+def _location_dir(base: Path, location: str) -> Path:
+    if location == PUBLIC:  # flows/ too, with an exception in .gitignore
+        return base
+    for loc, d in flow_locations(base):
+        if loc == location:
+            return d
+    raise HTTPException(400, f"unknown location {location!r} (local, public or a loaded "
+                             "extension)")
+
+
+def _flow_place(base: Path, name: str) -> str:
+    """local · public (git publishes it) · an extension's name."""
+    found = find_flow(name, base)
+    if found is None:
+        raise HTTPException(404, f"flow {name!r} does not exist")
+    loc, d = found
+    return PUBLIC if loc == "local" and _in_public_repo(d / "flow.yaml") else loc
+
+
+def _flow_text(d: Path) -> str:
+    """Everything of a flow that would be published (flow.yaml and its prompts)."""
+    parts = [(d / "flow.yaml").read_text(encoding="utf-8")] if (d / "flow.yaml").is_file() else []
+    return "\n".join([*parts, *_disk_prompts(d).values()])
+
+
+def _in_public_repo(path: Path) -> bool:
+    """True when the path is inside this git repository and git would commit it (not ignored).
+    Extensions are their own (private) places, so only local paths are checked."""
+    probe = path if path.exists() else path.parent
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", str(path)], cwd=str(probe if probe.is_dir()
+                           else probe.parent), capture_output=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 1  # 0 = ignored, 128 = not a git repository
 
 
 def _disk_prompts(d: Path) -> dict[str, str]:
@@ -163,6 +224,18 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _actions_yaml(c: Connection) -> str:
+    data = {k: a.model_dump(mode="json", exclude_defaults=True) for k, a in c.actions.items()}
+    return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=100) if data else ""
+
+
+def _audit_event(event: str, **fields: Any) -> None:
+    """A line in runs/audit.jsonl for a change made in the editor (names and sizes, no content)."""
+    settings.runs_dir.mkdir(parents=True, exist_ok=True)
+    with (settings.runs_dir / "audit.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": time.time(), "event": event, **fields}, ensure_ascii=False) + "\n")
 
 
 def _check_prompts(prompts: dict[str, str]) -> None:
@@ -207,6 +280,8 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             "models": MODELS,
             "mock": settings.mock,
             "connections": _conn_summary(),
+            # where flows, library agents and connectors can be kept: this machine or an extension
+            "locations": ["local", *LOADED.names, PUBLIC],
         }
 
     def _conns() -> dict[str, Connection]:
@@ -221,7 +296,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         except conn_store.ConnectorConfigError:
             return {}
         return {n: {"type": c.type, "environment": c.environment, "description": c.description,
-                    "access": c.access}
+                    "access": c.access, "has_instructions": bool(c.instructions.strip())}
                 for n, c in conns.items()}
 
     def _conn_name(name: str) -> str:
@@ -239,9 +314,52 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         conns = _conns()
         return {**types_meta(), "file": str(conn_store.connections_file()),
                 "oauth_redirect_uri": _redirect_uri(request),
+                "locations": ["local", *LOADED.names, PUBLIC],
                 "connections": {n: c.model_dump(mode="json") | {
+                    "location": conn_store.location(n),
+                    "actions_yaml": _actions_yaml(c),
+                    "web_session": ({"profile": conn_web.has_profile(n),
+                                     "signing_in": n in signing_in} if c.type == "website" else None),
                     "secret": conn_store.secret_status(n, c),
                     "oauth": conn_store.oauth_status(n, c)} for n, c in conns.items()}}
+
+    # --- website connectors: the person signs in in a browser window -----------------------------
+    signing_in: dict[str, asyncio.Task[Any]] = {}
+
+    def _website(name: str) -> Connection:
+        c = _conns().get(_conn_name(name))
+        if c is None:
+            raise HTTPException(404, "connector does not exist")
+        if c.type != "website":
+            raise HTTPException(400, "not a website connector")
+        return c
+
+    @app.post("/api/connections/{name}/browser/sign-in", dependencies=[Depends(csrf)])
+    async def browser_sign_in(name: str) -> dict[str, Any]:
+        """Opens a visible browser window on the site's login page; returns at once. The person
+        signs in there and closes the window; the session stays on this machine."""
+        c = _website(name)
+        if name in signing_in:
+            return {"signing_in": True}
+        try:
+            conn_web._playwright()
+        except conn_web.WebError as e:
+            raise HTTPException(400, str(e)) from e
+
+        async def run() -> None:
+            try:
+                await conn_web.sign_in(name, c)
+            finally:
+                signing_in.pop(name, None)
+
+        signing_in[name] = asyncio.create_task(run())
+        return {"signing_in": True}
+
+    @app.delete("/api/connections/{name}/browser", dependencies=[Depends(csrf)])
+    def browser_sign_out(name: str) -> dict[str, Any]:
+        _website(name)
+        conn_web.forget_session(name)
+        return {"profile": False}
 
     # --- sign-in on a page (OAuth 2 + PKCE) ------------------------------------------------------
     @app.post("/api/connections/{name}/oauth/start", dependencies=[Depends(csrf)])
@@ -286,6 +404,18 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         conns = _conns()
         old = conns.get(_conn_name(name))
         body.pop("secret", None)
+        loc = body.pop("location", None)  # where to keep it: local, an extension or public
+        if loc is not None and loc not in ("local", *LOADED.names, PUBLIC):
+            raise HTTPException(400, f"unknown location {loc!r}")
+        if "actions_yaml" in body:  # the editor edits the actions as YAML text
+            text = str(body.pop("actions_yaml") or "")
+            try:
+                parsed = yaml.safe_load(text) if text.strip() else {}
+            except yaml.YAMLError as e:
+                raise HTTPException(422, f"actions: invalid YAML: {e}") from e
+            if not isinstance(parsed, dict):
+                raise HTTPException(422, "actions: a mapping of action name → definition")
+            body["actions"] = parsed
         if old:  # secret references do not come from the UI: keep them
             body["secrets"] = dict(old.secrets)
         else:
@@ -294,7 +424,21 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             conns[name] = Connection.model_validate(body)
         except ValidationError as e:
             raise HTTPException(422, _structured(e, {})) from e
-        conn_store.save(conns)
+        if (loc or conn_store.location(name)) == PUBLIC:  # git publishes it: no private words
+            try:
+                check_public(name + "\n" + conns[name].model_dump_json())
+            except PrivateTermsError as e:
+                raise HTTPException(409, {"private_terms": e.terms}) from e
+        conn_store.save(conns, moves={name: loc} if loc else None)
+        if (old.instructions if old else "") != conns[name].instructions:
+            _audit_event("connector_instructions_changed", connector=name,
+                         chars=len(conns[name].instructions))  # never the text itself
+        new = conns[name]
+        if (old.actions if old else {}) != new.actions or \
+                (old.actions_only if old else False) != new.actions_only:
+            _audit_event("connector_actions_changed", connector=name,
+                         actions={k: a.access for k, a in new.actions.items()},
+                         actions_only=new.actions_only)  # names and access only
         return {"saved": name, "secret": conn_store.secret_status(name, conns[name])}
 
     @app.put("/api/connections/{name}/secret", dependencies=[Depends(csrf)])
@@ -334,11 +478,17 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     @app.get("/api/flows")
     def list_all() -> list[dict[str, Any]]:
         out = []
-        for f in sorted(base.glob("*/flow.yaml")):
+        seen: set[str] = set()
+        files = [(loc, f) for loc, d in flow_locations(base) for f in sorted(d.glob("*/flow.yaml"))]
+        for loc, f in files:
             name = f.parent.name
-            if not FLOW_NAME.fullmatch(name):
+            if not FLOW_NAME.fullmatch(name) or name in seen:
                 continue
-            item: dict[str, Any] = {"name": name, "title": name, "valid": False}
+            seen.add(name)
+            # where it lives, and whether git would publish it (only flows/ in this repository)
+            public = loc == "local" and _in_public_repo(f)
+            item: dict[str, Any] = {"name": name, "title": name, "valid": False,
+                                    "location": PUBLIC if public else loc, "public": public}
             try:
                 raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
                 item["title"] = str(raw.get("title") or name)
@@ -359,7 +509,9 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         if not isinstance(raw, dict):
             raise HTTPException(422, "flow.yaml must be a mapping")
         prompts = _disk_prompts(d)
-        return {"spec": raw, "prompts": prompts, **_public(_validate(raw, prompts))}
+        place = _flow_place(base, name)
+        return {"spec": raw, "prompts": prompts, "location": place, "public": place == PUBLIC,
+                **_public(_validate(raw, prompts))}
 
     @app.post("/api/flows/{name}/validate")
     def validate(name: str, body: FlowBody) -> dict[str, Any]:
@@ -373,18 +525,33 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         _check_prompts(body.prompts)
         if body.spec.get("name") != name:
             raise HTTPException(400, "the flow name cannot change (duplicate it to rename)")
+        # a flow that git publishes never names the private terms (move it to this machine first)
+        if _in_public_repo(d / "flow.yaml"):
+            found = terms_in(json.dumps(body.spec, ensure_ascii=False) + "\n"
+                             + "\n".join(body.prompts.values()))
+            if found:
+                return JSONResponse({"saved": False, "private_terms": found}, status_code=409)
         disk = _disk_prompts(d)
         result = _validate(body.spec, {**disk, **body.prompts})
         if not result["ok"]:
-            return JSONResponse(_public(result), status_code=422)
+            # a literal secret is never written, even when the person asks to save anyway
+            secret = [e for e in result["errors"] if SECRET_ERROR.search(e["msg"])]
+            if not body.force or secret:
+                return JSONResponse(_public(result) | {"saved": False,
+                                                       "blocked_by_secret": bool(secret)},
+                                    status_code=422)
         for k, v in body.prompts.items():
             if disk.get(k) != v:
                 _atomic_write(d / k, v)
         flow = d / "flow.yaml"
         shutil.copyfile(flow, d / "flow.yaml.bak")
-        _atomic_write(flow, dump_flow(result["spec"]))
-        return JSONResponse(_public(result) | {"saved": True,
-                                               "spec": spec_to_data(result["spec"])})
+        if result["ok"]:
+            _atomic_write(flow, dump_flow(result["spec"]))
+            return JSONResponse(_public(result) | {"saved": True,
+                                                   "spec": spec_to_data(result["spec"])})
+        _atomic_write(flow, dump_raw(body.spec, name))  # with problems: as it is
+        return JSONResponse(_public(result) | {"saved": True, "with_problems": True,
+                                               "spec": body.spec})
 
     @app.post("/api/assist", dependencies=[Depends(csrf)])
     def assist(body: AssistBody) -> StreamingResponse:
@@ -392,10 +559,18 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         d = _flow_dir(base, body.flow)
         _check_prompts(body.prompts)
         prompts = {**_disk_prompts(d), **body.prompts}
+        cmd = None
+        if body.command:
+            try:
+                cmd = assist_commands.get(body.command)
+            except assist_commands.CommandError as e:
+                raise HTTPException(500, str(e)) from e
+            if cmd is None:
+                raise HTTPException(404, "saved command does not exist")
 
         async def events():  # type: ignore[no-untyped-def]
             async for ev in assistant.chat(body.message, body.flow, body.spec, prompts,
-                                           body.session_id, lang=body.lang):
+                                           body.session_id, lang=body.lang, command=cmd):
                 yield assistant.encode(ev)
 
         return StreamingResponse(events(), media_type="application/x-ndjson")
@@ -496,6 +671,76 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         except TemplateError as e:
             raise HTTPException(500, str(e)) from e
 
+    @app.post("/api/inputs/visible")
+    def visible_inputs(body: dict[str, Any]) -> dict[str, Any]:
+        """Run form: which flow inputs are hidden by their show_if for the values typed so far
+        (the definitions come from the editor, saved or not). Nothing is stored."""
+        defs = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
+        given = body.get("values") if isinstance(body.get("values"), dict) else {}
+        shown: dict[str, Any] = {}
+        hidden = []
+        for n, raw in defs.items():
+            t = IOType.model_construct(show_if=raw.get("show_if")) if isinstance(raw, dict) \
+                else IOType()
+            if input_visible(t, shown):
+                if n in given:
+                    shown[n] = given[n]
+            else:
+                hidden.append(n)
+        return {"hidden": hidden}
+
+    # --- assistant conversations (history per flow, runs/chats/) ---------------------------
+    def _chat_call(fn, *a):  # type: ignore[no-untyped-def]
+        try:
+            return fn(*a)
+        except FileNotFoundError as e:
+            raise HTTPException(404, "conversation does not exist") from e
+        except assist_chats.ChatError as e:
+            raise HTTPException(422, str(e)) from e
+
+    @app.get("/api/chats/{flow}")
+    def list_chats(flow: str) -> list[dict[str, Any]]:
+        return _chat_call(assist_chats.list_chats, flow)
+
+    @app.get("/api/chats/{flow}/{chat_id}")
+    def get_chat(flow: str, chat_id: str) -> dict[str, Any]:
+        return _chat_call(assist_chats.get, flow, chat_id)
+
+    @app.put("/api/chats/{flow}/{chat_id}", dependencies=[Depends(csrf)])
+    def save_chat(flow: str, chat_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        return _chat_call(assist_chats.save, flow, chat_id, body)
+
+    @app.delete("/api/chats/{flow}/{chat_id}", dependencies=[Depends(csrf)])
+    def delete_chat(flow: str, chat_id: str) -> dict[str, Any]:
+        _chat_call(assist_chats.delete, flow, chat_id)
+        return {"deleted": chat_id}
+
+    @app.get("/api/commands")
+    def list_commands() -> list[dict[str, Any]]:
+        try:
+            return [c.model_dump() for c in assist_commands.load()]
+        except assist_commands.CommandError as e:
+            raise HTTPException(500, str(e)) from e
+
+    @app.put("/api/commands/{command_id}", dependencies=[Depends(csrf)])
+    def save_command(command_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Creates or replaces a saved command ('new' as the id creates one)."""
+        if command_id != "new" and not assist_commands.COMMAND_ID.fullmatch(command_id):
+            raise HTTPException(400, "invalid command id")
+        try:
+            c = assist_commands.save(body | {"id": None if command_id == "new" else command_id})
+        except assist_commands.CommandError as e:
+            raise HTTPException(422, str(e)) from e
+        return c.model_dump()
+
+    @app.delete("/api/commands/{command_id}", dependencies=[Depends(csrf)])
+    def delete_command(command_id: str) -> dict[str, Any]:
+        try:
+            assist_commands.delete(command_id)
+        except assist_commands.CommandError as e:
+            raise HTTPException(404, str(e)) from e
+        return {"deleted": command_id}
+
     @app.get("/api/agents")
     def library() -> list[dict[str, Any]]:
         try:
@@ -506,17 +751,47 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     @app.post("/api/agents", dependencies=[Depends(csrf)], status_code=201)
     def save_to_library(body: LibraryBody) -> dict[str, Any]:
         """Saves an agent of a flow to the local library (agents/, outside git)."""
+        agent = body.agent
+        if body.agent_yaml is not None:  # the library window edits the definition as YAML
+            try:
+                agent = yaml.safe_load(body.agent_yaml) or {}
+            except yaml.YAMLError as e:
+                raise HTTPException(422, f"definition: invalid YAML: {e}") from e
+            if not isinstance(agent, dict):
+                raise HTTPException(422, "definition: a mapping (description, tools, inputs…)")
         try:
-            a, notes = save_local(body.id, body.title, body.agent, body.prompt, body.overwrite)
+            a, notes = save_local(body.id, body.title, agent or {}, body.prompt, body.overwrite,
+                                  location=body.location)
+        except PrivateTermsError as e:
+            raise HTTPException(409, {"private_terms": e.terms}) from e
         except LibraryError as e:
             raise HTTPException(409 if "already exists" in str(e) else 422, str(e)) from e
         return {"id": a.id, "hash": a.hash, "source": a.source, "notes": notes}
 
+    @app.delete("/api/agents/{agent_id}", dependencies=[Depends(csrf)])
+    def delete_library_agent(agent_id: str) -> dict[str, Any]:
+        try:
+            return {"deleted": agent_id, "source": delete_agent(agent_id)}
+        except LibraryError as e:
+            raise HTTPException(404, str(e)) from e
+
+    @app.post("/api/agents/{agent_id}/move", dependencies=[Depends(csrf)])
+    def move_library_agent(agent_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            a = move_agent(agent_id, str(body.get("location") or ""))
+        except PrivateTermsError as e:
+            raise HTTPException(409, {"private_terms": e.terms}) from e
+        except LibraryError as e:
+            raise HTTPException(422, str(e)) from e
+        return {"id": a.id, "source": a.source}
+
     @app.post("/api/flows", dependencies=[Depends(csrf)], status_code=201)
     def create(body: NewFlow) -> dict[str, Any]:
-        d = _flow_dir(base, body.name, must_exist=False)
-        if d.exists():
+        if not FLOW_NAME.fullmatch(body.name):
+            raise HTTPException(400, "invalid flow name")
+        if find_flow(body.name, base) or (_location_dir(base, body.location) / body.name).exists():
             raise HTTPException(409, f"a flow {body.name!r} already exists")
+        d = _location_dir(base, body.location) / body.name  # local (flows/) or an extension
         if body.template and body.copy_from:
             raise HTTPException(400, "give either 'template' or 'copy_from'")
         if body.template:
@@ -529,6 +804,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
                     raise HTTPException(500, f"template prompt with an invalid path: {rel}")
                 _atomic_write(d / rel, text)
             _atomic_write(d / "flow.yaml", dump_flow(tspec))
+            _publish_new(d, body.location)
             return {"name": body.name}
         if body.copy_from:
             src = _flow_dir(base, body.copy_from)
@@ -543,16 +819,62 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             shutil.rmtree(d, ignore_errors=True)
             raise HTTPException(422, _structured(e, raw)) from e
         _atomic_write(d / "flow.yaml", dump_flow(spec))
+        _publish_new(d, body.location)
         return {"name": body.name}
+
+    def _publish_new(d: Path, location: str) -> None:
+        if location != PUBLIC:
+            return
+        try:
+            _publish(d)
+        except HTTPException:
+            shutil.rmtree(d, ignore_errors=True)  # not created: nothing half-public is left
+            raise
+
+    def _publish(d: Path) -> None:
+        """Makes a flow in flows/ public (the .gitignore exception) after the private terms check;
+        409 with the terms, or 400 without git."""
+        found = terms_in(_flow_text(d))
+        if found:
+            raise HTTPException(409, {"private_terms": found})
+        if not set_flow_public(base, d.name, True):
+            raise HTTPException(400, "a public flow needs this folder to be in a git repository")
+
+    @app.post("/api/flows/{name}/move", dependencies=[Depends(csrf)])
+    def move_flow(name: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Moves a flow between this machine, an extension and public (git)."""
+        to = str(body.get("location") or "")
+        d, now = _flow_dir(base, name), _flow_place(base, name)
+        target_dir = _location_dir(base, to)  # also checks the location
+        if to == now:
+            return {"location": now}
+        if to == PUBLIC and d.parent.resolve() == base.resolve():  # in flows/: the exception only
+            _publish(d)
+        if now == PUBLIC:
+            set_flow_public(base, name, False)
+        if d.parent.resolve() != target_dir.resolve():
+            if (target_dir / name).exists():
+                raise HTTPException(409, f"{target_dir / name} already exists")
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(d), target_dir / name)
+            if to == PUBLIC:
+                try:
+                    _publish(target_dir / name)
+                except HTTPException:
+                    shutil.move(str(target_dir / name), d)  # back where it was
+                    raise
+        return {"location": _flow_place(base, name)}
 
     @app.delete("/api/flows/{name}", dependencies=[Depends(csrf)])
     def delete(name: str) -> dict[str, Any]:
         d = _flow_dir(base, name)
-        trash = base / ".trash"
+        if _flow_place(base, name) == PUBLIC:
+            set_flow_public(base, name, False)
+        trash = d.parent / ".trash"  # next to the flow (flows/ or the extension's flows/)
         trash.mkdir(exist_ok=True)
         dest = trash / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.move(str(d), dest)  # recoverable: nothing is deleted for good
-        return {"trashed": str(dest.relative_to(base))}
+        return {"trashed": str(dest.relative_to(trash.parent))}
 
     if (STATIC / "index.html").is_file():
         app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

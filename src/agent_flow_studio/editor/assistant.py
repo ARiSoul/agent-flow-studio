@@ -28,6 +28,8 @@ from claude_agent_sdk import (
 
 from ..builder.catalog import BUILTIN_TOOLS, CONTRACTS
 from ..builder.compile import DISALLOWED
+from ..builder.library import LibraryError, agent_data, copy_into, list_agents, refresh_copy
+from ..builder.library import check as check_library_agent
 from ..config import settings
 from ..hooks import DELEGATION_TOOLS, make_guard, make_hooks
 from ..tools.common import err, ok
@@ -51,7 +53,8 @@ _IOTYPE = {"type": "object", "properties": {
     "type": {"type": "string", "enum": _KINDS}, "label": _STR, "description": _STR,
     "required": {"type": "boolean"}, "default": {}, "multiple": {"type": "boolean"},
     "min": {"type": "number"}, "max": {"type": "number"}, "pattern": _STR, "options": _STRS,
-    "accept": _STRS, "contract": _STR, "draft": {"type": "boolean"}}}
+    "accept": _STRS, "contract": _STR, "draft": {"type": "boolean"},
+    "show_if": _STR}}  # flow inputs: shown only when this expression on earlier inputs holds
 _IOMAP = {"type": "object", "additionalProperties": _IOTYPE}
 _AGENT_INPUTS = {"type": "object", "additionalProperties": {"type": "object", "properties": {
     "from": _STR, "type": {"type": "string", "enum": _KINDS}, "description": _STR,
@@ -80,8 +83,17 @@ def _connections_info() -> dict[str, Any]:
     from ..connections import store
 
     try:
-        return {n: f"{c.type} · {c.environment} · {c.description}".strip(" ·")
-                for n, c in store.load().items()}
+        out: dict[str, Any] = {}
+        for n, c in store.load().items():
+            out[n] = {"summary": f"{c.type} · {c.environment} · {c.access} · {c.description}"
+                      .strip(" ·")}
+            if c.instructions.strip():  # how to use it (agents with this connector get the same)
+                out[n]["instructions"] = c.instructions.strip()[:4000]
+            if c.actions:  # named operations: agents with the connector get run_action for them
+                out[n]["actions"] = {k: f"{x.access}: {x.description} (params: "
+                                        f"{', '.join(x.params) or '—'})" for k, x in c.actions.items()}
+                out[n]["actions_only"] = c.actions_only
+        return out
     except store.ConnectorConfigError as e:
         return {"error": str(e)}
 
@@ -93,6 +105,8 @@ class Draft:
         self.spec = copy.deepcopy(spec)
         self.prompts = dict(prompts)
         self.changed = False
+        # agents proposed for the library (id → proposal); the user saves them from the chat
+        self.library_proposals: dict[str, dict[str, Any]] = {}
 
     # --- helpers
     def doc(self) -> dict[str, Any]:
@@ -342,6 +356,116 @@ class Draft:
             d.spec.setdefault("mcp_servers", {})[a["name"]] = cfg
             return d._summary(f"MCP {a['name']} declared (to be approved in the flow panel)")
 
+        @tool("view_library",
+              "The agent library: generic agents that can be copied into the flow and tuned "
+              "there. Without 'id': a summary of each one (title, description, tools, inputs, "
+              "outputs). With 'id': that agent in full, prompt included.",
+              _schema({"id": _STR}))
+        async def view_library(a: dict) -> dict:
+            try:
+                lib = list_agents()
+            except LibraryError as e:
+                return err(str(e))
+            if a.get("id"):
+                la = lib.get(a["id"])
+                if la is None:
+                    return err(f"library agent {a['id']!r} does not exist; see view_library")
+                return ok({"id": la.id, "title": la.title, "source": la.source,
+                           "agent": agent_data(la)})
+            return ok({x.id: {"title": x.title, "source": x.source,
+                              "description": " ".join(x.spec.description.split()),
+                              "tools": x.spec.tools,
+                              "inputs": {n: i.type or "text" for n, i in x.spec.inputs.items()},
+                              "outputs": {n: o.type for n, o in x.spec.outputs.items()}}
+                       for x in lib.values()})
+
+        @tool("add_library_agent",
+              "Copies a library agent into the flow as a new agent (name: default the library "
+              "id). The copy remembers its origin; tune it afterwards with set_agent (the editor "
+              "then shows it as changed in this flow). Link its inputs with set_agent "
+              "(inputs: {x: {from: ...}}) and connect it with add_edge.",
+              _schema({"id": _STR, "name": _STR}, ["id"]))
+        async def add_library_agent(a: dict) -> dict:
+            try:
+                la = list_agents().get(a["id"])
+                if la is None:
+                    return err(f"library agent {a['id']!r} does not exist; see view_library")
+                if a.get("name") in (d.spec.get("gates") or {}):
+                    return err(f"a gate {a['name']!r} already exists")
+                node = copy_into(d.spec, d.prompts, la, a.get("name") or None)
+            except LibraryError as e:
+                return err(str(e))
+            return d._summary(f"Agent {node} copied from the library agent {la.id}")
+
+        @tool("update_from_library",
+              "Replaces a copied agent with the current version of its library agent (it must "
+              "have an origin). Keeps where each input comes from, join, max_runs and the icon; "
+              "changes made in this flow to its prompt, tools, outputs… are lost, so ask the "
+              "user first when the agent was changed here.",
+              _schema({"name": _STR}, ["name"]))
+        async def update_from_library(a: dict) -> dict:
+            ag = (d.spec.get("agents") or {}).get(a["name"])
+            origin = ag.get("origin") if isinstance(ag, dict) else None
+            if not isinstance(origin, dict):
+                return err(f"agent {a['name']!r} was not copied from the library")
+            try:
+                la = list_agents().get(origin.get("agent", ""))
+                if la is None:
+                    return err(f"library agent {origin.get('agent')!r} no longer exists")
+                refresh_copy(d.spec, d.prompts, a["name"], la)
+            except LibraryError as e:
+                return err(str(e))
+            return d._summary(f"Agent {a['name']} updated from the library agent {la.id}")
+
+        @tool("propose_library_agent",
+              "Proposes an agent for the user's library, to create a new one or to edit one. "
+              "Start from scratch, from an agent of this flow (from_agent) or from a library "
+              "agent (from_library); the other fields change that base. Editing a local library "
+              "agent = the same id; built-in and extension agents cannot be changed (use a new "
+              "id). Nothing is saved: the chat shows the proposal and the user saves it. Library "
+              "inputs have no 'from'.",
+              _schema({"id": _STR, "title": _STR, "from_agent": _STR, "from_library": _STR,
+                       "description": _STR, "prompt": _STR, "tools": _STRS, "model": _STR,
+                       "max_turns": {"type": "integer"}, "skills": _STRS, "writes": _WRITES,
+                       "inputs": _AGENT_INPUTS, "outputs": _IOMAP, "icon": _STR,
+                       "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}},
+                      ["id"]))
+        async def propose_library_agent(a: dict) -> dict:
+            base: dict[str, Any] = {}
+            prompt = ""
+            title = a.get("title") or ""
+            try:
+                if a.get("from_agent") and a.get("from_library"):
+                    return err("give either from_agent or from_library")
+                if a.get("from_agent"):
+                    src = (d.spec.get("agents") or {}).get(a["from_agent"])
+                    if not isinstance(src, dict):
+                        return err(f"agent {a['from_agent']!r} does not exist in the flow")
+                    base = copy.deepcopy(src)
+                    prompt = (d.prompts.get(src["prompt_file"], "") if src.get("prompt_file")
+                              else src.get("prompt") or "")
+                elif a.get("from_library"):
+                    la = list_agents().get(a["from_library"])
+                    if la is None:
+                        return err(f"library agent {a['from_library']!r} does not exist")
+                    base = {k: v for k, v in agent_data(la).items() if k != "prompt"}
+                    prompt, title = la.prompt, title or la.title
+                for k in ("description", "tools", "model", "max_turns", "skills", "writes",
+                          "inputs", "outputs", "icon", "autonomy"):
+                    if k in a:
+                        base[k] = a[k]
+                prompt = a.get("prompt", prompt)
+                c = check_library_agent(a["id"], title, base, prompt)
+            except LibraryError as e:
+                return err(str(e))
+            d.library_proposals[c.id] = {
+                "id": c.id, "title": c.title, "exists": c.exists, "notes": c.notes,
+                "agent": c.data, "prompt": c.prompt}
+            what = "replaces the local library agent" if c.exists else "new library agent"
+            notes = f" Notes: {'; '.join(c.notes)}." if c.notes else ""
+            return ok(f"Proposal {c.id!r} ready ({what}). The user saves it with the button in "
+                      f"the chat; it is not saved yet.{notes}")
+
         @tool("validate", "Validates the draft with the runtime rules and returns the problems.",
               _schema({}))
         async def validate(_: dict) -> dict:
@@ -350,10 +474,11 @@ class Draft:
 
         return [view_flow, view_catalog, view_prompt, update_flow, set_agent, set_gate,
                 add_edge, remove_edge, rename_node, remove_node, set_orchestrator_prompt,
-                set_mcp, validate]
+                set_mcp, view_library, add_library_agent, update_from_library,
+                propose_library_agent, validate]
 
 
-READ_ONLY_TOOLS = {"view_flow", "view_catalog", "view_prompt", "validate"}
+READ_ONLY_TOOLS = {"view_flow", "view_catalog", "view_prompt", "view_library", "validate"}
 
 
 def normalize_lang(lang: str | None) -> str:
@@ -368,6 +493,14 @@ def system_prompt(lang: str | None = None) -> str:
             f"Reply to the user in {name}. Flow content that you write (prompts, descriptions, "
             "labels, conditions) follows what the user asks; if the user does not say, keep the "
             "language that the flow already uses.\n")
+
+
+def with_command(header: str, message: str, command: Any = None) -> str:
+    """The user turn: header, the instructions of a saved command (if one is used), message."""
+    if command is None or not command.instructions.strip():
+        return f"{header}\n\n{message}"
+    return (f"{header}\n\n[Saved command {command.name!r}: instructions the user saved with it]\n"
+            f"{command.instructions.strip()}\n[End of the command instructions]\n\n{message}")
 
 
 def build_options(draft: Draft, session_id: str | None,
@@ -391,10 +524,11 @@ def build_options(draft: Draft, session_id: str | None,
 
 async def chat(message: str, flow: str, spec: dict[str, Any], prompts: dict[str, str],
                session_id: str | None = None,
-               lang: str | None = None) -> AsyncIterator[dict[str, Any]]:
-    """Events: text, tool, done (with the draft and the validation) or error."""
+               lang: str | None = None, command: Any = None) -> AsyncIterator[dict[str, Any]]:
+    """Events: text, tool, done (with the draft and the validation) or error. `command` is a
+    saved command (editor/commands.py) whose instructions go with the message."""
     draft = Draft(spec, prompts)
-    prompt = f"[Flow open in the editor: {flow}]\n\n{message}"
+    prompt = with_command(f"[Flow open in the editor: {flow}]", message, command)
     try:
         async for msg in query(prompt=prompt, options=build_options(draft, session_id, lang)):
             if isinstance(msg, AssistantMessage):
@@ -403,15 +537,17 @@ async def chat(message: str, flow: str, spec: dict[str, Any], prompts: dict[str,
                         yield {"type": "text", "text": block.text}
                     elif isinstance(block, ToolUseBlock):
                         name = block.name.removeprefix(f"mcp__{SERVER}__")
-                        arg = block.input.get("name") or block.input.get("node") or (
-                            f"{block.input.get('from')} → {block.input.get('to')}"
-                            if "from" in block.input else "")
+                        arg = (block.input.get("name") or block.input.get("node")
+                               or block.input.get("id") or (
+                                   f"{block.input.get('from')} → {block.input.get('to')}"
+                                   if "from" in block.input else ""))
                         yield {"type": "tool", "name": name, "arg": str(arg)[:60],
                                "edit": name not in READ_ONLY_TOOLS}
             elif isinstance(msg, ResultMessage):
                 yield {"type": "done", "session_id": msg.session_id, "cost": msg.total_cost_usd,
                        "turns": msg.num_turns, "is_error": msg.is_error,
                        "changed": draft.changed, "doc": draft.doc() if draft.changed else None,
+                       "library": list(draft.library_proposals.values()),
                        "validation": draft.validation()}
     except Exception as e:  # noqa: BLE001 — the editor shows the error; do not hang the stream
         yield {"type": "error", "message": f"{type(e).__name__}: {e}"}

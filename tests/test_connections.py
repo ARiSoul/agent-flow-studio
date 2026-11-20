@@ -175,7 +175,7 @@ def test_flow_with_unknown_connection_fails(tmp_path, cfile):
 
 
 @pytest.mark.parametrize("mutate,needle", [
-    (lambda a: a.update(tools=[]), "does not have connections.http_get"),
+    # (a connector without http_get is checked at compile time: see test_connector_actions.py)
     (lambda a: a.update(connections=[]), "no connector"),
 ])
 def test_flow_connection_rules(mutate, needle):

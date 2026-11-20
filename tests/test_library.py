@@ -66,7 +66,7 @@ def test_save_local_cleans_flow_fields(tmp_path):
 
 
 def test_save_local_refuses_core_ids_and_overwrite():
-    with pytest.raises(library.LibraryError, match="core"):
+    with pytest.raises(library.LibraryError, match="built-in"):
         library.save_local("summarizer", "", {"description": "x"}, "p")
     library.save_local("mine", "", {"description": "x"}, "p")
     with pytest.raises(library.LibraryError, match="already exists"):

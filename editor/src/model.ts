@@ -187,7 +187,7 @@ const empty = (v: unknown) => v === undefined || v === null || v === "" || (Arra
 
 /** Drops the fields of a typed value that are empty or at their default. */
 function tidyIO(t: IOTypeRaw): void {
-  for (const k of ["label", "description", "default", "min", "max", "pattern", "options", "accept", "contract"] as const)
+  for (const k of ["label", "description", "default", "min", "max", "pattern", "options", "accept", "contract", "show_if"] as const)
     if (empty(t[k])) delete t[k];
   if (t.required === true) delete t.required;
   if (!t.multiple) delete t.multiple;

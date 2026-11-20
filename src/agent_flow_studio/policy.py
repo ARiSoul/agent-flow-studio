@@ -23,6 +23,8 @@ from typing import Any
 from .builder.catalog import NATIVE_TOOLS, WRITE_TOOLS
 
 CONN_WRITE_TOOL = "mcp__connections__http_write"
+CONN_READ_TOOL = "mcp__connections__http_get"
+RUN_ACTION_TOOL = "mcp__connections__run_action"
 _FILE_TOOLS = {"Read": "file_path", "Edit": "file_path", "Write": "file_path",
                "Glob": "path", "Grep": "path"}
 _DENY_BASH = [
@@ -70,6 +72,10 @@ def describe(tool: str, args: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
                 {"connection": args.get("connection"), "method": args.get("method"),
                  "path": args.get("path"), "query": args.get("query"),
                  "body": _clip(args.get("body"))})
+    if tool == RUN_ACTION_TOOL:
+        return (f"Action {args.get('connection')}.{args.get('action')}",
+                {"connection": args.get("connection"), "action": args.get("action"),
+                 "params": _clip(args.get("params"))})
     return tool, {}
 
 
@@ -81,7 +87,11 @@ class WritePolicy:
     workspace_env: str = "dev"
     protected_branches: list[str] = field(default_factory=lambda: ["main", "master"])
     write_connections: dict[str, set[str]] = field(default_factory=dict)  # agent → connectors
+    read_connections: dict[str, set[str]] = field(default_factory=dict)  # agent → connectors
     connection_env: dict[str, str] = field(default_factory=dict)
+    # named actions: connector → {action → "read" | "write"}; connectors usable only by actions
+    connection_actions: dict[str, dict[str, str]] = field(default_factory=dict)
+    actions_only: set[str] = field(default_factory=set)
     approver: Approver | None = None
     # Step-by-step tests (the editor runner sets these fields before each segment):
     delegation_limit: int | None = None  # number of delegations allowed in this segment
@@ -129,6 +139,12 @@ class WritePolicy:
         """Returns the reason for the denial, or None if the call can go ahead."""
         if tool in ("Agent", "Task") and agent is None:
             return self._delegation(args)
+        if tool in (CONN_READ_TOOL, CONN_WRITE_TOOL) and str(args.get("connection")) in \
+                self.actions_only:
+            return (f"connector {args.get('connection')!r} can only be used through its named "
+                    "actions (run_action)")
+        if tool == RUN_ACTION_TOOL:
+            return await self._action(agent, args)
         if tool not in NATIVE_TOOLS and tool not in WRITE_TOOLS:
             return None
         if agent is None:
@@ -154,6 +170,30 @@ class WritePolicy:
             env = self.connection_env.get(conn, "prod")  # unknown = the most restricted
         if tool not in WRITE_TOOLS:
             return None
+        return await self._approve(tool, agent, args, env)
+
+    async def _action(self, agent: str | None, args: Mapping[str, Any]) -> str | None:
+        """run_action: the action must be declared on the connector; read actions need the
+        connector assigned to the agent; write actions need write access and follow the autonomy."""
+        if agent is None:
+            return "the orchestrator does not use connectors; delegate to a subagent"
+        conn, name = str(args.get("connection", "")), str(args.get("action", ""))
+        access = self.connection_actions.get(conn, {}).get(name)
+        if access is None:
+            known = ", ".join(self.connection_actions.get(conn, {})) or "none"
+            return f"connector {conn!r} has no action {name!r} (actions: {known})"
+        writable = self.write_connections.get(agent, set())
+        if access == "read":
+            if conn not in self.read_connections.get(agent, set()) | writable:
+                return f"connector {conn!r} is not assigned to subagent {agent!r}"
+            return None
+        if conn not in writable:
+            return f"connector {conn!r} has no write access assigned to subagent {agent!r}"
+        return await self._approve(RUN_ACTION_TOOL, agent, args,
+                                   self.connection_env.get(conn, "prod"))
+
+    async def _approve(self, tool: str, agent: str | None, args: Mapping[str, Any],
+                       env: str) -> str | None:
         level = self.level(agent)
         if level == "auto" or (level == "approve_prod" and env != "prod"):
             return None

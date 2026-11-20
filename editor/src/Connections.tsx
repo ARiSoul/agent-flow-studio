@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { errorText, PRIVATE_TERMS } from "./api";
 import { useDialog } from "./Dialog";
 import { LANGS, useI18n } from "./i18n";
+import { locLabel } from "./LibraryManager";
 
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
 const SLUG = /^[a-z][a-z0-9_]{0,39}$/;
@@ -15,8 +17,15 @@ interface Auth {
 }
 interface OAuthStatus { signed_in: boolean; expires_at: number | null; refreshable: boolean }
 interface Conn {
-  type: string; description?: string; environment?: string; base_url?: string | null; organization?: string | null;
+  type: string; description?: string; instructions?: string; environment?: string; base_url?: string | null; organization?: string | null;
   test_path?: string | null; allowed_paths?: string[]; auth: Auth; secrets?: Record<string, string>; access?: string;
+  actions?: Record<string, { description: string; access?: string; method?: string; path?: string;
+    params?: Record<string, unknown> }>;
+  actions_yaml?: string; actions_only?: boolean;
+  web?: { login_url?: string | null; signed_in_selector?: string | null; signed_out_url?: string | null;
+    browser?: string; timeout_s?: number };
+  web_session?: { profile: boolean; signing_in: boolean } | null;
+  location?: string;  // "local" (connections.yaml) or an extension (its connections.yaml)
   secret?: { field: string | null; source: string | null; set: boolean; optional?: boolean };
   oauth?: OAuthStatus | null;
 }
@@ -30,6 +39,7 @@ interface Meta {
   oauth_redirect_uri: string;
   oauth_presets: Record<string, Preset>;
   connections: Record<string, Conn>;
+  locations?: string[];
 }
 
 async function req<T>(url: string, method: string, body?: unknown): Promise<T> {
@@ -37,10 +47,49 @@ async function req<T>(url: string, method: string, body?: unknown): Promise<T> {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const d = (data as { detail?: unknown }).detail;
+    const terms = (d as { private_terms?: string[] } | undefined)?.private_terms;
+    if (terms) throw new Error(PRIVATE_TERMS + terms.join(", "));  // public: names private words
     throw new Error(Array.isArray(d) ? d.map((x: { msg: string }) => x.msg).join("; ") : String(d ?? r.statusText));
   }
   return data as T;
 }
+
+// examples for the actions editor (YAML; the server validates them on save)
+const API_ACTIONS_EXAMPLE = `get_ticket:
+  description: Reads one ticket (summary, state, notes).
+  path: /api/tickets/{number}
+  query: {fields: "summary,state,notes"}
+  params:
+    number: {pattern: "INC[0-9]{7}", description: Ticket number}
+add_note:
+  description: Adds a work note to a ticket.
+  access: write          # needs access: write; follows the flow autonomy (approval)
+  method: POST
+  path: /api/tickets/{number}/notes
+  body: {text: "{text}"}
+  params:
+    number: {pattern: "INC[0-9]{7}"}
+    text: {max_length: 2000}
+`;
+const WEB_ACTIONS_EXAMPLE = `open_ticket:
+  description: Opens a ticket and reads its summary and notes.
+  params:
+    number: {pattern: "INC[0-9]{7}"}
+  steps:
+    - goto: /ticket/{number}
+    - click: "text=Notes"            # a tab
+    - extract: {summary: "#summary", notes: ".notes"}
+search_user:
+  description: Searches a user by email and reads the result table.
+  params:
+    email: {pattern: "[^@\\\\s]+@[^@\\\\s]+"}
+  steps:
+    - goto: /users
+    - fill: {selector: "input[name=q]", value: "{email}"}
+    - press: {selector: "input[name=q]", key: Enter}
+    - wait_for: "table.results"
+    - extract_table: "table.results"
+`;
 
 const blank = (type: string, meta: Meta): Conn => ({ type, environment: "dev", auth: { method: meta.types[type].methods[0] } });
 const lines = (o?: Record<string, string>) => Object.entries(o ?? {}).map(([k, v]) => `${k}=${v}`).join("\n");
@@ -101,14 +150,16 @@ export function Connections({ onClose }: { onClose: () => void }) {
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true); setMsg(null);
-    try { await fn(); } catch (e) { setMsg({ text: String((e as Error).message), bad: true }); }
+    try { await fn(); } catch (e) { setMsg({ text: errorText(e, t), bad: true }); }
     finally { setBusy(false); }
   };
   const save = () => run(async () => {
     if (!form) return;
     if (!SLUG.test(name)) throw new Error(t("conn.slugError"));
     if (isNew && meta.connections[name]) throw new Error(t("conn.exists"));
-    const body = { ...form, secrets: undefined, secret: undefined, oauth: undefined };
+    // the actions go as YAML text (the server parses and checks them)
+    const body = { ...form, secrets: undefined, secret: undefined, oauth: undefined, actions: undefined,
+      web_session: undefined, actions_yaml: form.actions_yaml ?? "" };
     await req(`/api/connections/${name}`, "PUT", body);
     await reload(name);
     setMsg({ text: t("conn.saved") });
@@ -143,6 +194,20 @@ export function Connections({ onClose }: { onClose: () => void }) {
     await req(`/api/connections/${sel}/oauth`, "DELETE");
     await reload(sel);
   });
+  // website: a visible browser window where the person signs in (the studio never types it)
+  const webSignIn = () => run(async () => {
+    if (!sel) return;
+    await req(`/api/connections/${sel}/browser/sign-in`, "POST");
+    setMsg({ text: t("conn.webSignInOpened") });
+    await reload(sel);
+  });
+  const webSignOut = () => run(async () => {
+    if (!sel || !(await dialog.confirm({ title: t("conn.webSignOutTitle"), message: t("conn.webSignOutMessage"),
+      ok: t("conn.signOut"), danger: true }))) return;
+    await req(`/api/connections/${sel}/browser`, "DELETE");
+    await reload(sel);
+  });
+  const setWeb = (p: Partial<NonNullable<Conn["web"]>>) => setForm((f) => (f ? { ...f, web: { ...f.web, ...p } } : f));
   const withPreset = (base: Conn, key: string): Conn => {
     const p = meta.oauth_presets[key];
     return !p ? base : {
@@ -175,6 +240,7 @@ export function Connections({ onClose }: { onClose: () => void }) {
                 onClick={() => { setSel(n); setName(n); setForm(structuredClone(c)); setMsg(null); }}>
                 <b>{n}</b>
                 <span className="muted small">{meta.types[c.type]?.label} · {c.environment ?? "dev"}
+                  {c.location && c.location !== "local" ? ` · ${locLabel(t, c.location)}` : ""}
                   {c.secret && !c.secret.set && !c.secret.optional ? t("conn.noSecret") : ""}
                   {c.oauth && !c.oauth.signed_in ? t("conn.notSignedInList") : ""}</span>
               </button>
@@ -207,6 +273,12 @@ export function Connections({ onClose }: { onClose: () => void }) {
                   <select value={form.environment ?? "dev"} onChange={(e) => set({ environment: e.target.value })}>
                     {meta.environments.map((x) => <option key={x}>{x}</option>)}</select></label>
               </div>
+              {(meta.locations ?? ["local"]).length > 1 && (
+                <label className="field"><span className="field-label">{t("loc.where")}</span>
+                  <select value={form.location ?? "local"} onChange={(e) => set({ location: e.target.value })}>
+                    {meta.locations!.map((l) => <option key={l} value={l}>{locLabel(t, l)}</option>)}
+                  </select>
+                  <span className="field-hint">{t("loc.connWhereHint")}</span></label>)}
               <label className="field"><span className="field-label">{t("conn.access")}</span>
                 <select value={form.access ?? "read"} onChange={(e) => set({ access: e.target.value })}>
                   <option value="read">{t("conn.accessRead")}</option>
@@ -226,14 +298,76 @@ export function Connections({ onClose }: { onClose: () => void }) {
               <div className="grid2">
                 <label className="field"><span className="field-label">{t("conn.baseUrl")}</span>
                   <input value={form.base_url ?? ""} placeholder={tp.base_url ?? "https://api.example.com"} onChange={(e) => set({ base_url: e.target.value || null })} /></label>
-                <label className="field"><span className="field-label">{t("conn.testPath")}</span>
-                  <input value={form.test_path ?? ""} placeholder={tp.test_path} onChange={(e) => set({ test_path: e.target.value || null })} /></label>
+                {form.type !== "website" && (
+                  <label className="field"><span className="field-label">{t("conn.testPath")}</span>
+                    <input value={form.test_path ?? ""} placeholder={tp.test_path} onChange={(e) => set({ test_path: e.target.value || null })} /></label>)}
               </div>
+              {form.type === "website" && <>
+                <p className="muted small">{t("conn.webHint")}</p>
+                <div className="grid2">
+                  <label className="field"><span className="field-label">{t("conn.webLoginUrl")}</span>
+                    <input value={form.web?.login_url ?? ""} placeholder="/login" onChange={(e) => setWeb({ login_url: e.target.value || null })} /></label>
+                  <label className="field"><span className="field-label">{t("conn.webBrowser")}</span>
+                    <select value={form.web?.browser ?? "msedge"} onChange={(e) => setWeb({ browser: e.target.value })}>
+                      <option value="msedge">Microsoft Edge</option>
+                      <option value="chrome">Google Chrome</option>
+                      <option value="chromium">Chromium (Playwright)</option>
+                    </select></label>
+                </div>
+                <div className="grid2">
+                  <label className="field"><span className="field-label">{t("conn.webSignedIn")}</span>
+                    <input className="mono" value={form.web?.signed_in_selector ?? ""} placeholder="#user-menu"
+                      onChange={(e) => setWeb({ signed_in_selector: e.target.value || null })} />
+                    <span className="field-hint">{t("conn.webSignedInHint")}</span></label>
+                  <label className="field"><span className="field-label">{t("conn.webSignedOut")}</span>
+                    <input className="mono" value={form.web?.signed_out_url ?? ""} placeholder="/login"
+                      onChange={(e) => setWeb({ signed_out_url: e.target.value || null })} />
+                    <span className="field-hint">{t("conn.webSignedOutHint")}</span></label>
+                </div>
+              </>}
               <label className="field"><span className="field-label">{t("conn.allowedPaths")}</span>
                 <textarea className="mono" rows={2} defaultValue={(form.allowed_paths ?? []).join("\n")} key={`${sel}-paths`}
                   placeholder={t("conn.allowedPathsPlaceholder")}
                   onBlur={(e) => set({ allowed_paths: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} />
                 <span className="field-hint">{t("conn.allowedPathsHint")}</span></label>
+
+              <h3>{t("conn.instructions")}</h3>
+              <p className="muted small">{t("conn.instructionsHint")}</p>
+              <div className="field">
+                <textarea className="conn-instructions" rows={10} value={form.instructions ?? ""}
+                  aria-label={t("conn.instructions")} placeholder={t("conn.instructionsPlaceholder")}
+                  onChange={(e) => set({ instructions: e.target.value })} />
+                <div className="row">
+                  {!form.instructions?.trim() && (
+                    <button type="button" className="small" onClick={() => set({ instructions: t("conn.instructionsOutline") })}>
+                      {t("conn.instructionsInsertOutline")}</button>)}
+                  <span className="muted small">{t("conn.instructionsChars", { n: (form.instructions ?? "").length })}</span>
+                </div>
+              </div>
+
+              <h3>{t("conn.actions")}</h3>
+              <p className="muted small">{t("conn.actionsHint")}</p>
+              {Object.keys(saved?.actions ?? {}).length > 0 && (
+                <ul className="conn-actions">
+                  {Object.entries(saved!.actions!).map(([n, a]) => (
+                    <li key={n}><code>{n}</code>
+                      <span className={`badge${a.access === "write" ? " warn" : ""}`}>{t(a.access === "write" ? "conn.accessWrite" : "conn.accessRead")}</span>
+                      {a.path && <code className="muted">{a.method ?? "GET"} {a.path}</code>}
+                      <span className="muted small">{a.description}</span></li>))}
+                </ul>)}
+              <label className="check">
+                <input type="checkbox" checked={!!form.actions_only} onChange={(e) => set({ actions_only: e.target.checked })} />
+                {t("conn.actionsOnly")}
+              </label>
+              <div className="field">
+                <textarea className="conn-instructions" rows={10} value={form.actions_yaml ?? ""} spellCheck={false}
+                  aria-label={t("conn.actions")} placeholder={t("conn.actionsPlaceholder")}
+                  onChange={(e) => set({ actions_yaml: e.target.value })} />
+                {!form.actions_yaml?.trim() && (
+                  <div className="row"><button type="button" className="small"
+                    onClick={() => set({ actions_yaml: form.type === "website" ? WEB_ACTIONS_EXAMPLE : API_ACTIONS_EXAMPLE })}>
+                    {t("conn.actionsInsertExample")}</button></div>)}
+              </div>
 
               <h3>{t("conn.auth")}</h3>
               <label className="field"><span className="field-label">{t("conn.method")}</span>
@@ -343,6 +477,22 @@ export function Connections({ onClose }: { onClose: () => void }) {
                     : <div className="row">
                       <button className="small primary" disabled={busy} onClick={startSignIn}>{t("conn.signInBtn")}</button>
                       {signIn?.signed_in && <button className="small danger" disabled={busy} onClick={signOut}>{t("conn.signOut")}</button>}
+                    </div>}
+                </div>
+              )}
+
+              {form.type === "website" && (
+                <div className="secret-box">
+                  <b>{t("conn.webSession")}</b>{" "}
+                  {saved?.web_session?.signing_in ? <span className="badge">{t("conn.webSigningIn")}</span>
+                    : saved?.web_session?.profile ? <span className="badge">{t("conn.webHasSession")}</span>
+                      : <span className="badge warn">{t("conn.notSignedIn")}</span>}
+                  <span className="field-hint">{t("conn.webSessionHint")}</span>
+                  {isNew ? <span className="field-hint">{t("conn.signInSaveFirst")}</span>
+                    : <div className="row">
+                      <button className="small primary" disabled={busy || !!saved?.web_session?.signing_in} onClick={webSignIn}>{t("conn.signInBtn")}</button>
+                      {saved?.web_session?.signing_in && <button className="small" onClick={() => reload(sel)}>{t("conn.webRefresh")}</button>}
+                      {saved?.web_session?.profile && <button className="small danger" disabled={busy} onClick={webSignOut}>{t("conn.signOut")}</button>}
                     </div>}
                 </div>
               )}

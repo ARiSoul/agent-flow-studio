@@ -248,10 +248,9 @@ class FlowSpec(_Strict):
                 seen[w.name] = an
             if a.writes and "artifacts.save_artifact" not in a.tools:
                 errors.append(f"agent {an!r} writes artifacts but does not have artifacts.save_artifact")
+            # (connectors without named actions need http_get / http_write: checked when the
+            # flow compiles, where connections.yaml and its actions are known)
             has_write = "connections.http_write" in a.tools
-            if a.write_connections and not has_write:
-                errors.append(f"agent {an!r} has write connectors but does not have "
-                              "connections.http_write")
             if has_write and not a.write_connections:
                 errors.append(f"agent {an!r} has connections.http_write but no write connector "
                               "assigned")
@@ -261,8 +260,6 @@ class FlowSpec(_Strict):
             errors += [f"agent {an!r}: connector {c!r} has an invalid name"
                        for c in a.write_connections if not _SLUG_RE.fullmatch(c)]
             has_get = "connections.http_get" in a.tools
-            if a.connections and not has_get:
-                errors.append(f"agent {an!r} has connectors but does not have connections.http_get")
             if has_get and not a.connections:
                 errors.append(f"agent {an!r} has connections.http_get but no connector assigned")
             errors += [f"agent {an!r}: connector {c!r} has an invalid name" for c in a.connections
@@ -323,11 +320,26 @@ class FlowSpec(_Strict):
                 check_type(t, CONTRACTS)
             except ValueError as e:
                 errors.append(f"flow input {n!r}: {e}")
+        before: list[str] = []
+        for n, t in self.inputs.items():  # show_if: only on the inputs declared before it
+            if t.show_if:
+                try:
+                    used = expr.refs(t.show_if)
+                except expr.ExprError as e:
+                    errors.append(f"flow input {n!r}: show_if: {e}")
+                    used = []
+                for r in used:
+                    if r[0] != "input" or len(r) < 2 or r[1] not in before:
+                        errors.append(f"flow input {n!r}: show_if can only use the flow inputs "
+                                      f"declared before it (input.<name>), not {'.'.join(map(str, r))}")
+            before.append(n)
         flow_in = self.flow_inputs()
         for an, a in self.agents.items():
             for n, t in a.outputs.items():
                 if not _SLUG_RE.fullmatch(n):
                     errors.append(f"agent {an!r}: output {n!r} has an invalid name")
+                if t.show_if:
+                    errors.append(f"agent {an!r}, output {n!r}: show_if is only for flow inputs")
                 try:
                     check_type(t, CONTRACTS)
                 except ValueError as e:

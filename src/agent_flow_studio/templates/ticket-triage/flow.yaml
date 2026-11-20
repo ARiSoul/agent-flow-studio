@@ -1,0 +1,95 @@
+# Template: ticket triage. {{...}} values are filled in on creation.
+version: 1
+name: ticket-triage
+title: Ticket triage
+description: |
+  The ticket comes as text, as a URL or as a number of the {{connector}} platform. A URL or a
+  number is read with the connector action {{ticket_action}} (read only); then the ticket is
+  triaged into a draft for human review.
+execution: graph
+inputs:
+  source:
+    type: choice
+    label: Where is the ticket?
+    options: [text, url, number]
+    default: number
+  text:
+    type: markdown
+    label: Ticket text
+    description: Paste the ticket (title, description, comments).
+    show_if: input.source == "text"
+  url:
+    type: url
+    label: Ticket URL
+    description: The address of the ticket on the platform.
+    show_if: input.source == "url"
+  number:
+    type: text
+    label: Ticket number
+    show_if: input.source == "number"
+task: "Triage the ticket given by {source}."
+orchestrator: {prompt_file: prompts/orchestrator.md}
+autonomy: approve
+
+start: intake
+
+agents:
+  intake:
+    description: Reads the run form and decides where the ticket comes from (text, or a number to
+      read from the platform). Use first.
+    icon: chat
+    model: haiku
+    prompt_file: prompts/intake.md
+    inputs:
+      source: {from: input.source}
+      text: {from: input.text, required: false}
+      url: {from: input.url, required: false}
+      number: {from: input.number, required: false}
+    outputs:
+      route: {type: choice, options: [ready, fetch, invalid]}
+      ticket_number: {type: text, required: false}
+      ticket_text: {type: markdown, required: false}
+      problem: {type: text, required: false, description: Why the input cannot be used}
+  fetcher:
+    description: Reads a ticket from the platform with the connector action (read only) and
+      returns its text with the evidence.
+    icon: search
+    prompt_file: prompts/fetcher.md
+    connections: ["{{connector}}"]
+    inputs:
+      ticket_number: {from: intake.ticket_number}
+    outputs:
+      ticket_text: {type: markdown}
+      evidence: {type: text, description: The action and the ticket number it read}
+  triage:
+    description: Triages the ticket (summary, category, priority, next steps) with evidence from
+      the ticket text, as a draft for human review.
+    icon: check
+    prompt_file: prompts/triage.md
+    join: any
+    inputs:
+      given_text: {from: intake.ticket_text, required: false}
+      fetched_text: {from: fetcher.ticket_text, required: false}
+      evidence: {from: fetcher.evidence, required: false}
+    outputs:
+      summary: {type: markdown, draft: true}
+      category: {type: choice, options: [incident, request, question, access, other]}
+      priority: {type: choice, options: [low, medium, high, critical]}
+
+gates:
+  invalid_input: {kind: stop, label: The input cannot be used (see the intake output)}
+  review: {kind: human, label: Check and approve the triage}
+
+edges:
+- {from: intake, to: triage, if: intake.route == "ready"}
+- {from: intake, to: fetcher, if: intake.route == "fetch"}
+- {from: intake, to: invalid_input, if: intake.route == "invalid"}
+- {from: fetcher, to: triage}
+- {from: triage, to: review}
+
+layout:
+  intake: {x: 0, y: 0}
+  fetcher: {x: 300, y: 220}
+  invalid_input: {x: -300, y: 220}
+  triage: {x: 0, y: 440}
+  review: {x: 0, y: 680}

@@ -1,16 +1,19 @@
 import {
-  useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent,
+  useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { clampSize, DEFAULT_SIZES, loadSizes, saveSizes, Splitter, type PanelSizes } from "./Splitter";
 import {
   Background, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow, MarkerType,
   type Connection, type Edge, type EdgeChange, type IsValidConnection, type Node, type NodeChange,
 } from "@xyflow/react";
-import { api } from "./api";
+import { api, errorText } from "./api";
 import { Chat } from "./Chat";
 import { Connections } from "./Connections";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
 import { AgentIcon, Icon, ICON_IDS } from "./icons";
+import { LibraryManager, locLabel } from "./LibraryManager";
 import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
@@ -35,10 +38,29 @@ const PALETTE = [
 type PaletteKind = (typeof PALETTE)[number]["kind"];
 const FLOW_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;  // same rule as the server
 const DATA_LINKS_KEY = "afs.dataLinks";
+const LAST_FLOW_KEY = "afs.flow";
+const HIDDEN_KEY = "afs.hiddenPanels";
+type Panel = "pal" | "insp" | "bottom";
 
 /** Id of a data link on the canvas: d:<agent>:<input> (agent and input names are slugs, no ":"). */
 const dataEdgeId = (agent: string, input: string) => `d:${agent}:${input}`;
 const parseDataEdge = (id: string) => { const [, agent, input] = id.split(":"); return { agent, input }; };
+
+/** Where a flow lives: on this machine only, in an extension, or public (git would publish it). */
+function LocationBadge({ loc, isPublic }: { loc?: string; isPublic?: boolean }) {
+  const { t } = useI18n();
+  if (isPublic) return <span className="badge warn loc" title={t("loc.publicTitle")}>{t("loc.public")}</span>;
+  if (loc && loc !== "local") return <span className="badge loc" title={t("loc.extensionTitle", { name: loc })}>{t("loc.extension", { name: loc })}</span>;
+  return <span className="badge loc" title={t("loc.localTitle")}>{t("loc.local")}</span>;
+}
+
+/** The "Where" field of the create / save-to-library forms (only when there are extensions). */
+function locationField(locations: string[] | undefined, t: ReturnType<typeof useI18n>["t"], value = "local") {
+  const locs = locations ?? ["local"];
+  if (locs.length < 2) return [];
+  return [{ key: "location", label: t("loc.where"), value, hint: t("loc.whereHint"),
+    options: locs.map((l) => ({ value: l, label: locLabel(t, l) })) }];
+}
 
 function Editor() {
   const rf = useReactFlow();
@@ -66,10 +88,25 @@ function Editor() {
   const [val, setVal] = useState<Validation | null>(null);
   const [tab, setTab] = useState<"problems" | "flow">("problems");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
-  const [right, setRight] = useState<"props" | "chat" | "run">("props");
+  const [right, setRightTab] = useState<"props" | "chat" | "run">("props");
+  // panels hidden by the user (this browser): palette, right panel, bottom panel
+  const [hidden, setHidden] = useState<Record<Panel, boolean>>(() => {
+    try { return { pal: false, insp: false, bottom: false, ...JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "{}") }; }
+    catch { return { pal: false, insp: false, bottom: false }; }
+  });
+  const togglePanel = (p: Panel, show?: boolean) => setHidden((h) => {
+    const n = { ...h, [p]: show === undefined ? !h[p] : !show };
+    if (n[p] === h[p]) return h;
+    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(n)); } catch { /* storage not available */ }
+    setTimeout(() => rf.fitView({ padding: 0.15, duration: 150 }), 60);
+    return n;
+  });
+  /** Opens a tab of the right panel (and shows the panel when it is hidden). */
+  const setRight = (tab: "props" | "chat" | "run") => { setRightTab(tab); togglePanel("insp", true); };
   const [trace, setTrace] = useState<Record<string, NodeRun>>({});
   const [assistBusy, setAssistBusy] = useState(false);
   const [showConns, setShowConns] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
   const [runReq, setRunReq] = useState<RunRequest | null>(null);
   const [dims, setDims] = useState<Record<string, { width: number; height: number }>>({});
   const [showData, setShowData] = useState<boolean>(() => {
@@ -81,6 +118,14 @@ function Editor() {
   });
   const past = useRef<Doc[]>([]);
   const future = useRef<Doc[]>([]);
+  // panel sizes changed with the splitters (this browser); the others follow the CSS defaults
+  const [sizes, setSizes] = useState<Partial<PanelSizes>>(loadSizes);
+  const resize = (k: keyof PanelSizes) => (px: number | null) => setSizes((s) => {
+    const n = { ...s };
+    if (px === null) delete n[k]; else n[k] = clampSize(k, px);
+    saveSizes(n);
+    return n;
+  });
   const [menu, setMenu] = useState<MenuState | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const clip = useRef<Clip | null>(null);
@@ -97,11 +142,16 @@ function Editor() {
     api.templates().then(setTemplates).catch(() => undefined);
     api.library().then(setLibrary).catch((e) => flash(String(e), true));
   }, [refreshFlows]);
+  // the last open flow (a preference of this browser), else the first one
   useEffect(() => {
-    if (!current && flows.length) setCurrent(flows[0].name);
+    if (current || !flows.length) return;
+    let last: string | null = null;
+    try { last = localStorage.getItem(LAST_FLOW_KEY); } catch { /* storage not available */ }
+    setCurrent(flows.some((f) => f.name === last) ? last : flows[0].name);
   }, [flows, current]);
   useEffect(() => {
     if (!current) return;
+    try { localStorage.setItem(LAST_FLOW_KEY, current); } catch { /* storage not available */ }
     api.load(current).then((r) => {
       const d = ensureLayout({ spec: r.spec, prompts: r.prompts }, nodeStyle);
       setDoc(d);
@@ -147,10 +197,32 @@ function Editor() {
   const save = useCallback(async () => {
     if (!doc || !current) return;
     try {
-      const r = await api.save(current, tidy(doc));
+      let r = await api.save(current, tidy(doc));
+      if (r.private_terms?.length) {
+        // a public flow (git publishes it) never names private words: keep it on this machine instead?
+        if (!(await dialog.confirm({ title: t("loc.privateTitle"), ok: t("loc.privateOk"),
+          message: t("loc.privateMessage", { terms: r.private_terms.join(", ") }) }))) return;
+        await api.moveFlow(current, "local");
+        await refreshFlows();
+        r = await api.save(current, tidy(doc));
+      }
+      if (!r.saved && !r.blocked_by_secret && r.errors?.length) {
+        // half-done flows can be saved: warn, list the first problems and ask
+        setTab("problems");
+        const first = r.errors.slice(0, 5).map((e) => `• ${e.msg}`).join("\n");
+        const more = r.errors.length > 5 ? `\n${t("app.moreProblems", { n: r.errors.length - 5 })}` : "";
+        if (await dialog.confirm({ title: tn("app.saveWithProblemsTitle", r.errors.length),
+          message: `${t("app.saveWithProblems")}\n\n${first}${more}`, ok: t("app.saveAnyway") })) {
+          r = await api.save(current, tidy(doc), true);
+        } else { setVal(r); return; }
+      }
       setVal(r);
-      if (r.saved) { setSaved(JSON.stringify(doc)); flash(t("app.savedTo", { name: current })); refreshFlows(); }
-      else { setTab("problems"); flash(t("app.notSaved"), true); }
+      if (r.saved) {
+        setSaved(JSON.stringify(doc));
+        flash(r.with_problems ? t("app.savedWithProblems", { name: current }) : t("app.savedTo", { name: current }),
+          !!r.with_problems);
+        refreshFlows();
+      } else { setTab("problems"); flash(r.blocked_by_secret ? t("app.notSavedSecret") : t("app.notSaved"), true); }
     } catch (e) { flash(String(e), true); }
   }, [doc, current, refreshFlows, t]);
 
@@ -162,6 +234,10 @@ function Editor() {
       const inField = (e.target as HTMLElement)?.closest("input,textarea,select");
       if (mod && e.key === "z" && !inField) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       if (mod && e.key === "y" && !inField) { e.preventDefault(); redo(); }
+      // panels, as in VS Code: Ctrl+B palette, Ctrl+Alt+B right panel, Ctrl+J bottom panel
+      // (physical keys: with Ctrl+Alt = AltGr, e.key changes on many keyboard layouts)
+      if (mod && !e.shiftKey && e.code === "KeyB") { e.preventDefault(); togglePanel(e.altKey ? "insp" : "pal"); }
+      if (mod && !e.shiftKey && !e.altKey && e.code === "KeyJ") { e.preventDefault(); togglePanel("bottom"); }
       // node shortcuts: only on the canvas selection, never while typing or in a dialog/menu
       const busy = inField || (e.target as HTMLElement)?.closest?.(".dialog-layer,.ctx-menu,.modal");
       const node = sel?.kind === "node" ? sel.id : null;
@@ -366,25 +442,28 @@ function Editor() {
   const saveToLibrary = async (id: string) => {
     const a = doc?.spec.agents[id];
     if (!doc || !a) return;
-    const mine = library.find((l) => l.id === a.origin?.agent && l.source === "local");
+    const mine = library.find((l) => l.id === a.origin?.agent && l.source !== "core");  // local or extension
     const r = await dialog.form({
       title: t("lib.saveTitle", { name: id }), message: t("lib.saveMessage"), ok: t("lib.saveOk"),
       fields: [
         { key: "id", label: t("lib.saveId"), value: mine?.id ?? id, hint: t("lib.saveIdHint"),
           validate: (v) => !SLUG.test(v.trim()) ? t("insp.nameHint")
-            : library.some((l) => l.id === v.trim() && l.source !== "local") ? t("lib.idTaken") : null },
+            : library.some((l) => l.id === v.trim() && l.source === "core") ? t("lib.idTaken") : null },
         { key: "title", label: t("lib.saveTitleField"), value: mine?.title ?? id },
+        ...locationField(catalog?.locations, t, mine?.source && mine.source !== "core" ? mine.source : "local"),
       ],
     });
     if (!r) return;
-    const exists = library.some((l) => l.id === r.id);
+    const where = r.location || "local";
+    const exists = library.some((l) => l.id === r.id && l.source === where);
     if (exists && !(await dialog.confirm({ title: t("lib.overwriteTitle", { name: r.id }),
       message: t("lib.overwrite"), ok: t("lib.overwriteOk"), danger: true }))) return;
     try {
       // without `from`, an input has no source to take its type from: keep the resolved one
       const agent = clone(a);
       for (const i of Object.values(agent.inputs ?? {})) i.type = inputKind(doc.spec, i);
-      const res = await api.saveToLibrary({ id: r.id, title: r.title, agent, prompt: promptOf(doc, a), overwrite: exists });
+      const res = await api.saveToLibrary({ id: r.id, title: r.title, agent, prompt: promptOf(doc, a), overwrite: exists,
+        location: where });
       update((d) => {
         const x = d.spec.agents[id];
         x.origin = { agent: res.id, hash: res.hash };
@@ -595,6 +674,7 @@ function Editor() {
             : flows.some((f) => f.name === v.trim()) ? t("app.flowExists") : null },
         { key: "title", label: t("app.flowTitle"),
           value: copyFrom ? t("app.copySuffix", { title: doc?.spec.title ?? copyFrom }) : "" },
+        ...locationField(catalog?.locations, t),
       ],
     });
     if (!r) return;
@@ -623,10 +703,11 @@ function Editor() {
       params = p;
     }
     try {
-      await api.create(name, r.title || name, copyFrom ? { copy_from: copyFrom } : tmpl ? { template: tmpl.id, params } : undefined);
+      await api.create(name, r.title || name, copyFrom ? { copy_from: copyFrom } : tmpl ? { template: tmpl.id, params } : undefined,
+        r.location || "local");
       await refreshFlows(); setCurrent(name); flash(t("app.created", { name }));
     }
-    catch (e) { flash(String((e as Error).message ?? e), true); }
+    catch (e) { flash(errorText(e, t), true); }
   };
   const deleteFlow = async () => {
     if (!current || !(await dialog.confirm({ title: t("app.deleteTitle"), message: t("app.confirmDelete", { name: current }),
@@ -639,15 +720,37 @@ function Editor() {
     } catch (e) { flash(String(e), true); }
   };
 
+  const moveFlow = async () => {
+    const f = flows.find((x) => x.name === current);
+    if (!f || !current) return;
+    if (dirty && !(await confirmDiscard())) return;
+    const r = await dialog.form({ title: t("loc.moveFlowTitle", { name: current }), message: t("loc.moveFlowMessage"),
+      ok: t("loc.move"), fields: locationField(catalog?.locations, t, f.location ?? "local") });
+    if (!r || !r.location || r.location === f.location) return;
+    try {
+      await api.moveFlow(current, r.location);
+      await refreshFlows();
+      flash(t("loc.moved", { name: current, place: locLabel(t, r.location) }));
+    } catch (e) { flash(errorText(e, t), true); }
+  };
+
   if (!catalog) return <div className="loading">{t("app.loading")}</div>;
+  const currentFlow = flows.find((f) => f.name === current);
   const errors = val?.errors ?? [];
   return (
-    <div className="app">
+    <div className={`app${hidden.pal ? " hide-pal" : ""}${hidden.insp ? " hide-insp" : ""}${hidden.bottom ? " hide-bottom" : ""}`} style={{
+      ...(sizes.pal ? { "--pal-w": `${sizes.pal}px` } : {}),
+      ...(sizes.insp ? { "--insp-w": `${sizes.insp}px` } : {}),
+      ...(sizes.bottom ? { "--bottom-h": `${sizes.bottom}px` } : {}),
+    } as CSSProperties}>
       <header className="topbar">
         <span className="brand">{t("app.brand")}</span>
         <select value={current ?? ""} onChange={(e) => switchFlow(e.target.value)}>
-          {flows.map((f) => <option key={f.name} value={f.name}>{f.title} ({f.name}){f.valid ? "" : " ⚠"}</option>)}
+          {flows.map((f) => <option key={f.name} value={f.name}>{f.title} ({f.name}){f.valid ? "" : " ⚠"}
+            {f.public ? ` · ${t("loc.public")}` : f.location && f.location !== "local" ? ` · ${f.location}` : ""}</option>)}
         </select>
+        {currentFlow && <button className="link-btn" title={t("loc.moveTitle")} onClick={moveFlow}>
+          <LocationBadge loc={currentFlow.location} isPublic={currentFlow.public} /></button>}
         <button onClick={() => createFlow()}>{t("app.new")}</button>
         <button onClick={() => current && createFlow(current)} disabled={!current}>{t("app.duplicate")}</button>
         <button className="danger" onClick={deleteFlow} disabled={!current}>{t("app.delete")}</button>
@@ -662,6 +765,14 @@ function Editor() {
         {msg && <span className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</span>}
         <span className={`status ${val?.ok ? "ok" : "bad"}`} onClick={() => setTab("problems")}>
           {val?.ok ? t("app.valid") : tn("app.problems", errors.length)}
+        </span>
+        <span className="panel-toggles" role="group" aria-label={t("app.panels")}>
+          {([["pal", "panelLeft", "Ctrl+B"], ["bottom", "panelBottom", "Ctrl+J"], ["insp", "panelRight", "Ctrl+Alt+B"]] as const)
+            .map(([p, icon, keys]) => (
+              <button key={p} className={`icon-btn${hidden[p] ? "" : " on"}`} aria-pressed={!hidden[p]}
+                title={`${t(`app.panel.${p}`)} (${keys})`} aria-label={t(`app.panel.${p}`)} onClick={() => togglePanel(p)}>
+                <Icon id={icon} size={16} />
+              </button>))}
         </span>
         <select className="lang" value={lang} title={t("app.language")} aria-label={t("app.language")}
           onChange={(e) => setLang(e.target.value as Lang)}>
@@ -690,7 +801,8 @@ function Editor() {
           </div>
         ))}
         <p className="muted small">{t("palette.help")}</p>
-        <h2 title={t("palette.libraryHint")}>{t("palette.library")}</h2>
+        <h2 title={t("palette.libraryHint")} className="pal-head">{t("palette.library")}
+          <button className="small" onClick={() => setShowLibrary(true)} title={t("libm.manage")}>{t("libm.manage")}</button></h2>
         {library.length === 0 && <p className="muted small">{t("palette.libraryEmpty")}</p>}
         {library.map((l) => (
           <div key={l.id} className="pal lib" draggable title={`${l.description}\n${t("palette.libraryHint")}`}
@@ -762,7 +874,8 @@ function Editor() {
             }} />
         </div>}
         {doc && current && <div className="right-body" hidden={right !== "chat"}>
-          <Chat key={current} flow={current} lang={lang} doc={doc} onBusy={setAssistBusy} apply={(d) => {
+          <Chat key={current} flow={current} lang={lang} doc={doc} onBusy={setAssistBusy}
+            onLibrary={() => api.library().then(setLibrary).catch((e) => flash(String(e), true))} apply={(d) => {
             const n = ensureLayout(d, nodeStyle);
             update((x) => { x.spec = n.spec; x.prompts = n.prompts; });
           }} />
@@ -788,6 +901,17 @@ function Editor() {
           {tab === "flow" && <pre className="mono">{val?.flow_section ?? t("bottom.flowPending")}</pre>}
         </div>
       </footer>
+      <div className="split-host split-pal">
+        <Splitter edge="right" size={sizes.pal ?? DEFAULT_SIZES.pal} onSize={resize("pal")} label={t("app.resizePanel")} />
+      </div>
+      <div className="split-host split-insp">
+        <Splitter edge="left" size={sizes.insp ?? DEFAULT_SIZES.insp} onSize={resize("insp")} label={t("app.resizePanel")} />
+      </div>
+      <div className="split-host split-bottom">
+        <Splitter edge="top" size={sizes.bottom ?? DEFAULT_SIZES.bottom} onSize={resize("bottom")} label={t("app.resizePanel")} />
+      </div>
+      {showLibrary && <LibraryManager library={library} locations={catalog.locations ?? ["local"]}
+        onChange={async () => setLibrary(await api.library())} onClose={() => setShowLibrary(false)} />}
       {showConns && <Connections onClose={() => {
         setShowConns(false);
         api.catalog().then(setCatalog).catch(() => undefined);

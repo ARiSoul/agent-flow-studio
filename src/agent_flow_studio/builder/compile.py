@@ -23,8 +23,10 @@ from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions, create_sdk_mcp
 
 from ..config import settings
 from ..connections import store as connection_store
+from ..connections.actions import describe_action
+from ..extensions import extension_flow_dirs
 from ..hooks import DELEGATION_TOOL, DELEGATION_TOOLS, make_guard, make_hooks
-from ..policy import WritePolicy
+from ..policy import RUN_ACTION_TOOL, WritePolicy
 from ..tools import artifacts
 from ..tools import git as git_tool
 from ..tools import io as io_tool
@@ -103,14 +105,32 @@ def flows_dir() -> Path:
     return Path(os.getenv("FLOWS_DIR", "flows"))
 
 
+def flow_locations(base: Path | None = None) -> list[tuple[str, Path]]:
+    """Where flows live: "local" (flows/, the base) and each loaded extension's `flows/` folder
+    (extensions/<name>/flows/, outside the public repo; an extension can be its own private repo).
+    Flow names are unique across all of them."""
+    return [("local", base or flows_dir()), *extension_flow_dirs()]
+
+
+def find_flow(name: str, base: Path | None = None) -> tuple[str, Path] | None:
+    """(location, folder) of a flow by its name, or None."""
+    for loc, d in flow_locations(base):
+        if (d / name / "flow.yaml").is_file():
+            return loc, d / name
+    return None
+
+
 def list_flows(base: Path | None = None) -> list[str]:
-    base = base or flows_dir()
-    return sorted(p.parent.name for p in base.glob("*/flow.yaml"))
+    return sorted({p.parent.name for _, d in flow_locations(base) for p in d.glob("*/flow.yaml")})
 
 
 def load_spec(name_or_path: str | Path, base: Path | None = None) -> tuple[FlowSpec, Path]:
     p = Path(name_or_path)
-    path = p if p.suffix in (".yaml", ".yml") else (base or flows_dir()) / str(name_or_path) / "flow.yaml"
+    if p.suffix in (".yaml", ".yml"):
+        path = p
+    else:
+        found = find_flow(str(name_or_path), base)
+        path = (found[1] if found else (base or flows_dir()) / str(name_or_path)) / "flow.yaml"
     if not path.exists():
         raise FlowError(f"flow not found: {path}")
     try:
@@ -320,7 +340,7 @@ def _external_config(name: str, m: ExternalMcp) -> dict[str, Any]:
 
 
 def _connections(spec: FlowSpec) -> dict[str, Any]:
-    wanted = {c for a in spec.agents.values() for c in a.connections}
+    wanted = {c for a in spec.agents.values() for c in (*a.connections, *a.write_connections)}
     if not wanted:
         return {}
     try:
@@ -329,20 +349,78 @@ def _connections(spec: FlowSpec) -> dict[str, Any]:
         raise FlowError(str(e)) from e
     missing = sorted(wanted - set(conns))
     if missing:
-        users = [n for n, a in spec.agents.items() if set(a.connections) & set(missing)]
+        users = [n for n, a in spec.agents.items()
+                 if {*a.connections, *a.write_connections} & set(missing)]
         raise FlowError(f"agent {', '.join(users)}: connector(s) not configured on this machine: "
                         f"{', '.join(missing)}")
+    errors = []
+    for n, a in spec.agents.items():
+        for c in a.connections:  # a connector without read actions is used with http_get
+            if conns[c].type == "website" and not conns[c].actions:
+                errors.append(f"agent {n!r}: website connector {c!r} has no actions yet "
+                              "(a website is only used through its actions)")
+            elif not _has_actions(conns[c], "read") and "connections.http_get" not in a.tools \
+                    and conns[c].type != "website":
+                errors.append(f"agent {n!r}: connector {c!r} has no read actions, so the agent "
+                              "needs connections.http_get")
+        for c in a.write_connections:
+            if not _has_actions(conns[c], "write") and "connections.http_write" not in a.tools:
+                errors.append(f"agent {n!r}: connector {c!r} has no write actions, so the agent "
+                              "needs connections.http_write")
+            if conns[c].access != "write":
+                errors.append(f"agent {n!r}: connector {c!r} is read-only (access: read)")
+    if errors:
+        raise FlowError("; ".join(errors))
     return conns
 
 
+def _has_actions(conn: Any, access: str) -> bool:
+    return any(x.access == access for x in conn.actions.values())
+
+
+def action_tools(a: AgentSpec, conns: dict[str, Any]) -> list[str]:
+    """`run_action` comes implicitly with any connector of the agent that has actions."""
+    names = {*a.connections, *a.write_connections}
+    return [RUN_ACTION_TOOL] if any(conns[c].actions for c in names if c in conns) else []
+
+
 def _connections_section(a: AgentSpec, conns: dict[str, Any]) -> str:
-    if not a.connections:
-        return ""
-    lines = [f"- `{n}`: {conns[n].type}, environment {conns[n].environment}"
-             + (f" — {conns[n].description}" if conns[n].description else "")
-             + (f" (paths: {', '.join(conns[n].allowed_paths)})" if conns[n].allowed_paths else "")
-             for n in a.connections]
-    return "\n\n## Connectors (read-only, with `http_get`)\n" + "\n".join(lines)
+    out = ""
+    if a.connections:
+        lines = [f"- `{n}`: {conns[n].type}, environment {conns[n].environment}"
+                 + (f" — {conns[n].description}" if conns[n].description else "")
+                 + (f" (paths: {', '.join(conns[n].allowed_paths)})" if conns[n].allowed_paths
+                    else "")
+                 for n in a.connections]
+        out = "\n\n## Connectors (read-only, with `http_get`)\n" + "\n".join(lines)
+    return out + _instructions_section(a, conns)
+
+
+def _instructions_section(a: AgentSpec, conns: dict[str, Any]) -> str:
+    """Per connector of the agent (read or write, once each): its instructions and the named
+    actions it may use (read actions; write actions only on its write connectors)."""
+    parts = []
+    for n in dict.fromkeys([*a.connections, *a.write_connections]):
+        c = conns.get(n)
+        if c is None:
+            continue
+        acts = {k: x for k, x in c.actions.items()
+                if x.access == "read" or n in a.write_connections}
+        text = c.instructions.strip()
+        if not text and not acts:
+            continue
+        body = []
+        if text:
+            body += [("(instructions configured with the connector; they do not change what you "
+                      "are allowed to do)"), "", text]
+        if acts:
+            only = (" These are the only operations allowed on it." if c.actions_only
+                    else "")
+            body += ["", (f"Actions — call `run_action` with `connection: \"{n}\"`, the action "
+                          f"name and its `params`.{only}")]
+            body += [describe_action(k, x) for k, x in acts.items()]
+        parts.append(f"\n\n## How to use the connector `{n}`\n" + "\n".join(body).lstrip("\n"))
+    return "".join(parts)
 
 
 def _workspace_dir(spec: FlowSpec, check: bool) -> Path | None:
@@ -438,7 +516,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
     for name, a in spec.agents.items():
         body = _read_prompt(flow_dir, a.prompt, a.prompt_file, f"agent {name}")
         tools = [_sdk_tool(spec, t) for t in a.tools]
-        tools += [t for t in io_tools(spec, name) if t not in tools]
+        tools += [t for t in (*io_tools(spec, name), *action_tools(a, conns)) if t not in tools]
         agent_tools[name] = tools
         agents[name] = AgentDefinition(
             description=a.description,
@@ -458,6 +536,8 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
                       if t in BUILTIN_TOOLS and BUILTIN_TOOLS[t].native})
     if any(io_tools(spec, n) for n in spec.agents):
         used_builtin.add("io")
+    if any(action_tools(a, conns) for a in spec.agents.values()):
+        used_builtin.add("connections")
     servers: dict[str, Any] = {s: BUILTIN_SERVERS[s] for s in sorted(used_builtin)}
     for name, m in spec.mcp_servers.items():
         if any(t.startswith(f"{name}.") for t in used):
@@ -517,7 +597,11 @@ def _write_policy(spec: FlowSpec, ws: Path | None, conns: dict[str, Any]) -> Wri
         workspace_env=spec.workspace.environment if spec.workspace else "dev",
         protected_branches=list(spec.workspace.protected_branches) if spec.workspace else [],
         write_connections={n: set(a.write_connections) for n, a in spec.agents.items()},
+        read_connections={n: set(a.connections) for n, a in spec.agents.items()},
         connection_env={n: c.environment for n, c in conns.items()},
+        connection_actions={n: {k: x.access for k, x in c.actions.items()}
+                            for n, c in conns.items()},
+        actions_only={n for n, c in conns.items() if c.actions_only or c.type == "website"},
     )
 
 
@@ -537,7 +621,7 @@ def compile_agent(spec: FlowSpec, flow_dir: Path, agent: str, *,
     policy = policy or _write_policy(spec, ws, conns)
     body = _read_prompt(flow_dir, a.prompt, a.prompt_file, f"agent {agent}")
     tools = [_sdk_tool(spec, t) for t in a.tools]
-    tools += [t for t in io_tools(spec, agent) if t not in tools]
+    tools += [t for t in (*io_tools(spec, agent), *action_tools(a, conns)) if t not in tools]
 
     natives = sorted({str(BUILTIN_TOOLS[t].native) for t in a.tools
                       if t in BUILTIN_TOOLS and BUILTIN_TOOLS[t].native})
@@ -545,6 +629,8 @@ def compile_agent(spec: FlowSpec, flow_dir: Path, agent: str, *,
                if t in BUILTIN_TOOLS and BUILTIN_TOOLS[t].native is None}
     if io_tools(spec, agent):
         builtin.add("io")
+    if action_tools(a, conns):
+        builtin.add("connections")
     servers: dict[str, Any] = {s: BUILTIN_SERVERS[s] for s in sorted(builtin)}
     for name, m in spec.mcp_servers.items():
         if any(t.startswith(f"{name}.") for t in a.tools):

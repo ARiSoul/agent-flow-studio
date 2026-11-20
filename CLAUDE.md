@@ -54,6 +54,12 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
 7. Do not remove the guard hook, `dontAsk`, `setting_sources=[]` or the contract validation.
 8. **Public repository:** nothing internal to companies/clients goes into git (code, flows, system
    names, data). That lives in `extensions/`, locally ignored `flows/` and `CLAUDE.local.md`.
+   `flows/*` is ignored; public example flows are listed one by one in `.gitignore`. Flows, library
+   agents and connector definitions can also live in `extensions/<name>/` (`flows/`, `agents/`,
+   `connections.yaml`; `compile.flow_locations`, `library.agent_dirs`, `store.connection_files`).
+   "Public" is an explicit location (`publish.py`): flows get a `!flows/<name>/` line in
+   `.gitignore`, library agents go to the built-in library, connectors to
+   `connections.public.yaml`; anything naming a word from `private_terms.txt` is refused.
 
 ## Architecture
 - `builder/`: `spec.py` (flow format + validation), `catalog.py` (tools, contracts),
@@ -67,7 +73,8 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   (`{agent, hash}`); `fingerprint` ignores flow-only fields (`from`, `join`, `max_runs`, icon) and
   the validation returns `origins` (changed here / newer in the library). Library agents have no
   `from` and never `autonomy: auto`.
-- Typed data: `builder/types.py` (`IOType`, `check_value`), `builder/expr.py` (safe `if`
+- Typed data: `builder/types.py` (`IOType`, `check_value`; flow inputs may have `show_if` on the
+  inputs before them, applied by `runner.prepare_inputs` and `/api/inputs/visible`), `builder/expr.py` (safe `if`
   expressions: `ast` with a whitelist, never `eval`), `tools/io.py` (MCP `io`: `get_inputs`,
   `set_output`, `read_file`; values in `runs/<id>/io/`; the hook checks that `agent` is the caller).
   Agents get the `io` tools implicitly from their inputs/outputs.
@@ -79,13 +86,32 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   `-c`/`--output`/external diff, fsmonitor off). Writing with git stays in `workspace.bash`.
 - `hooks.py` (guard + audit) and `policy.py` (writes, workspace, Bash, autonomy, approvals,
   delegation limit for step-by-step tests).
-- `connections/`: profiles in `connections.yaml` (outside git), `keyring`/`${VAR}` secrets,
+- `connections/`: profiles in `connections.yaml` (outside git) with optional `instructions` (how to
+  use the system; `compile.py` adds them to the prompt of each agent with that connector, read or
+  write; secret-like text is refused; they never widen access) and named `actions`
+  (`connections/actions.py`: typed params, templates for path/query/body; `run_action` is given
+  implicitly to agents whose connectors have actions; `policy.py` checks the action and its access;
+  `actions_only` refuses http_get/http_write on that connector). **Website** connectors
+  (`connections/web.py`, optional Playwright): the person signs in in a visible window (profile in
+  `~/.agent-flow-studio/browser/<name>`), actions run declared `steps` headless, read actions
+  block non-GET requests, navigation stays on the site; the model never clicks freely; `get_json`
+  opens the site's JSON in the browser (system certificates) and keeps only the listed fields;
+  `redact` masks phones/emails; session cookies are saved from the sign-in window
+  (`session-state.json` in the profile) and restored before each action. Also
+  `keyring`/`${VAR}` secrets,
   `http_get` (read) and `http_write` (write, only with `access: write`); `oauth.py` = sign-in on
   a page (authorization code + PKCE, single-use `state`, callback `/api/oauth/callback`, tokens
   only in the keyring); managed identity in `client.py`. Provider presets are data
   (`OAUTH_PRESETS` in `model.py`), never code paths per provider.
 - `editor/`: `server.py` (local API, 127.0.0.1, local Hosts, `X-Flow-Editor` header on writes),
-  `assistant.py` (chat: only changes an in-memory draft), `runner.py` (full/step/until/agent runs,
+  `assistant.py` (chat: only changes an in-memory draft; `view_library`, `add_library_agent`,
+  `update_from_library` copy library agents into the draft; `propose_library_agent` checks a new
+  or edited library agent with `library.check` and the chat shows it with a "Save to library"
+  button — the assistant never saves), `commands.py` (saved assistant commands: message +
+  instructions in `assistant_commands.yaml` outside git; `/api/assist` takes `command` and
+  `with_command` puts its instructions before the message), `chats.py` (conversation history per
+  flow in `runs/chats/<flow>/<id>.json`: the editor saves its items + session id after each reply;
+  `/api/chats`), `runner.py` (full/step/until/agent runs,
   gates, live approvals, decisions in `runs/<id>/decisions.jsonl`), `yaml_io.py`, `validation.py`.
 - `extensions.py`: loads `extensions/<name>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
 - Frontend in `editor/` (Vite + React + @xyflow/react, i18n in `editor/src/i18n/`) → build in
@@ -103,6 +129,7 @@ Subagents accept MCP tools by their full name `mcp__server__tool`.
 
 ## Commands
 - `pytest` · `AFS_NO_EXTENSIONS=1 pytest tests` · `ruff check .`
+- Website connectors: `pip install -e ".[web]"` (Playwright; uses the installed Edge/Chrome)
 - `agent-flow-studio <input> --flow <flow> [--resume <session_id>]`
 - `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog|templates|agents`
 - `agent-flow-studio-flows new <flow> --template <id> --set <param>=<value>`

@@ -157,6 +157,8 @@ async def auth_headers(name: str, conn: Connection) -> dict[str, str]:
         return {"Authorization": f"Bearer {await _managed_identity(name, conn)}"}
     if m == "oauth_browser":
         return {"Authorization": f"Bearer {await _oauth(name, conn)}"}
+    if m == "browser_session":
+        raise ConnectorError(f"connector {name!r} uses a browser session: use its actions")
     raise ConnectorError(f"unknown method {m!r}")
 
 
@@ -191,12 +193,18 @@ def check_path(conn: Connection, path: str) -> None:
         raise ConnectorError(f"path not allowed; allowed: {', '.join(conn.allowed_paths)}")
 
 
+def _not_website(name: str, conn: Connection) -> None:
+    if conn.type == "website":
+        raise ConnectorError(f"connector {name!r} is a website: use its actions (run_action)")
+
+
 async def get(name: str, path: str, query: dict[str, Any] | None = None,
               conns: dict[str, Connection] | None = None) -> dict[str, Any]:
     conns = store.load() if conns is None else conns
     conn = conns.get(name)
     if conn is None:
         raise ConnectorError(f"connector {name!r} is not configured")
+    _not_website(name, conn)
     check_path(conn, path)
     auth_h, auth_q = await auth_params(name, conn)
     headers = {"Accept": "application/json", "User-Agent": USER_AGENT, **auth_h}
@@ -227,6 +235,7 @@ async def write(name: str, method: str, path: str, body: Any = None,
     conn = conns.get(name)
     if conn is None:
         raise ConnectorError(f"connector {name!r} is not configured")
+    _not_website(name, conn)
     if conn.access != "write":
         raise ConnectorError(f"connector {name!r} is read-only (access: read)")
     method = method.upper()
@@ -256,6 +265,12 @@ async def test(name: str, conns: dict[str, Connection] | None = None) -> dict[st
     conn = conns.get(name)
     if conn is None:
         return {"ok": False, "detail": "connector does not exist"}
+    if conn.type == "website":  # is the browser session still signed in?
+        from . import web
+        try:
+            return await web.check_session(name, conn)
+        except web.WebError as e:
+            return {"ok": False, "detail": str(e)[:300]}
     try:
         r = await get(name, conn.resolved_test_path(), conns=conns)
     except (ConnectorError, httpx.HTTPError) as e:

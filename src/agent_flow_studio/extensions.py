@@ -67,3 +67,23 @@ def _load() -> Loaded:
 
 
 LOADED = _load()
+
+
+def extension_root(name: str) -> Path:
+    return extensions_dir().resolve() / name
+
+
+def extension_flow_dirs() -> list[tuple[str, Path]]:
+    """(extension, extensions/<name>/flows) for each loaded extension (the folder may not exist
+    yet: it is created when the first flow is saved there)."""
+    return [(n, extension_root(n) / "flows") for n in LOADED.names]
+
+
+def extension_agent_dirs() -> list[tuple[str, Path]]:
+    return [(n, extension_root(n) / "agents") for n in LOADED.names]
+
+
+def extension_connection_files() -> list[tuple[str, Path]]:
+    """extensions/<name>/connections.yaml: connector definitions shared through the extension
+    (no secrets there: only ${VAR} or keyring references, as in the local file)."""
+    return [(n, extension_root(n) / "connections.yaml") for n in LOADED.names]

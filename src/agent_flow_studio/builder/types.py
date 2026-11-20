@@ -39,6 +39,9 @@ class IOType(BaseModel):
     accept: list[str] = Field(default_factory=list)  # file: extensions such as ".md"
     contract: str | None = None  # json: a contract from the catalog
     draft: bool = False  # markdown: a draft for human approval
+    # flow inputs only: shown (and required) only when this expression on the inputs declared
+    # before it holds, e.g. input.source == "platform"; hidden inputs get no value
+    show_if: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> IOType:

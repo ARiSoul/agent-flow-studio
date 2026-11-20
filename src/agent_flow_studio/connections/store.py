@@ -23,8 +23,19 @@ def connections_file() -> Path:
     return Path(os.getenv("CONNECTIONS_FILE", "connections.yaml"))
 
 
-def load(path: Path | None = None) -> dict[str, Connection]:
-    path = path or connections_file()
+_locations: dict[str, str] = {}  # connector → "local" or the extension it was read from
+
+
+def connection_files() -> list[tuple[str, Path]]:
+    """Local connections.yaml (this machine) and extensions/<name>/connections.yaml (shared
+    through the extension; never secrets there either)."""
+    from ..extensions import extension_connection_files
+    from ..publish import PUBLIC, public_connections_file
+    return [("local", connections_file()), *extension_connection_files(),
+            (PUBLIC, public_connections_file())]
+
+
+def _read(path: Path) -> dict[str, Connection]:
     if not path.is_file():
         return {}
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -39,15 +50,56 @@ def load(path: Path | None = None) -> dict[str, Connection]:
     return out
 
 
-def save(conns: dict[str, Connection], path: Path | None = None) -> None:
-    path = path or connections_file()
+def load(path: Path | None = None) -> dict[str, Connection]:
+    """One file, or (no path) all of them: local + extensions; a name exists in only one."""
+    if path is not None:
+        return _read(path)
+    out: dict[str, Connection] = {}
+    where: dict[str, str] = {}
+    for loc, f in connection_files():
+        for n, c in _read(f).items():
+            if n in out:
+                raise ConnectorConfigError(f"connector {n!r} exists twice ({where[n]}, {loc})")
+            out[n], where[n] = c, loc
+    _locations.clear()
+    _locations.update(where)
+    return out
+
+
+def location(name: str) -> str:
+    return _locations.get(name, "local")
+
+
+def save(conns: dict[str, Connection], path: Path | None = None,
+         moves: dict[str, str] | None = None) -> None:
+    """Writes each connector to the file of its location (moves: connector → new location)."""
+    if path is not None:
+        _write(path, conns, local=True)
+        return
+    files = dict(connection_files())
+    where = {n: (moves or {}).get(n) or location(n) for n in conns}
+    unknown = set(where.values()) - set(files)
+    if unknown:
+        raise ConnectorConfigError(f"unknown location(s): {', '.join(sorted(unknown))}")
+    for loc, f in files.items():
+        mine = {n: c for n, c in conns.items() if where[n] == loc}
+        if mine or f.is_file():
+            _write(f, mine, local=loc == "local")
+    _locations.clear()
+    _locations.update(where)
+
+
+def _write(path: Path, conns: dict[str, Connection], local: bool) -> None:
     data = {"version": 1, "connections": {
         n: {"type": c.type, **c.model_dump(mode="json", exclude_defaults=True)}
         for n, c in sorted(conns.items())}}
-    text = ("# Connectors on this machine. No secrets: only ${VAR} or 'keyring' references.\n"
-            + yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+    head = ("# Connectors on this machine. No secrets: only ${VAR} or 'keyring' references.\n"
+            if local else "# Shared connectors (an extension, or public in git). No secrets: only "
+                          "${VAR} or 'keyring' references (each machine sets its own).\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    tmp.write_text(head + yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                   encoding="utf-8")
     os.replace(tmp, path)
 
 

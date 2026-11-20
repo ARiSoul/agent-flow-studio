@@ -6,7 +6,9 @@ import pytest
 
 from agent_flow_studio import hooks
 from agent_flow_studio.config import settings
+from agent_flow_studio.editor import chats
 from agent_flow_studio.editor import runner as runner_mod
+from agent_flow_studio.editor import server as server_mod
 from agent_flow_studio.tools import artifacts
 from agent_flow_studio.tools import io as io_tool
 
@@ -23,7 +25,7 @@ def _runs_dir(tmp_path, monkeypatch):
     """Safety net: no test writes in the real runs/ folder. Fixtures that need the folder use
     the same path (tmp_path / "runs")."""
     s = replace(settings, runs_dir=tmp_path / "runs")
-    for mod in (hooks, runner_mod, artifacts, io_tool):
+    for mod in (hooks, runner_mod, artifacts, io_tool, chats, server_mod):
         monkeypatch.setattr(mod, "settings", s)
 
 
@@ -31,3 +33,9 @@ def _runs_dir(tmp_path, monkeypatch):
 def _agents_dir(tmp_path, monkeypatch):
     """Safety net: the local agent library of the tests is a temporary folder."""
     monkeypatch.setenv("AFS_AGENTS_DIR", str(tmp_path / "agents"))
+
+
+@pytest.fixture(autouse=True)
+def _commands_file(tmp_path, monkeypatch):
+    """Safety net: the saved assistant commands of the tests are a temporary file."""
+    monkeypatch.setenv("AFS_COMMANDS_FILE", str(tmp_path / "assistant_commands.yaml"))

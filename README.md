@@ -57,12 +57,37 @@ approvals, connectors and writes with controlled autonomy.
   agent's inputs. Gates and writes ask for a live decision.
 - **Connectors**: HTTP API, Azure Resource Manager, Azure DevOps, Microsoft Graph, GitHub, GitLab
   and Atlassian Cloud (Jira, Confluence), with environment, allowed paths, read/write access and
-  "Test connection". Authentication: none, API key, bearer, basic, PAT, client credentials, CLI
+  "Test connection". Each connector can have **instructions for the agents** (how to use that
+  system: requests, fields, paging, limits, pitfalls; "Insert an outline" gives a start): every
+  agent with the connector gets them in its prompt, and so does the chat assistant. They stay in
+  `connections.yaml` (outside git), are refused when they look like a secret, and never widen
+  access (paths and read/write still apply); a change is audited by size only.
+  **Actions** are a connector's named operations with typed parameters (YAML in the Connectors
+  window, e.g. `get_ticket(number)` → `GET /api/tickets/{number}`): agents with the connector get
+  `run_action` automatically and the list in their prompt, the studio checks the values and builds
+  the request, and with "Only these actions" they are the only way to use the connector. Write
+  actions need write access and follow the autonomy (approval). Authentication: none, API key, bearer, basic, PAT, client credentials, CLI
   session (az login, gh auth login), Azure managed identity and **sign-in on a page** (OAuth 2
   with PKCE: the provider's page opens, you sign in, and the tokens go to the keyring and renew
   themselves). HTTP API has presets for Facebook, Instagram, Threads, WhatsApp Business and
   Reddit (each needs an app that you register with the provider). Secrets and tokens live in the
   system Credential Manager (keyring) or as `${VAR}`.
+
+## Website connectors (a site used like a person)
+For a platform without an API, the **Website** connector type drives a real browser with **your
+own sign-in**: "Sign in" opens the site in a browser window, you sign in there (MFA included) and
+close it; the session stays in a browser profile on this machine (`~/.agent-flow-studio/browser`,
+outside git) and the studio never types passwords. Agents use the site **only through its actions**,
+whose steps you declare (`goto`, `click`, `fill`, `select`, `press`, `wait_for`, `extract`,
+`extract_all`, `extract_table`, and `get_json`: one GET of the site's own JSON with your session,
+keeping only the listed fields, e.g. `notes: journal[].{date,user.name,text}`); the model picks an
+action and its parameters, never free clicks. `redact: [phone, email]` on an action masks those in
+everything it returns. Session cookies are kept from the sign-in window, so a site that uses
+browser-session cookies still works after you close it (until the site's own session expires).
+Read actions block every request that is not GET/HEAD (so they cannot change anything), navigation
+must stay on the site and its allowed paths, and an expired session is detected ("signed-in
+element" / "sign-in URL marker"). Needs Playwright (`pip install -e ".[web]"`), which uses the
+installed Edge or Chrome.
 
 ## Flow templates
 **New** in the editor (or `agent-flow-studio-flows new`) can start from a template; you fill in its
@@ -73,6 +98,13 @@ parameters (repository folder, base branch, connector…):
   without changing code.
 - **fix-and-pr** — reads an issue (GitHub, Azure DevOps or GitLab) through a connector, fixes it
   on `fix/<issue>`, runs the tests, pushes the branch and, after your approval, opens a draft PR.
+- **ticket-triage** — the ticket comes as pasted text, a URL or a number (the run form shows only
+  the field you need, with `show_if`); a URL or a number is read with a connector action (API or
+  website, read only), and from there the triage is the same: summary, category, priority, next
+  steps, as a draft for review.
+
+Flow inputs can have `show_if` (an expression on the inputs declared before them, e.g.
+`input.source == "url"`): the field is shown, and required, only when it holds.
 
 Templates live in `src/agent_flow_studio/templates/<id>/` (`template.yaml` + `flow.yaml` +
 `prompts/`); `{{param}}` placeholders are filled in on creation. An extension can add its own in
@@ -83,6 +115,20 @@ agent-flow-studio-flows templates
 agent-flow-studio-flows new review-app --template code-review --set workspace=D:/repos/app
 ```
 
+## Assistant conversations
+Each reply saves the conversation of the open flow on this machine (`runs/chats/<flow>/`,
+outside git), with the model session, so it is still there after a reload or when you come back
+to the flow, and it continues with its context. **New conversation** starts another one (the old
+one stays); **History** lists the flow's conversations to open, rename or delete them.
+
+## Saved assistant commands
+In the assistant, **☆ Save** (next to Send, or on any message you sent) keeps a message as a
+**command**: a name, the message, and **instructions** (rules, context, format…) that go to the
+assistant with the message without showing in the chat. Commands appear as small chips above the
+chat input (favorites first); a click puts the message in the input with its instructions
+attached. "⋯" opens the list to see the details, use, edit, mark as favorite or delete. They are
+stored on this machine in `assistant_commands.yaml` (or `AFS_COMMANDS_FILE`), outside git.
+
 ## Agent library
 Generic agents you reuse across flows. In the editor, palette → **Agent library**: drag or click
 an agent to **copy** it into the flow, then tune it there (prompt, tools, model…); link its inputs
@@ -91,7 +137,12 @@ and place it wherever the flow needs it. A copy remembers where it came from (`o
 flow and whether the library has a newer version. Nothing in a flow changes when the library
 changes: **Update from library** (on the node's right-click menu or in its properties) brings the
 new version in on request, keeping the input links, join, loops and icon; **Detach** drops the
-link. **Save to library…** stores any agent of a flow in your local library.
+link. **Save to library…** stores any agent of a flow in your local library. The chat assistant
+knows the library too: it checks it before writing a new agent and copies one when it fits. It
+can also **create or edit** library agents (from scratch, from an agent of the flow or from a
+library agent): it shows the proposal in the chat and you save it with "Save to library" — the
+assistant itself never writes to the library. Built-in and extension agents are read only (edit
+a copy under a new id). Library agents only use catalog tools (external MCPs belong to a flow).
 
 Sources: built-in generic agents in `src/agent_flow_studio/agents/<id>/` (`agent.yaml` +
 `prompt.md`; repo explorer, code reviewer, summarizer), an extension's `extensions/<name>/agents/`
@@ -108,6 +159,25 @@ and the **workspace** (folder/repository, environment, protected branches); each
 the autonomy. When a write needs approval, the run pauses and the editor shows the file and
 content, the command or the HTTP request. The hook always denies paths outside the workspace, force
 pushes or pushes to protected branches, and destructive commands.
+
+## Where things live (public repo, this machine, extensions)
+Nothing you create in the editor goes to the public repository by default:
+- **Flows** live in `flows/`, which git ignores except the public examples listed one by one in
+  `.gitignore` (today `flows/repo-review/`). The flow picker marks a public flow with **public (git)**.
+- **Connectors** (`connections.yaml`), **library agents** (`agents/`), saved assistant
+  commands, conversations and runs stay on this machine.
+- **Extensions** (`extensions/<name>/`) are the other place: "Where to keep it" (new flow, save to
+  library, connector) can put a flow, an agent or a connector definition there, so the extension
+  — ideally its own private git repository — carries them to other machines (see
+  [`extensions/README.md`](extensions/README.md)).
+- **Public (git)** is a third, explicit choice (never the default) for flows (`flows/<name>/` with
+  an exception in `.gitignore`), library agents (the built-in library in the package) and
+  connectors (`connections.public.yaml`, definitions only — e.g. a public site that needs an
+  account). Click the location tag next to the flow picker to move a flow between places; the
+  library window (palette → Agent library → Manage) edits, duplicates, moves and deletes agents.
+- **Private terms**: list company or client names, internal domains… in `private_terms.txt`
+  (outside git) or `extensions/<name>/private_terms.txt`; anything that names one of them cannot
+  be made public (the editor offers to keep it on this machine instead).
 
 ## Local extensions
 Tools, contracts and reports for a domain/company live in `extensions/<name>/` (outside git), in a

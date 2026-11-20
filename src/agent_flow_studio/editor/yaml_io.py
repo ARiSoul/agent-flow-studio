@@ -64,8 +64,26 @@ def spec_to_data(spec: FlowSpec) -> dict[str, Any]:
 
 
 def dump_flow(spec: FlowSpec) -> str:
-    data = spec_to_data(spec)
-    parts = [_HEADER.format(title=spec.title.replace("\n", " "), name=spec.name)]
+    return _dump(spec_to_data(spec), spec.title, spec.name)
+
+
+def dump_raw(raw: dict[str, Any], name: str) -> str:
+    """A flow that does not validate yet (saved "with problems"): written as it is, in the same
+    readable layout, so the editor can open it again and finish it."""
+    data = {"version": raw.get("version", 1), **{k: v for k, v in raw.items() if k != "version"}}
+    layout = data.get("layout")
+
+    def _pos(p: Any) -> Any:
+        ok = isinstance(p, dict) and all(isinstance(p.get(c), (int, float)) for c in ("x", "y"))
+        return {"x": round(p["x"]), "y": round(p["y"])} if ok else p
+
+    if isinstance(layout, dict):
+        data["layout"] = {k: _pos(p) for k, p in layout.items()}
+    return _dump(data, str(raw.get("title") or name), name)
+
+
+def _dump(data: dict[str, Any], title: str, name: str) -> str:
+    parts = [_HEADER.format(title=title.replace("\n", " "), name=name)]
     # top-level blocks separated by a blank line, for reading and diffs
     for key, value in data.items():
         chunk = yaml.dump(_Block({key: value}), Dumper=_Dumper, allow_unicode=True, sort_keys=False,
