@@ -4,6 +4,7 @@ import { Icon, ICON_IDS } from "./icons";
 import { AgentInputsEditor, ExprInput, IOListEditor, exprRefs } from "./IOEditors";
 import { artifactOwners, isTyped, renameNode, SLUG, nodeNames } from "./model";
 import { useI18n } from "./i18n";
+import { localizeParam } from "./i18n/server";
 import type { AgentRaw, ArtifactRaw, Catalog, Doc, FlowRaw, McpRaw, Selection, Validation } from "./types";
 
 type Update = (fn: (d: Doc) => void) => void;
@@ -347,11 +348,13 @@ function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "se
 }
 
 function EdgePanel({ index, doc, val, update }: { index: number; doc: Doc; val: Validation | null; update: Update }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const e = doc.spec.edges![index];
   if (!e) return null;
   const tag = `edge ${e.from}→${e.to}: `;
-  const errors = (val?.errors ?? []).filter((x) => x.msg.startsWith(tag)).map((x) => x.msg.slice(tag.length));
+  // "edge a→b: <reason>": show the reason, in the UI language when it has a code
+  const errors = (val?.errors ?? []).filter((x) => x.msg.startsWith(tag)).map((x) =>
+    (x.code === "spec.edge_reason" ? localizeParam(x.params?.reason, lang) : null) ?? x.msg.slice(tag.length));
   return (
     <>
       <p className="edge-title"><code>{e.from}</code> → <code>{e.to}</code></p>

@@ -40,15 +40,21 @@ chat with the model; resuming a conversation after a server restart.
 work machine (the core draft marker is English since the translation; the extension test expects
 the Portuguese one). Fix it in the extension (outside git).
 
+**Since then, on the second machine (account B)**: backlog items 3 (links of a run on the canvas)
+and 7 (server messages in the UI language). After you pull: `npm run build` and restart the editor.
+
 **Next suggested task**: item 1 of the backlog.
 
 ## Current state
-Works and is tested (`pytest`: core 371 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 376 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
   (`afs.lang`). Strings in `editor/src/i18n/<lang>.ts` (`en.ts` is the reference; `tsc` fails if a
-  language misses a key). The assistant replies in the UI language. Backend messages are English.
+  language misses a key). The assistant replies in the UI language. Backend messages are English text plus a code and
+  parameters (`messages.py`: `msg(code, template, …)`, `MsgError`); the editor shows them in the UI
+  language with `editor/src/i18n/server.<lang>.ts` (English: the server text). A new message = a
+  `msg()` call + a line in each `server.<lang>.ts` (`tests/test_messages.py` checks it).
 - **Editor themes**: System, Light, Dark, Sepia, Ocean, High contrast (`afs.theme`). Colors only
   through CSS tokens in `editor/src/styles.css`; `editor/public/theme-init.js` avoids a flash.
 - **Node styles**: Cards, Compact, Avatars (toolbar, `afs.nodeStyle`); each agent can have an
@@ -127,8 +133,8 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
    only accept an https redirect URI, so they need an https tunnel or a hosted editor.
 5. [ ] Writes through external MCPs (today read only).
 6. [ ] More flows/templates, library agents and skills (phase 4 of the builder).
-7. [ ] (Optional) Translate backend messages (validation, errors, input reasons such as
-   "required") to the UI language.
+7. [x] Translate backend messages (validation, errors, input reasons such as "required") to the
+   UI language (done 2026-11-20, second machine).
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
 · editor polish · context menu · agent library · assistant commands/history · connector actions
@@ -213,3 +219,6 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-20 · second machine (account B) · Canvas shows the links of a run: followed (green, ✓,
   moving while the target runs), not followed (faded, ✗), failed `if` (red). Checked in the browser
   with a fake model on the `parallel` test flow.
+- 2026-11-20 · second machine (account B) · Server messages in the UI language: codes + params
+  (`messages.py`) in spec, types, expressions, compile, run form and validation (pydantic errors
+  get `pydantic.<type>`); tables `server.pt.ts` / `server.es.ts`; `test_messages.py`.

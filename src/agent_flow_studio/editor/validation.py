@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from ..builder.compile import FlowError, compile_flow, flow_section
 from ..builder.library import origin_status
 from ..builder.spec import FlowSpec
+from ..messages import Msg, MsgError, to_json
 
 
 # --- structured errors (so the editor can highlight nodes) ----------------------------------------
@@ -20,22 +21,46 @@ def _nodes_in(text: str, nodes: set[str]) -> list[str]:
                                                 text))
 
 
+def _parts(e: dict[str, Any]) -> list[str]:
+    """The messages of one pydantic error: the Msg of a MsgError, or pydantic's own text with a
+    `pydantic.<type>` code (so the editor can translate it too)."""
+    err = (e.get("ctx") or {}).get("error")
+    if isinstance(err, MsgError):
+        return list(err.msgs)
+    text = str(e["msg"]).removeprefix("Value error, ")
+    if e.get("type") == "value_error":
+        return text.split("; ")
+    ctx = {k: v for k, v in (e.get("ctx") or {}).items() if k != "error"}
+    return [Msg(f"pydantic.{e['type']}", text.replace("{", "{{").replace("}", "}}"),
+                **{k: str(v) for k, v in ctx.items()})]
+
+
+def _entry(loc: str, part: str, found: list[str]) -> dict[str, Any]:
+    out: dict[str, Any] = {"loc": loc, "msg": str(part), "nodes": found}
+    j = to_json(part)
+    if j is not None:  # code + params: the editor shows it in the UI language
+        out |= j
+    return out
+
+
 def _structured(exc: Exception, raw: dict[str, Any]) -> list[dict[str, Any]]:
     nodes = set(raw.get("agents") or {}) | set(raw.get("gates") or {})
     out: list[dict[str, Any]] = []
     if isinstance(exc, ValidationError):
         for e in exc.errors(include_url=False):
             loc = ".".join(str(p) for p in e["loc"])
-            msg = str(e["msg"]).removeprefix("Value error, ")
-            for part in msg.split("; "):
+            for part in _parts(e):
                 # "agents not reachable from 'x': ['y']" → the culprit is what comes after ": "
                 tail = _nodes_in(part.rsplit(": ", 1)[-1], nodes) if ": " in part else []
                 found = (tail or _nodes_in(part, nodes)
                          or [p for p in map(str, e["loc"]) if p in nodes])
-                out.append({"loc": loc, "msg": part, "nodes": found})
+                out.append(_entry(loc, part, found))
+    elif isinstance(exc, MsgError):
+        for part in exc.msgs:
+            out.append(_entry("", part, _nodes_in(str(part), nodes)))
     else:
-        msg = str(exc)
-        out.append({"loc": "", "msg": msg, "nodes": _nodes_in(msg, nodes)})
+        text = str(exc)
+        out.append({"loc": "", "msg": text, "nodes": _nodes_in(text, nodes)})
     return out
 
 

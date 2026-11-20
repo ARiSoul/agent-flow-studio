@@ -41,6 +41,8 @@ from ..builder.types import IOType, check_value
 from ..config import settings
 from ..engine import GraphEngine, RouteFn
 from ..hooks import DELEGATION_TOOLS
+from ..messages import msg as m_
+from ..messages import reason, to_json
 from ..policy import ApprovalRequest
 from ..tools import io as io_tool
 from ..tools.guards import safe_artifact_path
@@ -147,6 +149,11 @@ def input_visible(t: IOType, values: dict[str, Any]) -> bool:
         return True
 
 
+def _codes(errors: dict[str, str]) -> dict[str, Any]:
+    """{field: {code, params}} for the messages that have a code (the editor translates them)."""
+    return {k: j for k, v in errors.items() if (j := to_json(v)) is not None}
+
+
 def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any], *,
                    partial: bool = False) -> dict[str, Any]:
     """Validates the typed flow inputs (writing uploaded files first). RunError 422 with
@@ -156,7 +163,8 @@ def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any], *,
     rd = io_tool.run_dir(run_id)
     fresh = not rd.exists()
     unknown = set(raw) - set(spec.flow_inputs())
-    errors: dict[str, str] = {k: "not an input of this flow" for k in unknown}
+    errors: dict[str, str] = {k: m_("run.not_flow_input", "not an input of this flow")
+                              for k in unknown}
     values: dict[str, Any] = dict(io_tool.flow_inputs(run_id)) if partial and not fresh else {}
     total = [0]
     for name, t in spec.flow_inputs().items():
@@ -175,7 +183,7 @@ def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any], *,
                 v = refs if t.multiple else refs[0]
             clean = check_value(t, v, run_dir=rd, contracts=CONTRACTS)
         except ValueError as e:
-            errors[name] = str(e)
+            errors[name] = reason(e)
             continue
         if clean is not None and clean != []:
             values[name] = clean
@@ -183,7 +191,7 @@ def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any], *,
         if fresh:  # a new run folder: leave nothing behind
             shutil.rmtree(rd, ignore_errors=True)
         raise RunError(422, "invalid inputs: " + "; ".join(f"{k}: {v}" for k, v in errors.items()),
-                       {"inputs": errors})
+                       {"inputs": {k: str(v) for k, v in errors.items()}, "codes": _codes(errors)})
     return values
 
 
@@ -193,11 +201,12 @@ def check_given(spec: FlowSpec, run_id: str, agent: str, given: dict[str, Any]) 
     a = spec.agents[agent]
     rd = io_tool.run_dir(run_id)
     errors: dict[str, str] = {}
-    out: dict[str, Any] = {}
+    out: dict[str, Any] = {}  # (errors hold Msg: English text + code for the editor)
     for name, v in given.items():
         i = a.inputs.get(name)
         if i is None:
-            errors[name] = f"not an input of agent {agent!r}"
+            errors[name] = m_("run.not_agent_input", "not an input of agent {agent}",
+                               agent=repr(agent))
             continue
         src = spec.source_io(i.from_) if i.from_ else None
         t = src if src is not None and (not i.type or i.type == src.type) else None
@@ -206,13 +215,14 @@ def check_given(spec: FlowSpec, run_id: str, agent: str, given: dict[str, Any]) 
         try:
             clean = check_value(t, v, run_dir=rd, contracts=CONTRACTS)
         except ValueError as e:
-            errors[name] = str(e)
+            errors[name] = reason(e)
             continue
         if clean is not None and clean != []:
             out[name] = clean
     if errors:
         raise RunError(422, "invalid agent inputs: "
-                       + "; ".join(f"{k}: {v}" for k, v in errors.items()), {"given": errors})
+                       + "; ".join(f"{k}: {v}" for k, v in errors.items()),
+                       {"given": {k: str(v) for k, v in errors.items()}, "given_codes": _codes(errors)})
     return out
 
 

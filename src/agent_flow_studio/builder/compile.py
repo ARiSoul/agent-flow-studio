@@ -26,6 +26,7 @@ from ..connections import store as connection_store
 from ..connections.actions import describe_action
 from ..extensions import extension_flow_dirs
 from ..hooks import DELEGATION_TOOL, DELEGATION_TOOLS, make_guard, make_hooks
+from ..messages import MsgError, msg
 from ..policy import RUN_ACTION_TOOL, WritePolicy
 from ..tools import artifacts
 from ..tools import git as git_tool
@@ -65,7 +66,7 @@ GATE_TOOL = f"mcp__{GATE_SERVER}__reach_gate"
 NEXT_TOOL = f"mcp__{GATE_SERVER}__next_steps"
 
 
-class FlowError(ValueError):
+class FlowError(MsgError):
     pass
 
 
@@ -79,7 +80,8 @@ class CompiledFlow:
     def task(self, run_input: str) -> str:
         """Legacy flows (no typed `inputs`): the one input is also the run id."""
         if not re.fullmatch(self.spec.input.pattern, run_input):
-            raise FlowError(f"invalid {self.spec.input.label}: {run_input!r}")
+            raise FlowError(msg("compile.input_invalid", "invalid {label}: {value}",
+                                label=self.spec.input.label, value=repr(run_input)))
         return self.spec.task.replace("{input}", run_input)
 
     def task_for(self, run_id: str, values: dict[str, Any]) -> str:
@@ -147,9 +149,11 @@ def _read_prompt(flow_dir: Path, inline: str | None, file: str | None, what: str
     assert file is not None
     p = (flow_dir / file).resolve()
     if flow_dir.resolve() not in p.parents:
-        raise FlowError(f"{what}: prompt_file outside the flow folder")
+        raise FlowError(msg("compile.prompt_outside", "{what}: prompt_file outside the flow folder",
+                            what=what))
     if not p.exists():
-        raise FlowError(f"{what}: prompt_file does not exist ({file})")
+        raise FlowError(msg("compile.prompt_missing", "{what}: prompt_file does not exist ({file})",
+                            what=what, file=file))
     return p.read_text(encoding="utf-8")
 
 
@@ -324,7 +328,8 @@ def _external_config(name: str, m: ExternalMcp) -> dict[str, Any]:
         def rep(mt: re.Match[str]) -> str:
             val = os.getenv(mt.group(1))
             if val is None:
-                raise FlowError(f"MCP {name!r}: environment variable {mt.group(1)} is not set")
+                raise FlowError(msg("compile.mcp_env", "MCP {name}: environment variable {var} is not set",
+                                    name=repr(name), var=mt.group(1)))
             return val
         return _ENV_IN.sub(rep, v)
 
@@ -351,26 +356,33 @@ def _connections(spec: FlowSpec) -> dict[str, Any]:
     if missing:
         users = [n for n, a in spec.agents.items()
                  if {*a.connections, *a.write_connections} & set(missing)]
-        raise FlowError(f"agent {', '.join(users)}: connector(s) not configured on this machine: "
-                        f"{', '.join(missing)}")
+        raise FlowError(msg("compile.connector_missing",
+                            "agent {agents}: connector(s) not configured on this machine: {connectors}",
+                            agents=", ".join(users), connectors=", ".join(missing)))
     errors = []
     for n, a in spec.agents.items():
         for c in a.connections:  # a connector without read actions is used with http_get
             if conns[c].type == "website" and not conns[c].actions:
-                errors.append(f"agent {n!r}: website connector {c!r} has no actions yet "
-                              "(a website is only used through its actions)")
+                errors.append(msg("compile.website_no_actions",
+                                  "agent {agent}: website connector {connector} has no actions yet "
+                                  "(a website is only used through its actions)",
+                                  agent=repr(n), connector=repr(c)))
             elif not _has_actions(conns[c], "read") and "connections.http_get" not in a.tools \
                     and conns[c].type != "website":
-                errors.append(f"agent {n!r}: connector {c!r} has no read actions, so the agent "
-                              "needs connections.http_get")
+                errors.append(msg("compile.needs_http_get",
+                                  "agent {agent}: connector {connector} has no read actions, so the "
+                                  "agent needs connections.http_get", agent=repr(n), connector=repr(c)))
         for c in a.write_connections:
             if not _has_actions(conns[c], "write") and "connections.http_write" not in a.tools:
-                errors.append(f"agent {n!r}: connector {c!r} has no write actions, so the agent "
-                              "needs connections.http_write")
+                errors.append(msg("compile.needs_http_write",
+                                  "agent {agent}: connector {connector} has no write actions, so the "
+                                  "agent needs connections.http_write", agent=repr(n), connector=repr(c)))
             if conns[c].access != "write":
-                errors.append(f"agent {n!r}: connector {c!r} is read-only (access: read)")
+                errors.append(msg("compile.connector_read_only",
+                                  "agent {agent}: connector {connector} is read-only (access: read)",
+                                  agent=repr(n), connector=repr(c)))
     if errors:
-        raise FlowError("; ".join(errors))
+        raise FlowError(*errors)
     return conns
 
 
@@ -428,7 +440,7 @@ def _workspace_dir(spec: FlowSpec, check: bool) -> Path | None:
         return None
     p = Path(spec.workspace.path).expanduser().resolve()
     if check and not p.is_dir():
-        raise FlowError(f"workspace does not exist: {p}")
+        raise FlowError(msg("compile.workspace_missing", "workspace does not exist: {path}", path=p))
     return p
 
 

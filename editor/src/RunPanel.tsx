@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useDialog } from "./Dialog";
 import { useI18n, type I18n } from "./i18n";
+import { localizeServer, type ServerMsg } from "./i18n/server";
 import { flowInputs, inputKind, isTyped, sourceIO } from "./model";
 import { formValue, sendValue, ValueField, type FormVal } from "./RunForm";
 import type { Doc, FlowRaw, IOTypeRaw, RunIO } from "./types";
@@ -359,9 +360,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     } catch (e) {
       const d = e instanceof ApiError && e.status === 422 ? e.detail : null;
       if (d && typeof d === "object" && !Array.isArray(d)) {
-        const o = d as { inputs?: Record<string, string>; given?: Record<string, string>; run_id?: string };
-        if (o.inputs) setFieldErr(o.inputs);
-        if (o.given) setFieldErr(Object.fromEntries(Object.entries(o.given).map(([k, v]) => [`given.${k}`, v])));
+        const o = d as { inputs?: Record<string, string>; given?: Record<string, string>; run_id?: string;
+          codes?: Record<string, ServerMsg>; given_codes?: Record<string, ServerMsg> };
+        // the reasons come in English with a code: show them in the UI language
+        const here = (texts: Record<string, string>, codes: Record<string, ServerMsg> | undefined) =>
+          Object.entries(texts).map(([k, v]) => [k, localizeServer(codes?.[k], v, i18n.lang)] as const);
+        if (o.inputs) setFieldErr(Object.fromEntries(here(o.inputs, o.codes)));
+        if (o.given) setFieldErr(Object.fromEntries(here(o.given, o.given_codes).map(([k, v]) => [`given.${k}`, v])));
         if (o.run_id) setRunIdErr(o.run_id);
         setError(t("run.form.fix"));
       } else setError(String((e as Error).message));

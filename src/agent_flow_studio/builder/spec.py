@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..messages import MsgError, msg, reason
 from . import expr
 from .catalog import BUILTIN_TOOLS, CONTRACTS
 from .types import IOKind, IOType, check_type, compatible
@@ -40,14 +41,16 @@ class ArtifactSpec(_Strict):
     @model_validator(mode="after")
     def _check(self) -> ArtifactSpec:
         if not _ARTIFACT_RE.fullmatch(self.name) or ".." in self.name:
-            raise ValueError(f"invalid artifact name: {self.name!r}")
+            raise MsgError(msg("spec.artifact_name", "invalid artifact name: {name}",
+                               name=repr(self.name)))
         if self.contract and self.contract not in CONTRACTS:
-            raise ValueError(f"unknown contract {self.contract!r}; available: "
-                             f"{', '.join(CONTRACTS)}")
+            raise MsgError(msg("spec.unknown_contract", "unknown contract {contract}; available: {available}",
+                               contract=repr(self.contract), available=", ".join(CONTRACTS)))
         if self.contract and not self.name.endswith(".json"):
-            raise ValueError(f"{self.name}: contracts only apply to .json")
+            raise MsgError(msg("spec.contract_json", "{name}: contracts only apply to .json",
+                               name=self.name))
         if self.draft and not self.name.endswith(".md"):
-            raise ValueError(f"{self.name}: drafts must be .md")
+            raise MsgError(msg("spec.draft_md", "{name}: drafts must be .md", name=self.name))
         return self
 
 
@@ -65,7 +68,9 @@ class AgentInput(_Strict):
     @classmethod
     def _ref(cls, v: str | None) -> str | None:
         if v is not None and not re.fullmatch(r"[a-z][a-z0-9_]{0,39}\.[a-z][a-z0-9_]{0,39}", v):
-            raise ValueError(f"'from' must be input.<name> or <agent>.<output>, not {v!r}")
+            raise MsgError(msg("spec.from_format",
+                               "'from' must be input.<name> or <agent>.<output>, not {value}",
+                               value=repr(v)))
         return v
 
 
@@ -106,13 +111,14 @@ class AgentSpec(_Strict):
     @classmethod
     def _icon(cls, v: str | None) -> str | None:
         if v is not None and (not v.strip() or any(ord(c) < 32 for c in v)):
-            raise ValueError("icon: a built-in icon name or a short text such as an emoji")
+            raise MsgError(msg("spec.icon",
+                               "icon: a built-in icon name or a short text such as an emoji"))
         return v
 
     @model_validator(mode="after")
     def _one_prompt(self) -> AgentSpec:
         if (self.prompt is None) == (self.prompt_file is None):
-            raise ValueError("give exactly one of 'prompt' or 'prompt_file'")
+            raise MsgError(msg("spec.one_prompt", "give exactly one of 'prompt' or 'prompt_file'"))
         return self
 
 
@@ -145,18 +151,23 @@ class ExternalMcp(_Strict):
     @model_validator(mode="after")
     def _check(self) -> ExternalMcp:
         if self.type == "stdio" and not self.command:
-            raise ValueError("stdio MCP needs 'command'")
+            raise MsgError(msg("spec.mcp_command", "stdio MCP needs 'command'"))
         if self.type in ("http", "sse") and not (self.url and self.url.startswith("https://")):
-            raise ValueError("http/sse MCP needs an https:// 'url'")
+            raise MsgError(msg("spec.mcp_url", "http/sse MCP needs an https:// 'url'"))
         for t in self.tools:
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", t):
-                raise ValueError(f"invalid tool name (no wildcards): {t!r}")
+                raise MsgError(msg("spec.mcp_tool_name", "invalid tool name (no wildcards): {tool}",
+                                   tool=repr(t)))
         for k, v in self.env.items():
             if not _ENV_REF.fullmatch(v):
-                raise ValueError(f"env {k}: use a ${{VAR}} reference; secrets stay out of the flow")
+                raise MsgError(msg("spec.mcp_env",
+                                   "env {key}: use a {ref} reference; secrets stay out of the flow",
+                                   key=k, ref="${VAR}"))
         for k, v in self.headers.items():
             if _ENV_IN.sub("", v).strip() not in ("", "Bearer", "Basic", "Token"):
-                raise ValueError(f"header {k}: use ${{VAR}} references; secrets stay out of the flow")
+                raise MsgError(msg("spec.mcp_header",
+                                   "header {key}: use {ref} references; secrets stay out of the flow",
+                                   key=k, ref="${VAR}"))
         return self
 
 
@@ -210,66 +221,82 @@ class FlowSpec(_Strict):
     @classmethod
     def _slug(cls, v: str) -> str:
         if not re.fullmatch(r"^[a-z0-9][a-z0-9_-]{0,39}$", v):
-            raise ValueError("flow name: lowercase, digits, '-' or '_'")
+            raise MsgError(msg("spec.flow_name", "flow name: lowercase, digits, '-' or '_'"))
         return v
 
     @model_validator(mode="after")
     def _graph(self) -> FlowSpec:
         errors: list[str] = []
         for kind, names in (("agent", self.agents), ("gate", self.gates), ("mcp", self.mcp_servers)):
-            errors += [f"{kind} {n!r}: invalid name (use {SLUG})" for n in names
-                       if not _SLUG_RE.fullmatch(n)]
+            errors += [msg("spec.node_name", "{kind} {name}: invalid name (use {rule})", kind=kind,
+                           name=repr(n), rule=SLUG) for n in names if not _SLUG_RE.fullmatch(n)]
         clash = set(self.agents) & set(self.gates)
         if clash:
-            errors.append(f"names repeated between agents and gates: {sorted(clash)}")
+            errors.append(msg("spec.names_repeated",
+                              "names repeated between agents and gates: {names}", names=sorted(clash)))
         clash = set(self.mcp_servers) & {t.server for t in BUILTIN_TOOLS.values()}
         if clash:
-            errors.append(f"external MCP with the name of a built-in server: {sorted(clash)}")
+            errors.append(msg("spec.mcp_builtin_name",
+                              "external MCP with the name of a built-in server: {names}",
+                              names=sorted(clash)))
         if not self.inputs and "{input}" not in self.task:
-            errors.append("'task' must contain {input}")
+            errors.append(msg("spec.task_input", "'task' must contain {placeholder}",
+                              placeholder="{input}"))
         if self.inputs:
             known = set(self.inputs) | {"input", "run_id"}
-            errors += [f"'task' uses {{{v}}}, which is not a flow input" for v in
-                       _TASK_VAR.findall(self.task) if v not in known]
+            errors += [msg("spec.task_unknown", "'task' uses {placeholder}, which is not a flow input",
+                           placeholder="{" + v + "}")
+                       for v in _TASK_VAR.findall(self.task) if v not in known]
         nodes = set(self.agents) | set(self.gates)
         if self.start not in self.agents:
-            errors.append(f"start {self.start!r} is not an agent")
+            errors.append(msg("spec.start", "start {start} is not an agent", start=repr(self.start)))
         for e in self.edges:
             for end in (e.from_, e.to):
                 if end not in nodes:
-                    errors.append(f"edge {e.from_}→{e.to}: node {end!r} does not exist")
+                    errors.append(msg("spec.edge_node", "edge {edge}: node {node} does not exist",
+                                      edge=f"{e.from_}→{e.to}", node=repr(end)))
         errors += self._tool_errors()
         errors += self._io_errors()
         seen: dict[str, str] = {}
         for an, a in self.agents.items():
             for w in a.writes:
                 if w.name in seen:
-                    errors.append(f"artifact {w.name} written by {seen[w.name]} and {an}")
+                    errors.append(msg("spec.artifact_twice", "artifact {name} written by {first} and {second}",
+                                      name=w.name, first=seen[w.name], second=an))
                 seen[w.name] = an
             if a.writes and "artifacts.save_artifact" not in a.tools:
-                errors.append(f"agent {an!r} writes artifacts but does not have artifacts.save_artifact")
+                errors.append(msg("spec.writes_no_save",
+                                  "agent {agent} writes artifacts but does not have artifacts.save_artifact",
+                                  agent=repr(an)))
             # (connectors without named actions need http_get / http_write: checked when the
             # flow compiles, where connections.yaml and its actions are known)
             has_write = "connections.http_write" in a.tools
             if has_write and not a.write_connections:
-                errors.append(f"agent {an!r} has connections.http_write but no write connector "
-                              "assigned")
+                errors.append(msg("spec.http_write_no_conn",
+                                  "agent {agent} has connections.http_write but no write connector assigned",
+                                  agent=repr(an)))
             if any(t.startswith("workspace.") for t in a.tools) and self.workspace is None:
-                errors.append(f"agent {an!r} uses workspace.* tools but the flow has no "
-                              "workspace")
-            errors += [f"agent {an!r}: connector {c!r} has an invalid name"
+                errors.append(msg("spec.no_workspace",
+                                  "agent {agent} uses workspace.* tools but the flow has no workspace",
+                                  agent=repr(an)))
+            errors += [msg("spec.connector_name", "agent {agent}: connector {connector} has an invalid name",
+                           agent=repr(an), connector=repr(c))
                        for c in a.write_connections if not _SLUG_RE.fullmatch(c)]
             has_get = "connections.http_get" in a.tools
             if has_get and not a.connections:
-                errors.append(f"agent {an!r} has connections.http_get but no connector assigned")
-            errors += [f"agent {an!r}: connector {c!r} has an invalid name" for c in a.connections
-                       if not _SLUG_RE.fullmatch(c)]
+                errors.append(msg("spec.http_get_no_conn",
+                                  "agent {agent} has connections.http_get but no connector assigned",
+                                  agent=repr(an)))
+            errors += [msg("spec.connector_name", "agent {agent}: connector {connector} has an invalid name",
+                           agent=repr(an), connector=repr(c))
+                       for c in a.connections if not _SLUG_RE.fullmatch(c)]
         if not errors and self.start in self.agents:
             unreachable = set(self.agents) - self.reachable()
             if unreachable:
-                errors.append(f"agents not reachable from {self.start!r}: {sorted(unreachable)}")
+                errors.append(msg("spec.unreachable", "agents not reachable from {start}: {agents}",
+                                  start=repr(self.start), agents=sorted(unreachable)))
         if errors:
-            raise ValueError("; ".join(errors))
+            raise MsgError(*errors)
         return self
 
     def flow_inputs(self) -> dict[str, IOType]:
@@ -311,91 +338,117 @@ class FlowSpec(_Strict):
                 q.extend(into.get(n, []))
         return seen
 
-    def _io_errors(self) -> list[str]:
+    def _io_errors(self) -> list[str]:  # Msg items (str subclass)
         errors: list[str] = []
         for n, t in self.inputs.items():
             if not _SLUG_RE.fullmatch(n):
-                errors.append(f"flow input {n!r}: invalid name (use {SLUG})")
+                errors.append(msg("spec.input_name", "flow input {name}: invalid name (use {rule})",
+                                  name=repr(n), rule=SLUG))
             try:
                 check_type(t, CONTRACTS)
             except ValueError as e:
-                errors.append(f"flow input {n!r}: {e}")
+                errors.append(msg("spec.input_reason", "flow input {name}: {reason}", name=repr(n),
+                                  reason=reason(e)))
         before: list[str] = []
         for n, t in self.inputs.items():  # show_if: only on the inputs declared before it
             if t.show_if:
                 try:
                     used = expr.refs(t.show_if)
                 except expr.ExprError as e:
-                    errors.append(f"flow input {n!r}: show_if: {e}")
+                    errors.append(msg("spec.show_if_reason", "flow input {name}: show_if: {reason}",
+                                      name=repr(n), reason=reason(e)))
                     used = []
                 for r in used:
                     if r[0] != "input" or len(r) < 2 or r[1] not in before:
-                        errors.append(f"flow input {n!r}: show_if can only use the flow inputs "
-                                      f"declared before it (input.<name>), not {'.'.join(map(str, r))}")
+                        errors.append(msg("spec.show_if_before",
+                                          "flow input {name}: show_if can only use the flow inputs "
+                                          "declared before it (input.<name>), not {ref}",
+                                          name=repr(n), ref=".".join(map(str, r))))
             before.append(n)
         flow_in = self.flow_inputs()
         for an, a in self.agents.items():
             for n, t in a.outputs.items():
                 if not _SLUG_RE.fullmatch(n):
-                    errors.append(f"agent {an!r}: output {n!r} has an invalid name")
+                    errors.append(msg("spec.output_name", "agent {agent}: output {name} has an invalid name",
+                                      agent=repr(an), name=repr(n)))
                 if t.show_if:
-                    errors.append(f"agent {an!r}, output {n!r}: show_if is only for flow inputs")
+                    errors.append(msg("spec.output_show_if",
+                                      "agent {agent}, output {name}: show_if is only for flow inputs",
+                                      agent=repr(an), name=repr(n)))
                 try:
                     check_type(t, CONTRACTS)
                 except ValueError as e:
-                    errors.append(f"agent {an!r}, output {n!r}: {e}")
+                    errors.append(msg("spec.output_reason", "agent {agent}, output {name}: {reason}",
+                                      agent=repr(an), name=repr(n), reason=reason(e)))
             for n, i in a.inputs.items():
                 if not _SLUG_RE.fullmatch(n):
-                    errors.append(f"agent {an!r}: input {n!r} has an invalid name")
+                    errors.append(msg("spec.agent_input_name", "agent {agent}: input {name} has an invalid name",
+                                      agent=repr(an), name=repr(n)))
                 if i.from_ is None:
                     continue
                 root, src = i.from_.split(".", 1)
                 if root == "input":
                     if src not in flow_in:
-                        errors.append(f"agent {an!r}, input {n!r}: flow input {src!r} does not "
-                                      "exist")
+                        errors.append(msg("spec.from_no_input",
+                                          "agent {agent}, input {name}: flow input {source} does not exist",
+                                          agent=repr(an), name=repr(n), source=repr(src)))
                         continue
                 elif root not in self.agents:
-                    errors.append(f"agent {an!r}, input {n!r}: agent {root!r} does not exist")
+                    errors.append(msg("spec.from_no_agent",
+                                      "agent {agent}, input {name}: agent {source} does not exist",
+                                      agent=repr(an), name=repr(n), source=repr(root)))
                     continue
                 elif src not in self.agents[root].outputs:
-                    errors.append(f"agent {an!r}, input {n!r}: agent {root!r} has no output "
-                                  f"{src!r}")
+                    errors.append(msg("spec.from_no_output",
+                                      "agent {agent}, input {name}: agent {source} has no output {output}",
+                                      agent=repr(an), name=repr(n), source=repr(root), output=repr(src)))
                     continue
                 elif root == an:
-                    errors.append(f"agent {an!r}, input {n!r}: an agent cannot read its own output")
+                    errors.append(msg("spec.from_self",
+                                      "agent {agent}, input {name}: an agent cannot read its own output",
+                                      agent=repr(an), name=repr(n)))
                     continue
                 elif self.execution == "graph" and root not in self.ancestors(an):
-                    errors.append(f"agent {an!r}, input {n!r}: {root!r} does not run before "
-                                  f"{an!r} (add an edge path from {root!r} to {an!r})")
+                    errors.append(msg("spec.from_order",
+                                      "agent {agent}, input {name}: {source} does not run before {agent} "
+                                      "(add an edge path from {source} to {agent})",
+                                      agent=repr(an), name=repr(n), source=repr(root)))
                 st = self.source_type(i.from_)
                 if i.type and st and not compatible(st, i.type):
-                    errors.append(f"agent {an!r}, input {n!r}: a {st} cannot feed a {i.type}")
+                    errors.append(msg("spec.from_type", "agent {agent}, input {name}: a {source} cannot feed a {target}",
+                                      agent=repr(an), name=repr(n), source=st, target=i.type))
         for e in self.edges:
             if e.if_:
-                errors += [f"edge {e.from_}→{e.to}: {m}" for m in self._expr_errors(e.if_)]
+                errors += [msg("spec.edge_reason", "edge {edge}: {reason}", edge=f"{e.from_}→{e.to}",
+                               reason=m) for m in self._expr_errors(e.if_)]
         return errors
 
     def _expr_errors(self, text: str) -> list[str]:
         try:
             used = expr.refs(text)
         except expr.ExprError as e:
-            return [f"condition: {e}"]
+            return [msg("spec.condition_syntax", "condition: {reason}", reason=reason(e))]
         out = []
         for r in used:
             if len(r) < 2:
-                out.append(f"condition: {r[0]!r} needs a field (e.g. {r[0]}.x)")
+                out.append(msg("spec.condition_field", "condition: {root} needs a field (e.g. {example})",
+                               root=repr(r[0]), example=f"{r[0]}.x"))
             elif r[0] == "input":
                 if r[1] not in self.flow_inputs():
-                    out.append(f"condition: flow input {r[1]!r} does not exist")
+                    out.append(msg("spec.condition_input", "condition: flow input {name} does not exist",
+                                   name=repr(r[1])))
             elif r[0] in self.agents:
                 if r[1] not in self.agents[r[0]].outputs:
-                    out.append(f"condition: agent {r[0]!r} has no output {r[1]!r}")
+                    out.append(msg("spec.condition_output", "condition: agent {agent} has no output {output}",
+                                   agent=repr(r[0]), output=repr(r[1])))
             elif r[0] in self.gates:
                 if r[1] not in ("decision", "comment"):
-                    out.append(f"condition: a gate has only .decision and .comment, not {r[1]!r}")
+                    out.append(msg("spec.condition_gate",
+                                   "condition: a gate has only .decision and .comment, not {field}",
+                                   field=repr(r[1])))
             else:
-                out.append(f"condition: {r[0]!r} is not input, an agent or a gate")
+                out.append(msg("spec.condition_root", "condition: {root} is not input, an agent or a gate",
+                               root=repr(r[0])))
         return out
 
     def _tool_errors(self) -> list[str]:
@@ -403,20 +456,26 @@ class FlowSpec(_Strict):
         for an, a in self.agents.items():
             for t in a.tools:
                 if "*" in t or "." not in t:
-                    errors.append(f"{an}: invalid tool {t!r} (format server.tool, no *)")
+                    errors.append(msg("spec.tool_format", "{agent}: invalid tool {tool} (format server.tool, no *)",
+                                      agent=an, tool=repr(t)))
                     continue
                 server, name = t.split(".", 1)
                 if t in BUILTIN_TOOLS:
                     continue
                 ext = self.mcp_servers.get(server)
                 if ext is None:
-                    errors.append(f"{an}: tool {t!r} does not exist in the catalog or in the flow's MCPs")
+                    errors.append(msg("spec.tool_unknown",
+                                      "{agent}: tool {tool} does not exist in the catalog or in the flow's MCPs",
+                                      agent=an, tool=repr(t)))
                 elif name not in ext.tools:
-                    errors.append(f"{an}: {name!r} is not in the allowlist of MCP {server!r}")
+                    errors.append(msg("spec.tool_not_allowed", "{agent}: {tool} is not in the allowlist of MCP {server}",
+                                      agent=an, tool=repr(name), server=repr(server)))
                 elif not ext.approved:
-                    errors.append(f"MCP {server!r} not approved (approved: true is required)")
+                    errors.append(msg("spec.mcp_not_approved", "MCP {server} not approved (approved: true is required)",
+                                      server=repr(server)))
                 elif not ext.read_only:
-                    errors.append(f"MCP {server!r} without read_only: true (rule 1: read-only)")
+                    errors.append(msg("spec.mcp_not_read_only", "MCP {server} without read_only: true (rule 1: read-only)",
+                                      server=repr(server)))
         return errors
 
     # --- helpers used by the compiler and the editor

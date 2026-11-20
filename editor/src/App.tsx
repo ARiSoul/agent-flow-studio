@@ -1,3 +1,4 @@
+import { localizeServer } from "./i18n/server";
 import {
   useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -209,7 +210,7 @@ function Editor() {
       if (!r.saved && !r.blocked_by_secret && r.errors?.length) {
         // half-done flows can be saved: warn, list the first problems and ask
         setTab("problems");
-        const first = r.errors.slice(0, 5).map((e) => `• ${e.msg}`).join("\n");
+        const first = r.errors.slice(0, 5).map((e) => `• ${localizeServer(e, e.msg, lang)}`).join("\n");
         const more = r.errors.length > 5 ? `\n${t("app.moreProblems", { n: r.errors.length - 5 })}` : "";
         if (await dialog.confirm({ title: tn("app.saveWithProblemsTitle", r.errors.length),
           message: `${t("app.saveWithProblems")}\n\n${first}${more}`, ok: t("app.saveAnyway") })) {
@@ -905,7 +906,7 @@ function Editor() {
             ? <p className="muted">{t("bottom.noProblems")} <code>agent-flow-studio-flows validate</code>.</p>
             : <ul className="problems">{errors.map((e, i) => (
               <li key={i} onClick={() => e.nodes[0] && setSel({ kind: "node", id: e.nodes[0] })} className={e.nodes.length ? "link" : ""}>
-                {e.loc && <code>{e.loc}</code>} {e.msg}
+                {e.loc && <code>{e.loc}</code>} {localizeServer(e, e.msg, lang)}
               </li>))}</ul>)}
           {tab === "flow" && <pre className="mono">{val?.flow_section ?? t("bottom.flowPending")}</pre>}
         </div>

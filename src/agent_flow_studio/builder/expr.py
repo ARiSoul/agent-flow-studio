@@ -14,6 +14,8 @@ import ast
 from collections.abc import Mapping
 from typing import Any
 
+from ..messages import msg
+
 MAX_LEN = 500
 FUNCS = {"len", "exists", "lower", "upper", "contains"}
 _CONST_NAMES = {"true": True, "false": False, "null": None, "True": True, "False": False,
@@ -41,20 +43,20 @@ def _ref(node: ast.AST) -> list[str | int] | None:
     while True:
         if isinstance(node, ast.Attribute):
             if node.attr.startswith("_"):
-                raise ExprError(f"name {node.attr!r} is not allowed")
+                raise ExprError(msg("expr.name", "name {name} is not allowed", name=repr(node.attr)))
             path.append(node.attr)
             node = node.value
         elif isinstance(node, ast.Subscript):
             key = node.slice
             if not (isinstance(key, ast.Constant) and isinstance(key.value, (int, str))):
-                raise ExprError("only [number] or ['key'] are allowed inside a reference")
+                raise ExprError(msg("expr.subscript", "only [number] or ['key'] are allowed inside a reference"))
             if isinstance(key.value, str) and key.value.startswith("_"):
-                raise ExprError(f"key {key.value!r} is not allowed")
+                raise ExprError(msg("expr.key", "key {key} is not allowed", key=repr(key.value)))
             path.append(key.value)
             node = node.value
         elif isinstance(node, ast.Name):
             if node.id.startswith("_"):
-                raise ExprError(f"name {node.id!r} is not allowed")
+                raise ExprError(msg("expr.name", "name {name} is not allowed", name=repr(node.id)))
             path.append(node.id)
             return path[::-1]
         else:
@@ -64,13 +66,13 @@ def _ref(node: ast.AST) -> list[str | int] | None:
 def parse(text: str) -> ast.Expression:
     text = (text or "").strip()
     if not text:
-        raise ExprError("empty expression")
+        raise ExprError(msg("expr.empty", "empty expression"))
     if len(text) > MAX_LEN:
-        raise ExprError(f"longer than {MAX_LEN} characters")
+        raise ExprError(msg("expr.too_long", "longer than {n} characters", n=MAX_LEN))
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as e:
-        raise ExprError(f"syntax error: {e.msg}") from None
+        raise ExprError(msg("expr.syntax", "syntax error: {detail}", detail=e.msg)) from None
     _check(tree.body)
     return tree
 
@@ -81,22 +83,22 @@ def _check(node: ast.AST) -> None:
             _check(v)
     elif isinstance(node, ast.UnaryOp):
         if not isinstance(node.op, (ast.Not, ast.USub)):
-            raise ExprError("only 'not' and '-' are allowed as unary operators")
+            raise ExprError(msg("expr.unary", "only 'not' and '-' are allowed as unary operators"))
         _check(node.operand)
     elif isinstance(node, ast.BinOp):
         if not isinstance(node.op, (ast.Add, ast.Sub)):
-            raise ExprError("only + and - are allowed")
+            raise ExprError(msg("expr.binary", "only + and - are allowed"))
         _check(node.left)
         _check(node.right)
     elif isinstance(node, ast.Compare):
         if not all(isinstance(op, _CMP) for op in node.ops):
-            raise ExprError("comparison not allowed")
+            raise ExprError(msg("expr.compare", "comparison not allowed"))
         _check(node.left)
         for c in node.comparators:
             _check(c)
     elif isinstance(node, ast.Call):
         if not (isinstance(node.func, ast.Name) and node.func.id in FUNCS) or node.keywords:
-            raise ExprError(f"only these functions are allowed: {', '.join(sorted(FUNCS))}")
+            raise ExprError(msg("expr.functions", "only these functions are allowed: {names}", names=", ".join(sorted(FUNCS))))
         for a in node.args:
             _check(a)
     elif isinstance(node, (ast.List, ast.Tuple)):
@@ -104,14 +106,14 @@ def _check(node: ast.AST) -> None:
             _check(e)
     elif isinstance(node, ast.Constant):
         if not isinstance(node.value, (str, int, float, bool)) and node.value is not None:
-            raise ExprError("only text, numbers, true/false and null are allowed")
+            raise ExprError(msg("expr.constant", "only text, numbers, true/false and null are allowed"))
     elif isinstance(node, ast.Name) and node.id in _CONST_NAMES:
         return
     elif isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)):
         if _ref(node) is None:
-            raise ExprError("invalid reference")
+            raise ExprError(msg("expr.reference", "invalid reference"))
     else:
-        raise ExprError(f"{type(node).__name__} is not allowed in a condition")
+        raise ExprError(msg("expr.node", "{kind} is not allowed in a condition", kind=type(node).__name__))
 
 
 def refs(text: str) -> list[tuple[str, ...]]:
@@ -231,7 +233,7 @@ def _call(name: str, args: list[Any]) -> Any:
             return MISSING not in args and args[1] in args[0]
     except TypeError:
         return MISSING
-    raise ExprError(f"{name}() got the wrong number of arguments")
+    raise ExprError(msg("expr.arity", "{name}() got the wrong number of arguments", name=name))
 
 
 def evaluate(text: str, scope: Mapping[str, Any]) -> bool:

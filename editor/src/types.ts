@@ -168,8 +168,10 @@ export interface Doc {
 
 export interface FlowError {
   loc: string;
-  msg: string;
+  msg: string;  // the server's English text
   nodes: string[];
+  code?: string;  // with params: shown in the UI language (i18n/server.ts)
+  params?: Record<string, import("./i18n/server").ServerParam>;
 }
 
 export interface Validation {

@@ -14,7 +14,9 @@ If `CLAUDE.local.md` exists (outside git), follow those local instructions too.
 - The **editor UI is multilingual** (`pt`, `en`, `es`): every user-facing text in `editor/src` goes
   through `t("key")` with the strings in `editor/src/i18n/<lang>.ts`; `en.ts` is the reference and
   the other languages must have the same keys. A new language = a new file + an entry in
-  `editor/src/i18n/index.tsx`. Backend messages (validation, errors) are in English.
+  `editor/src/i18n/index.tsx`. Backend messages (validation, errors) are in English, built with
+  `msg(code, template, …)` from `messages.py`; each code has a line in
+  `editor/src/i18n/server.<lang>.ts` (pt, es) so the editor shows it in the UI language.
 
 ## Editor themes
 Colors only through CSS tokens (`var(--bg)`, `var(--accent)`, `var(--on-accent)`…) in
