@@ -37,7 +37,7 @@ from ..builder import load_flow
 from ..builder.catalog import CONTRACTS
 from ..builder.compile import GATE_TOOL, CompiledFlow, load_graph
 from ..builder.spec import LEGACY_INPUT, FlowSpec
-from ..builder.types import check_value
+from ..builder.types import IOType, check_value
 from ..config import settings
 from ..engine import GraphEngine, RouteFn
 from ..hooks import DELEGATION_TOOLS
@@ -59,6 +59,16 @@ AGENT_TEST = ("You are a TEST orchestrator. Delegate once to the subagent `{agen
 STEP_DENIAL = re.compile(r"\bmod[eo]\b", re.IGNORECASE)
 Decision = Literal["approve", "reject", "answer"]
 RUN_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+# The Claude Code CLI (used by the SDK) is not signed in, or its session expired: the editor shows
+# the steps to sign in again instead of the raw error.
+AUTH_ERROR = re.compile(
+    r"failed to authenticate|oauth (session|token)|not logged in|please run /login"
+    r"|invalid (x-)?api[ -]?key|authentication_error|could not be refreshed", re.IGNORECASE)
+
+
+def error_hint(message: str) -> str | None:
+    """'auth' when a run or agent error is a sign-in problem of the Claude Code CLI."""
+    return "auth" if AUTH_ERROR.search(message or "") else None
 MAX_UPLOAD = 20 * 1024 * 1024  # all files of one run, after base64 decoding
 _FILE_NAME = re.compile(r"^[A-Za-z0-9 _.()-]{1,100}$")
 QueryFn = Callable[..., AsyncIterator[Any]]
@@ -127,17 +137,24 @@ def _write_upload(rd: Path, name: str, f: Any, total: list[int]) -> dict[str, An
     return {"name": fname, "path": f"inputs/{name}/{fname}"}
 
 
-def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any]) -> dict[str, Any]:
+def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any], *,
+                   partial: bool = False) -> dict[str, Any]:
     """Validates the typed flow inputs (writing uploaded files first). RunError 422 with
-    {field: reason} when something is wrong. Nothing is kept when a value fails."""
+    {field: reason} when something is wrong. Nothing is kept when a value fails.
+    partial (agent test): nothing is required, and the values already saved in the run stay
+    unless a new value replaces them."""
     rd = io_tool.run_dir(run_id)
     fresh = not rd.exists()
     unknown = set(raw) - set(spec.flow_inputs())
     errors: dict[str, str] = {k: "not an input of this flow" for k in unknown}
-    values: dict[str, Any] = {}
+    values: dict[str, Any] = dict(io_tool.flow_inputs(run_id)) if partial and not fresh else {}
     total = [0]
     for name, t in spec.flow_inputs().items():
         v = raw.get(name)
+        if partial:
+            if v in (None, "", []) and (name in values or t.default is None):
+                continue  # keep the saved value, if there is one
+            t = t.model_copy(update={"required": False})
         try:
             if t.type == "file" and v not in (None, "", []):
                 items = v if isinstance(v, list) else [v]
@@ -155,6 +172,35 @@ def prepare_inputs(spec: FlowSpec, run_id: str, raw: dict[str, Any]) -> dict[str
         raise RunError(422, "invalid inputs: " + "; ".join(f"{k}: {v}" for k, v in errors.items()),
                        {"inputs": errors})
     return values
+
+
+def check_given(spec: FlowSpec, run_id: str, agent: str, given: dict[str, Any]) -> dict[str, Any]:
+    """Values given to one agent in an agent test: each must be one of its inputs and match the
+    type of that input (the type of its source when it has one). RunError 422 {"given": …}."""
+    a = spec.agents[agent]
+    rd = io_tool.run_dir(run_id)
+    errors: dict[str, str] = {}
+    out: dict[str, Any] = {}
+    for name, v in given.items():
+        i = a.inputs.get(name)
+        if i is None:
+            errors[name] = f"not an input of agent {agent!r}"
+            continue
+        src = spec.source_io(i.from_) if i.from_ else None
+        t = src if src is not None and (not i.type or i.type == src.type) else None
+        t = (t or IOType(type=i.type or "text")).model_copy(update={"required": False,
+                                                                    "default": None})
+        try:
+            clean = check_value(t, v, run_dir=rd, contracts=CONTRACTS)
+        except ValueError as e:
+            errors[name] = str(e)
+            continue
+        if clean is not None and clean != []:
+            out[name] = clean
+    if errors:
+        raise RunError(422, "invalid agent inputs: "
+                       + "; ".join(f"{k}: {v}" for k, v in errors.items()), {"given": errors})
+    return out
 
 
 def _text(content: Any) -> str:
@@ -190,6 +236,10 @@ class Runner:
 
     def _emit(self, run: Run, ev: dict[str, Any]) -> None:
         ev = {"i": len(run.events), "ts": time.time(), **ev}
+        if ev.get("type") in ("end", "agent_done", "result") and isinstance(ev.get("message"), str):
+            hint = error_hint(ev["message"])
+            if hint:
+                ev["hint"] = hint
         run.events.append(ev)
         try:
             path = safe_artifact_path(settings.runs_dir, run.input, "events.jsonl")
@@ -221,15 +271,18 @@ class Runner:
             if not RUN_ID.fullmatch(rid):
                 raise RunError(422, "invalid run id: letters, digits, - or _ (up to 40)",
                                {"run_id": "letters, digits, - or _ (up to 40)"})
-            values = prepare_inputs(spec, rid, inputs or {})
+            values = prepare_inputs(spec, rid, inputs or {}, partial=mode == "agent")
         else:
             if run_input is None:
                 run_input = str((inputs or {}).get(LEGACY_INPUT, ""))
             compiled.task(run_input)  # pattern check (FlowError)
             rid, values = run_input, {LEGACY_INPUT: run_input}
+        if mode == "agent" and target:
+            # the test values replace those of an earlier test of this agent (none = {})
+            io_tool.save_given(rid, target, check_given(spec, rid, target, given or {}))
+        else:
+            io_tool.clear_given(rid, list(spec.agents))  # a full run uses the real outputs
         io_tool.save_flow_inputs(rid, values)
-        if mode == "agent" and target and given:
-            io_tool.save_given(rid, target, given)
         run = Run(uuid.uuid4().hex[:12], flow, rid, self.base, mode=mode,
                   target=target if mode in ("until", "agent") else None)
         if spec.execution == "graph":
@@ -483,10 +536,13 @@ class Runner:
         elif isinstance(msg, ResultMessage):
             run.session_id = msg.session_id
             run.cost += msg.total_cost_usd or 0.0
-            self._emit(run, {"type": "result", "session_id": msg.session_id,
-                             "cost": msg.total_cost_usd, "turns": msg.num_turns,
-                             "is_error": msg.is_error, "subtype": msg.subtype,
-                             "denials": len(msg.permission_denials or [])})
+            ev: dict[str, Any] = {"type": "result", "session_id": msg.session_id,
+                                  "cost": msg.total_cost_usd, "turns": msg.num_turns,
+                                  "is_error": msg.is_error, "subtype": msg.subtype,
+                                  "denials": len(msg.permission_denials or [])}
+            if msg.is_error:  # the reason, so that a sign-in problem can be explained
+                ev["message"] = ("; ".join(msg.errors or []) or msg.result or "")[:500]
+            self._emit(run, ev)
             if msg.is_error:
                 run.status = "error"
 

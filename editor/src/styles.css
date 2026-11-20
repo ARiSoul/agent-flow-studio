@@ -303,3 +303,87 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 .out-group summary { cursor: pointer; }
 .out-row { margin: 4px 0 6px 12px; }
 .out-row .art-view { margin-top: 2px; max-height: 160px; }
+
+/* run: the Claude Code CLI is not signed in */
+.gate-card.auth { border-color: var(--bad); background: var(--bad-soft); }
+.gate-card.auth ol { margin: 6px 0 6px 18px; padding: 0; }
+.gate-card.auth li { margin: 2px 0; }
+
+/* ---- run state on the nodes: a dot (hollow = stopped), a "running" badge and a moving bar */
+.node { position: relative; }
+.node-icon { display: inline-flex; color: var(--accent); }
+.node.gate.human .node-icon { color: var(--human); } .node.gate.stop .node-icon { color: var(--stop); }
+.icon-text { display: inline-block; }
+.run-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex: none; margin-left: auto;
+  border: 2px solid var(--muted); background: transparent;
+}
+.run-dot.active { background: var(--ok); border-color: var(--ok); animation: dot-pulse 1.1s ease-in-out infinite; }
+.run-dot.done { border-color: var(--ok); }
+.run-dot.error { background: var(--stop); border-color: var(--stop); }
+.run-dot.gate { background: var(--human); border-color: var(--human); }
+.run-dot.skipped { border-style: dashed; }
+@keyframes dot-pulse { 50% { box-shadow: 0 0 0 4px var(--accent-soft); } }
+.badge.running { background: var(--ok); color: var(--bg); font-weight: 700; }
+.kit-bar {
+  position: absolute; left: 10px; right: 10px; bottom: 4px; height: 3px; overflow: hidden;
+  border-radius: 3px; background: var(--panel-2);
+}
+.kit-bar::before {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 35%; border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--stop), var(--human), var(--ok), var(--accent), transparent);
+  animation: kit 1.4s ease-in-out infinite alternate;
+}
+@keyframes kit { from { left: -35%; } to { left: 100%; } }
+.kit-bar.global { position: relative; left: auto; right: auto; bottom: auto; margin: -10px -14px 8px; border-radius: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .run-dot.active, .kit-bar::before { animation: none; }
+  .kit-bar::before { left: 0; width: 100%; }
+}
+
+/* ---- node styles: compact */
+.node.style-compact { width: 200px; padding: 6px 8px; }
+.node.style-compact .node-head { gap: 6px; }
+.node.style-compact .node-name { margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ports.compact .port { font-size: 10px; }
+
+/* ---- node styles: avatars */
+.node.style-avatar {
+  width: 140px; padding: 0 0 10px; background: transparent; border: none; box-shadow: none;
+  display: flex; flex-direction: column; align-items: center;
+}
+.node.style-avatar.run-active, .node.style-avatar.run-done, .node.style-avatar.run-error,
+.node.style-avatar.run-gate, .node.style-avatar.err { box-shadow: none; animation: none; }
+.node.style-avatar.sel { outline: none; }
+.avatar {
+  position: relative; width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--panel); border: 3px solid var(--accent); color: var(--accent); box-shadow: var(--shadow);
+}
+.avatar .run-dot { position: absolute; top: 2px; right: 2px; margin: 0; background-clip: padding-box; }
+.avatar .run-dot:not(.active):not(.error):not(.gate) { background: var(--panel); }
+.node.style-avatar.sel .avatar { outline: 2px solid var(--accent); outline-offset: 3px; }
+.node.style-avatar.err .avatar { border-color: var(--bad); }
+.node.style-avatar.run-active .avatar { animation: pulse 1.2s ease-in-out infinite; }
+.node.style-avatar.run-done .avatar { border-color: var(--ok); }
+.node.style-avatar.run-error .avatar { border-color: var(--stop); }
+.node.style-avatar.run-gate .avatar { border-color: var(--human); }
+.node.gate.style-avatar { background: transparent; }
+.node.gate.human.style-avatar .avatar { border-color: var(--human); color: var(--human); background: var(--human-soft); }
+.node.gate.stop.style-avatar .avatar { border-color: var(--stop); color: var(--stop); background: var(--stop-soft); }
+.avatar-name {
+  margin-top: 6px; font-weight: 700; font-size: 12px; text-align: center; max-width: 140px;
+  font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.avatar-badges { display: flex; gap: 4px; margin-top: 2px; }
+.node.style-avatar .kit-bar { left: 20px; right: 20px; bottom: 0; }
+
+/* ---- icon picker */
+.icon-grid { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.icon-pick { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; color: var(--muted); }
+.icon-pick.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.icon-emoji { width: 70px; flex: none; }
+/* interrupted: the run stopped while this agent was running */
+.run-dot.stopped { border-color: var(--stop); }
+.node.run-stopped { box-shadow: 0 0 0 2px var(--stop-soft), var(--shadow); }
+.node.style-avatar.run-stopped { box-shadow: none; }
+.node.style-avatar.run-stopped .avatar { border-style: dashed; }

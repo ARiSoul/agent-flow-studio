@@ -12,7 +12,7 @@ import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
 import { THEMES, useTheme, type Theme } from "./theme";
 import {
-  autoLayout, clone, ensureLayout, inputKind, newAgent, newGate, removeNode, sourceIO, tidy, uniqueKey, uniqueName,
+  autoLayout, clone, ensureLayout, NODE_STYLES, type NodeStyle, inputKind, newAgent, newGate, removeNode, sourceIO, tidy, uniqueKey, uniqueName,
 } from "./model";
 import { nodeTypes, type Port } from "./nodes";
 import type { Catalog, Doc, FlowSummary, FlowTemplate, Selection, Validation } from "./types";
@@ -34,6 +34,16 @@ function Editor() {
   const rf = useReactFlow();
   const { t, tn, lang, setLang } = useI18n();
   const { theme, setTheme, base } = useTheme();
+  // node style: a preference of this browser, not part of the flow
+  const [nodeStyle, setNodeStyleState] = useState<NodeStyle>(() => {
+    const v = localStorage.getItem("afs.nodeStyle");
+    return NODE_STYLES.includes(v as NodeStyle) ? (v as NodeStyle) : "card";
+  });
+  const setNodeStyle = (s: NodeStyle) => {
+    setNodeStyleState(s);
+    try { localStorage.setItem("afs.nodeStyle", s); } catch { /* storage not available */ }
+    setTimeout(() => rf.fitView({ padding: 0.15 }), 80);
+  };
   const dialog = useDialog();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [flows, setFlows] = useState<FlowSummary[]>([]);
@@ -77,7 +87,7 @@ function Editor() {
   useEffect(() => {
     if (!current) return;
     api.load(current).then((r) => {
-      const d = ensureLayout({ spec: r.spec, prompts: r.prompts });
+      const d = ensureLayout({ spec: r.spec, prompts: r.prompts }, nodeStyle);
       setDoc(d);
       setSaved(JSON.stringify(d));
       setVal(r);
@@ -159,16 +169,17 @@ function Editor() {
         return {
           id, type: "agent", position: pos(id), measured: dims[id],
           selected: sel?.kind === "node" && sel.id === id,
-          data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace[id], ins, outs },
+          data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace[id], ins, outs,
+            style: nodeStyle },
         };
       }),
       ...Object.entries(s.gates ?? {}).map(([id, g]) => ({
         id, type: "gate", position: pos(id), measured: dims[id],
         selected: sel?.kind === "node" && sel.id === id,
-        data: { name: id, gate: g, error: errNodes.has(id), run: trace[id] },
+        data: { name: id, gate: g, error: errNodes.has(id), run: trace[id], style: nodeStyle },
       })),
     ];
-  }, [doc, sel, errNodes, dims, trace]);
+  }, [doc, sel, errNodes, dims, trace, nodeStyle]);
   const edges: Edge[] = useMemo(() => {
     if (!doc) return [];
     const s = doc.spec;
@@ -359,7 +370,7 @@ function Editor() {
         <span className="sep" />
         <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">{t("app.undo")}</button>
         <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">{t("app.redo")}</button>
-        <button onClick={() => { update((d) => autoLayout(d.spec)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); }}>{t("app.arrange")}</button>
+        <button onClick={() => { update((d) => autoLayout(d.spec, undefined, nodeStyle)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); }}>{t("app.arrange")}</button>
         <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
           title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
         <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
@@ -371,6 +382,10 @@ function Editor() {
         <select className="lang" value={lang} title={t("app.language")} aria-label={t("app.language")}
           onChange={(e) => setLang(e.target.value as Lang)}>
           {Object.entries(LANGS).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
+        </select>
+        <select className="node-style" value={nodeStyle} title={t("app.nodeStyle")} aria-label={t("app.nodeStyle")}
+          onChange={(e) => setNodeStyle(e.target.value as NodeStyle)}>
+          {NODE_STYLES.map((k) => <option key={k} value={k}>{t(`app.nodeStyle.${k}`)}</option>)}
         </select>
         <select className="theme" value={theme} title={t("app.theme")} aria-label={t("app.theme")}
           onChange={(e) => setTheme(e.target.value as Theme)}>
@@ -434,7 +449,7 @@ function Editor() {
         </div>}
         {doc && current && <div className="right-body" hidden={right !== "chat"}>
           <Chat key={current} flow={current} lang={lang} doc={doc} onBusy={setAssistBusy} apply={(d) => {
-            const n = ensureLayout(d);
+            const n = ensureLayout(d, nodeStyle);
             update((x) => { x.spec = n.spec; x.prompts = n.prompts; });
           }} />
         </div>}

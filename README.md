@@ -40,6 +40,9 @@ approvals, connectors and writes with controlled autonomy.
   toolbar; the choice is saved in the browser).
 - **Theme**: System (follows light/dark of the OS), Light, Dark, Sepia, Ocean and High contrast
   (selector in the toolbar; saved in the browser).
+- **Node style**: Cards, Compact or Avatars (selector in the toolbar; saved in the browser); each
+  agent can have an icon (built-in set or an emoji). While a run goes, running agents show a
+  green dot, a "running" badge and a moving bar; stopped ones show a hollow dot.
 - **Canvas**: drag agents and gates, link nodes, arrange, undo/redo; live validation with the same
   rules as the runtime; only valid flows are saved (copy in `flow.yaml.bak`; delete →
   `flows/.trash/`).
@@ -102,8 +105,11 @@ agent-flow-studio-editor                                # editor at http://127.0
 agent-flow-studio-flows list | validate <flow> | show <flow> | catalog
 agent-flow-studio test-001 --flow repo-review           # from the CLI (writes that need approval are denied)
 ```
-Authentication: Claude Code login on the machine or `ANTHROPIC_API_KEY`. Frontend development:
-`cd editor && npm run dev` (port 5173, forwards `/api` to 8765).
+Authentication: the agents run through the Claude Code CLI, so they use its login on the machine
+(`claude`, then `/login`; separate from the Claude app), or the `ANTHROPIC_API_KEY` environment
+variable set before you start the editor or the CLI (`.env` is not read). When the login expires,
+the Run panel says so and shows these steps. Frontend development: `cd editor && npm run dev`
+(port 5173, forwards `/api` to 8765).
 
 ## Layout
 ```

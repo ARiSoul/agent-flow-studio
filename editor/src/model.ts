@@ -135,36 +135,50 @@ export function ancestors(spec: FlowRaw, node: string): Set<string> {
   return seen;
 }
 
+/** How nodes are drawn (a preference of this browser, not part of the flow). */
+export type NodeStyle = "card" | "compact" | "avatar";
+export const NODE_STYLES: NodeStyle[] = ["card", "compact", "avatar"];
+
 /** Height of a node on the canvas (it grows with its ports). */
-export function nodeHeight(spec: FlowRaw, id: string): number {
+export function nodeHeight(spec: FlowRaw, id: string, style: NodeStyle = "card"): number {
+  return nodeSize(spec, id, style).h;
+}
+
+/** Width and height of a node in a style (used by the automatic layout). */
+export function nodeSize(spec: FlowRaw, id: string, style: NodeStyle = "card"): { w: number; h: number } {
   const a = spec.agents[id];
-  if (!a) return NODE_H;
-  const rows = Math.max(Object.keys(a.inputs ?? {}).length + 1, Object.keys(a.outputs ?? {}).length);
-  return NODE_H + rows * PORT_H + 24;  // + the ports block's border and padding
+  if (style === "avatar") return a ? { w: 140, h: 130 } : { w: 120, h: 120 };
+  const rows = a ? Math.max(Object.keys(a.inputs ?? {}).length + 1, Object.keys(a.outputs ?? {}).length) : 0;
+  if (style === "compact") return a ? { w: 200, h: 46 + rows * PORT_H + 12 } : { w: 200, h: 56 };
+  return { w: NODE_W, h: a ? NODE_H + rows * PORT_H + 24 : NODE_H };  // + the ports block's padding
 }
 
 /** Automatic layout (top to bottom). Only moves the given nodes (all by default). */
-export function autoLayout(spec: FlowRaw, only?: Set<string>): void {
+export function autoLayout(spec: FlowRaw, only?: Set<string>, style: NodeStyle = "card"): void {
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: "TB", nodesep: 50, ranksep: 70 });
   g.setDefaultEdgeLabel(() => ({}));
-  for (const n of nodeNames(spec)) g.setNode(n, { width: NODE_W, height: nodeHeight(spec, n) });
+  for (const n of nodeNames(spec)) {
+    const { w, h } = nodeSize(spec, n, style);
+    g.setNode(n, { width: w, height: h });
+  }
   for (const e of spec.edges ?? []) if (e.to !== spec.start) g.setEdge(e.from, e.to);
   dagre.layout(g);
   spec.layout = spec.layout ?? {};
   for (const n of nodeNames(spec)) {
     if (only && !only.has(n)) continue;
     const p = g.node(n);
-    spec.layout[n] = { x: Math.round(p.x - NODE_W / 2), y: Math.round(p.y - nodeHeight(spec, n) / 2) };
+    const { w, h } = nodeSize(spec, n, style);
+    spec.layout[n] = { x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2) };
   }
 }
 
 /** Ensures a position for every node (the missing ones come from the automatic layout). */
-export function ensureLayout(doc: Doc): Doc {
+export function ensureLayout(doc: Doc, style: NodeStyle = "card"): Doc {
   const missing = nodeNames(doc.spec).filter((n) => !doc.spec.layout?.[n]);
   if (!missing.length) return doc;
   const d = clone(doc);
-  autoLayout(d.spec, Object.keys(d.spec.layout ?? {}).length ? new Set(missing) : undefined);
+  autoLayout(d.spec, Object.keys(d.spec.layout ?? {}).length ? new Set(missing) : undefined, style);
   return d;
 }
 
@@ -189,6 +203,7 @@ export function tidy(doc: Doc): Doc {
       if (Array.isArray(a[k]) && a[k]!.length === 0) delete a[k];
     if (a.model === "" || a.model === null) delete a.model;
     if (!a.autonomy) delete a.autonomy;
+    if (!a.icon || !a.icon.trim()) delete a.icon;
     if (a.max_turns === null || Number.isNaN(a.max_turns)) delete a.max_turns;
     for (const i of Object.values(a.inputs ?? {})) {
       if (!i.from) delete i.from;

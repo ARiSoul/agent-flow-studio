@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useDialog } from "./Dialog";
 import { useI18n, type I18n } from "./i18n";
-import { inputKind, isTyped, sourceIO } from "./model";
+import { flowInputs, inputKind, isTyped, sourceIO } from "./model";
 import { formValue, sendValue, ValueField, type FormVal } from "./RunForm";
 import type { Doc, FlowRaw, IOTypeRaw, RunIO } from "./types";
 
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
 const RUN_ID = /^[A-Za-z0-9_-]{1,40}$/;  // same rule as the runner
 
-export type NodeRun = "active" | "done" | "error" | "gate" | "skipped";
+export type NodeRun = "active" | "done" | "error" | "gate" | "skipped" | "stopped";
 type Ev = { i: number; type: string; [k: string]: unknown };
 type RunInfo = { id: string; status: string; gate: { gate: string; kind: string; label: string; reason: string } | null; cost: number; input: string; mode?: string; target?: string | null };
 export type RunMode = "full" | "step" | "until" | "agent";
@@ -45,6 +45,13 @@ export function traceOf(events: Ev[]): Record<string, NodeRun> {
     if (e.type === "skipped" && e.node) s[e.node as string] = "skipped";
     if (e.type === "gate") s[e.gate as string] = "gate";
     if (e.type === "decision") s[e.gate as string] = "done";
+    // the run ended (stopped, error, gate…) while an agent was still marked as running: a stop
+    // cancels it without an agent_done event, so it would look "running" forever
+    if (e.type === "end") for (const k of Object.keys(s)) if (s[k] === "active") s[k] = "stopped";
+    // a resumed run (continue / decision) can start the same agents again
+    if (e.type === "continue" || e.type === "decision") {
+      for (const k of Object.keys(s)) if (s[k] === "stopped") delete s[k];
+    }
   }
   return s;
 }
@@ -56,7 +63,7 @@ function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
   const who = e.agent ? `${e.agent}: ` : "";
   const mode = String(e.mode ?? "full");
   switch (e.type) {
-    case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${e.execution === "graph" ? t("run.ev.graph") : ""}${t(e.mock ? "run.ev.mock" : "run.ev.real")}` };
+    case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${e.execution === "graph" ? t("run.ev.graph") : ""}` };
     case "delegate": return { cls: "deleg", text: `→ ${e.agent}${e.task ? ` — ${e.task}` : ""}` };
     case "tool": return { cls: "tool", text: `${who}${e.tool}${e.artifact ? ` (${e.artifact})` : ""}` };
     case "tool_error": return { cls: "err", text: t("run.ev.toolError", { who }) };
@@ -97,15 +104,48 @@ function agentInputIO(spec: FlowRaw, agent: string, name: string): IOTypeRaw {
   };
 }
 
-/** Last value of an agent input in a saved run: what was given, else its source. */
-function savedInput(spec: FlowRaw, io: RunIO | null, agent: string, name: string): unknown {
-  if (!io) return undefined;
-  const given = io.given[agent];
-  if (given && name in given) return given[name];
+/** The value an agent input gets from its source in a saved run (undefined: none yet). */
+function sourceValue(spec: FlowRaw, io: RunIO | null, agent: string, name: string): unknown {
   const from = spec.agents[agent].inputs?.[name]?.from;
-  if (!from) return undefined;
+  if (!io || !from) return undefined;
   const [root, key] = [from.slice(0, from.indexOf(".")), from.slice(from.indexOf(".") + 1)];
   return root === "input" ? io.inputs[key] : io.outputs[root]?.[key];
+}
+
+/** Prefill of the agent-test form: the source's saved value; for a free input, the last test value. */
+function savedInput(spec: FlowRaw, io: RunIO | null, agent: string, name: string): unknown {
+  const v = sourceValue(spec, io, agent, name);
+  if (v !== undefined) return v;
+  return spec.agents[agent].inputs?.[name]?.from ? undefined : io?.given[agent]?.[name];
+}
+
+/** Label and "where it comes from" text of an agent input in the agent-test form. */
+function sourceLabel(spec: FlowRaw, agent: string, name: string, t: I18n["t"]): { label: string; hint: string } {
+  const i = spec.agents[agent].inputs![name];
+  const own = i.description ? ` ${i.description}` : "";
+  if (!i.from) return { label: name, hint: t("run.form.freeInput") + own };
+  const [root, key] = [i.from.slice(0, i.from.indexOf(".")), i.from.slice(i.from.indexOf(".") + 1)];
+  if (root === "input") {
+    const fi = flowInputs(spec)[key];
+    return { label: fi?.label || key, hint: t("run.form.fromFlowInput", { name: key, label: fi?.label || key }) + own };
+  }
+  return { label: `${name}`, hint: t("run.form.fromOutput", { agent: root, output: key }) + own };
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+// same test as AUTH_ERROR in editor/runner.py
+const AUTH_ERROR = /failed to authenticate|oauth (session|token)|not logged in|please run \/login|invalid (x-)?api[ -]?key|authentication_error|could not be refreshed/i;
+
+// Core tool servers ignore AFS_MOCK; only extension tools can use simulated data.
+const CORE_SERVERS = new Set(["artifacts", "connections", "flow_control", "io", "workspace"]);
+/** Does the flow use tools from an extension (the only ones AFS_MOCK changes)? */
+export function usesExtensionTools(spec: FlowRaw): boolean {
+  const external = new Set(Object.keys(spec.mcp_servers ?? {}));
+  return Object.values(spec.agents).some((a) => (a.tools ?? []).some((tl) => {
+    const server = tl.split(".")[0];
+    return !CORE_SERVERS.has(server) && !external.has(server);
+  }));
 }
 
 const pretty = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
@@ -219,7 +259,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const collect = (): { body: Record<string, unknown> } | null => {
     const errs: Record<string, string> = {};
     const out: Record<string, unknown> = {};
-    if (typed) for (const [n, x] of Object.entries(spec.inputs ?? {})) {
+    if (typed && mode !== "agent") for (const [n, x] of Object.entries(spec.inputs ?? {})) {
       const r = sendValue(x, values[n] ?? formValue(x, x.default));
       if (r.error) errs[n] = t("run.form.badJson");
       else if (r.value !== undefined) out[n] = r.value;
@@ -230,7 +270,8 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
       if (x.type === "file") continue;  // an agent under test reads the saved file
       const r = sendValue(x, given[n] ?? "");
       if (r.error) errs[`given.${n}`] = t("run.form.badJson");
-      else if (r.value !== undefined) g[n] = r.value;
+      // only what you changed: an unchanged value still comes from its source
+      else if (r.value !== undefined && !same(r.value, sourceValue(spec, saved, target, n))) g[n] = r.value;
     }
     setFieldErr(errs);
     if (Object.keys(errs).length) return null;
@@ -245,7 +286,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     if ((mode === "until" || mode === "agent") && !target) return setError(t("run.pickAgent"));
     const c = collect();
     if (!c) return setError(t("run.form.fix"));
-    if (!mock && !(await dialog.confirm({ title: t("run.realTitle"), message: t("run.confirmReal"), ok: t("run.realOk"), danger: true }))) return;
+    if (usesExtensionTools(spec) && !mock && !(await dialog.confirm({ title: t("run.realTitle"), message: t("run.confirmReal"), ok: t("run.realOk"), danger: true }))) return;
     try {
       const r = await post<RunInfo>("/api/runs", c.body);
       evRef.current = []; setEvents([]); setView(null); setRun(r);
@@ -253,8 +294,9 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     } catch (e) {
       const d = e instanceof ApiError && e.status === 422 ? e.detail : null;
       if (d && typeof d === "object" && !Array.isArray(d)) {
-        const o = d as { inputs?: Record<string, string>; run_id?: string };
+        const o = d as { inputs?: Record<string, string>; given?: Record<string, string>; run_id?: string };
         if (o.inputs) setFieldErr(o.inputs);
+        if (o.given) setFieldErr(Object.fromEntries(Object.entries(o.given).map(([k, v]) => [`given.${k}`, v])));
         if (o.run_id) setRunIdErr(o.run_id);
         setError(t("run.form.fix"));
       } else setError(String((e as Error).message));
@@ -301,6 +343,10 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const agents = Object.keys(spec.agents);
   const savedInputs = typed && saved && Object.keys(saved.inputs).length > 0;
   const outputs = useMemo(() => Object.entries(saved?.outputs ?? {}).filter(([, o]) => Object.keys(o).length), [saved]);
+  // the Claude Code CLI is not signed in: the runner marks these errors with hint "auth"; the same
+  // test runs here too, so the card also shows with events from an older server
+  const authErr = events.find((e) => e.hint === "auth"
+    || (["end", "agent_done", "result", "text"].includes(e.type) && AUTH_ERROR.test(String(e.message ?? e.text ?? ""))));
 
   const runButton = running
     ? <button className="danger" onClick={() => run && post(`/api/runs/${run.id}/stop`)}>{t("run.stop")}</button>
@@ -309,6 +355,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   return (
     <div className="runp">
       <div className="run-head">
+        {running && <div className="kit-bar global" aria-hidden="true" />}
         {typed ? <>
           <div className="row">
             <input className={`mono${runIdErr || (rid && !RUN_ID.test(rid)) ? " bad" : ""}`} value={runId} disabled={running}
@@ -338,7 +385,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
               {agents.map((a) => <option key={a}>{a}</option>)}
             </select>)}
         </div>
-        {typed && (
+        {typed && mode !== "agent" && (
           <details className="run-form" open>
             <summary className="small">{t("run.form.inputs")}
               {savedInputs && <button className="small link" disabled={running} title={t("run.form.useSavedTitle")}
@@ -363,11 +410,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
               <p className="muted small">{t("run.form.agentInputsHint")}</p>
               {targetInputs.map((n) => {
                 const x = agentInputIO(spec, target, n);
+                const s = sourceLabel(spec, target, n, t);
                 return x.type === "file"
-                  ? <div key={n} className="field run-field"><span className="field-label">{n}</span>
-                    <span className="field-hint">{t("run.form.agentFile")}</span></div>
-                  : <ValueField key={n} name={n} t={x} value={given[n] ?? ""} disabled={running} error={fieldErr[`given.${n}`]}
-                    onChange={(v) => setGiven((p) => ({ ...p, [n]: v }))} />;
+                  ? <div key={n} className="field run-field"><span className="field-label">{s.label}</span>
+                    <span className="field-hint">{s.hint} · {t("run.form.agentFile")}</span></div>
+                  : <ValueField key={n} name={n} t={{ ...x, label: s.label, description: s.hint }} value={given[n] ?? ""}
+                    disabled={running} error={fieldErr[`given.${n}`]}
+                    onChange={(v) => { setGiven((p) => ({ ...p, [n]: v })); setFieldErr(({ [`given.${n}`]: _, ...rest }) => rest); }} />;
               })}
             </details>)}
           {target && needs.length > 0 && (
@@ -375,7 +424,8 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
               {missing.length ? t("run.missingInputs", { input: rid || t("run.inputFolder"), names: missing.join(", ") })
                 : t("run.presentInputs", { names: needs.join(", ") })}</p>)}
         </>}
-        <span className={`badge ${mock ? "" : "warn"}`}>{mock ? t("run.mock") : t("run.real")}</span>
+        {usesExtensionTools(spec) && (
+          <span className={`badge ${mock ? "" : "warn"}`} title={t("run.mockTitle")}>{mock ? t("run.mock") : t("run.real")}</span>)}
         {dirty && <span className="muted small">{t("run.saveFirst")}</span>}
         {run && <span className="muted small"> · {status(i18n, run.status)}{run.cost ? ` · ≈ ${run.cost.toFixed(3)} USD` : ""}</span>}
         {error && <div className="field-err">{error}</div>}
@@ -383,6 +433,20 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
 
       <div className="run-log">
         {!run && <p className="muted">{t("run.intro")} <code>runs/{t("run.inputFolder")}/decisions.jsonl</code> {t("run.introEnd")}</p>}
+        {authErr && (
+          <div className="gate-card auth" role="alert">
+            <b>{t("run.auth.title")}</b>
+            <p className="small">{t("run.auth.why")}</p>
+            <ol className="small">
+              <li>{t("run.auth.step1")}</li>
+              <li>{t("run.auth.step2")} <code>claude</code></li>
+              <li>{t("run.auth.step3")} <code>/login</code></li>
+              <li>{t("run.auth.step4")}</li>
+            </ol>
+            <p className="muted small">{t("run.auth.apiKey")} <code>ANTHROPIC_API_KEY</code></p>
+            <details><summary className="small">{t("run.auth.detail")}</summary>
+              <pre className="mono art-view">{String(authErr.message ?? authErr.text ?? "")}</pre></details>
+          </div>)}
         {events.map((e) => { const l = line(e, i18n); return l && <div key={e.i} className={`ev ${l.cls}`}>{l.text}</div>; })}
         {pending.map((p) => (
           <div key={p.id as string} className="gate-card write">

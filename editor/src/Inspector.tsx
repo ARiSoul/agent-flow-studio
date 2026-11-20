@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { CommitInput, Field, NumberInput } from "./fields";
+import { Icon, ICON_IDS } from "./icons";
 import { AgentInputsEditor, ExprInput, IOListEditor, exprRefs } from "./IOEditors";
 import { artifactOwners, isTyped, renameNode, SLUG, nodeNames } from "./model";
 import { useI18n } from "./i18n";
@@ -175,6 +176,22 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus }: { id
           onChange={() => update((d) => { d.spec.start = id; })} />
         {t("insp.isStart")}
       </label>
+      {/* a div, not Field's <label>: a click on the text must not press the first icon */}
+      <div className="field">
+        <span className="field-label">{t("insp.icon")}</span>
+        <div className="icon-grid" role="radiogroup" aria-label={t("insp.icon")}>
+          {ICON_IDS.map((k) => (
+            <button key={k} type="button" role="radio" aria-checked={(a.icon || "robot") === k} title={k}
+              className={`icon-pick${(a.icon || "robot") === k ? " on" : ""}`}
+              onClick={() => setA((x) => { x.icon = k === "robot" ? undefined : k; })}>
+              <Icon id={k} size={18} />
+            </button>))}
+          <input className="icon-emoji" maxLength={8} placeholder={t("insp.iconEmoji")} aria-label={t("insp.iconEmoji")}
+            value={a.icon && !ICON_IDS.includes(a.icon) ? a.icon : ""}
+            onChange={(e) => setA((x) => { x.icon = e.target.value.trim() || undefined; })} />
+        </div>
+        <span className="field-hint">{t("insp.iconHint")}</span>
+      </div>
       <Field label={t("insp.description")} hint={t("insp.descriptionHint")}>
         <textarea rows={3} value={a.description} onChange={(e) => setA((x) => { x.description = e.target.value; })} />
       </Field>

@@ -188,7 +188,7 @@ class Draft:
                        "reads": _STRS, "writes": _WRITES, "connections": _STRS,
                        "write_connections": _STRS, "inputs": _AGENT_INPUTS, "outputs": _IOMAP,
                        "join": {"type": "string", "enum": ["all", "any"]},
-                       "max_runs": {"type": "integer"},
+                       "max_runs": {"type": "integer"}, "icon": _STR,
                        "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}},
                       ["name"]))
         async def set_agent(a: dict) -> dict:
@@ -221,7 +221,7 @@ class Draft:
                 a = {**a, "tools": tools}
             for k in ("description", "tools", "model", "max_turns", "skills", "reads", "writes",
                       "connections", "write_connections", "autonomy", "inputs", "outputs", "join",
-                      "max_runs"):
+                      "max_runs", "icon"):
                 if k in a:
                     ag[k] = a[k]
             if "prompt" in a:

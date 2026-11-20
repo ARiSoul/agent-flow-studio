@@ -89,8 +89,16 @@ class AgentSpec(_Strict):
     autonomy: Autonomy | None = None  # None = the flow's
     inputs: dict[str, AgentInput] = Field(default_factory=dict)
     outputs: dict[str, IOType] = Field(default_factory=dict)
+    icon: str | None = Field(default=None, max_length=16)  # editor only: built-in id or emoji
     join: Literal["all", "any"] = "all"  # graph: wait for all incoming branches, or the first
     max_runs: int = Field(default=3, ge=1, le=20)  # graph: limit for loops (back edges)
+
+    @field_validator("icon")
+    @classmethod
+    def _icon(cls, v: str | None) -> str | None:
+        if v is not None and (not v.strip() or any(ord(c) < 32 for c in v)):
+            raise ValueError("icon: a built-in icon name or a short text such as an emoji")
+        return v
 
     @model_validator(mode="after")
     def _one_prompt(self) -> AgentSpec:

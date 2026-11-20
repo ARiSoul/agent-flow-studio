@@ -4,79 +4,87 @@ Hand-over file between machines/accounts. **When you start:** read this. **When 
 update "Current state" and "Next steps", add a line to the "Log" (date, machine/account in generic
 terms — no emails —, what was done) and commit + push.
 
-## Current state (2026-11-19)
-Works and is tested (`pytest`: core 285 tests, without extensions):
+## Where we stopped (2026-11-20, second machine / account B)
+- Last work: editor polish after the first real runs — simpler agent test form, a clear card when
+  the Claude Code CLI is not signed in, run state on the nodes (dot, "running" badge, moving bar),
+  node styles (Cards / Compact / Avatars) with an icon per agent, the AFS_MOCK badge only when it
+  matters, and the fix for agents that stayed "running" after Stop.
+- First real run done here: `repo-review`, agent `explorer` alone (graph mode), worked
+  (≈ 0.40 USD). The full flows and the templates have not run end to end with the model yet.
+- After you pull on the other machine: `cd editor; npm run build` (the built editor is not in git)
+  and restart `agent-flow-studio-editor`. No new Python or npm dependencies. Your local
+  `runs/`, `flows/` outside git, `extensions/` and `connections.yaml` are untouched by git.
+- Next suggested task: the right-click context menu (item 1 below).
+
+## Current state
+Works and is tested (`pytest`: core 289 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
-- **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, choice saved in the
-  browser (`localStorage` `afs.lang`), first default from the browser language. Strings in
-  `editor/src/i18n/<lang>.ts` (`en.ts` is the reference; `tsc` fails if a language misses a key).
-  The assistant gets `lang` and replies in that language. Backend messages are English only.
-- **Editor themes**: System (OS light/dark), Light, Dark, Sepia, Ocean, High contrast; selector in
-  the toolbar, saved in `localStorage` `afs.theme`. Tokens in `editor/src/styles.css`, list in
-  `editor/src/theme.tsx`; `editor/public/theme-init.js` sets the theme before render (no flash,
-  no inline script, so the CSP stays strict).
+- **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
+  (`afs.lang`). Strings in `editor/src/i18n/<lang>.ts` (`en.ts` is the reference; `tsc` fails if a
+  language misses a key). The assistant replies in the UI language. Backend messages are English.
+- **Editor themes**: System, Light, Dark, Sepia, Ocean, High contrast (`afs.theme`). Colors only
+  through CSS tokens in `editor/src/styles.css`; `editor/public/theme-init.js` avoids a flash.
+- **Node styles**: Cards, Compact, Avatars (toolbar, `afs.nodeStyle`); each agent can have an
+  `icon` (20 built-in icons in `editor/src/icons.tsx`, or an emoji).
+- **In-app dialogs** (`editor/src/Dialog.tsx`), no native `alert/confirm/prompt`.
 - **Flows in YAML** (`flows/<name>/flow.yaml`): agents, gates (human approval / stop), links with
   conditions, artifacts with contracts, approved external MCPs, workspace and autonomy.
 - **Typed inputs/outputs**: flow `inputs` (text, markdown, number, integer, boolean, date,
-  datetime, url, path, file, choice, json) → a form in the Run panel, run id separate and
-  generated; agent `inputs` (`from: input.x` / `<agent>.<output>`) and typed `outputs`, checked on
+  datetime, url, path, file, choice, json) → a form in the Run panel; the run id is separate and
+  generated. Agent `inputs` (`from: input.x` / `<agent>.<output>`) and typed `outputs`, checked on
   save (`io.set_output`), stored in `runs/<id>/io/`. Typed ports and dashed data links on the
-  canvas, IO editors in the properties panel.
-- **Two execution modes per flow**: `orchestrator` (LLM, as before) and `graph` (`engine.py`: one
-  session per agent, parallel branches up to `max_parallel`, joins all/any, skip propagation,
-  loops with `max_runs`, human/stop gates, step/until/agent test modes). Edge conditions: `if`
-  (safe expression, `builder/expr.py`) and/or `when` (text; a small router call in graph mode).
-  The example flow and the templates use typed IO and `graph`. Tested with fake model calls only:
-  no real end-to-end run yet.
-- **Visual editor** (`agent-flow-studio-editor`, http://127.0.0.1:8765): React Flow canvas, palette,
-  properties panel, live validation, create/duplicate/delete flows, undo/redo.
-- **Chat assistant** in the editor: builds/changes the flow in a draft (never saves on its own).
-- **Run** in the editor: live trace on the canvas, artifacts, gates with a decision, live write
-  approvals, and test modes: full flow, step by step, until an agent, single agent.
-- **Connectors** (Connectors button): HTTP API, Azure ARM, Azure DevOps, Microsoft Graph,
-  GitHub, GitLab, Atlassian Cloud; secrets in the keyring or `${VAR}`; test connection;
-  `http_get` per agent; `http_write` with `access: write`.
-- **Connectors phase 2**: **sign-in on a page** (`oauth_browser`: OAuth 2 + PKCE, "Sign in"
-  button, callback `/api/oauth/callback`, tokens only in the keyring, refresh token renewal,
-  Meta long-lived token exchange, token in header or `?access_token=`) for Entra ID (Azure,
-  DevOps, Graph), GitHub, GitLab and any HTTP API; presets for Facebook, Instagram, Threads,
-  WhatsApp Business and Reddit. **Azure managed identity** (IMDS and App Service/Container Apps).
-  Tested with mocked providers only: no real sign-in was tried yet (needs app registrations).
+  canvas (drag an output to an input), IO editors in the properties panel.
+- **Two execution modes per flow**: `orchestrator` (an LLM follows the graph) and `graph`
+  (`engine.py`: one session per agent, parallel branches up to `max_parallel`, joins all/any, skip
+  propagation, loops with `max_runs`, human/stop gates). Edge conditions: `if` (safe expression,
+  `builder/expr.py`) and/or `when` (text; a small router call in graph mode).
+- **Run** in the editor: typed run form; modes full / step by step / until an agent / single agent
+  (one form with that agent's inputs and where each value comes from; flow inputs optional there);
+  live trace; run state on the canvas (filled green dot + "running" badge + moving bar while an
+  agent runs, hollow dot when stopped, red-bordered when interrupted by Stop); outputs view;
+  artifacts; gates with a decision; live write approvals; a card with the `claude` → `/login`
+  steps when the CLI is not signed in.
+- **Chat assistant** in the editor: builds/changes the flow in a draft (never saves on its own);
+  knows typed IO, `if` conditions, execution modes and icons.
+- **Connectors**: HTTP API, Azure ARM, Azure DevOps, Microsoft Graph, GitHub, GitLab, Atlassian
+  Cloud; secrets in the keyring or `${VAR}`; test connection; `http_get`/`http_write` per agent.
+  **Sign-in on a page** (OAuth 2 + PKCE, tokens only in the keyring) with presets for Facebook,
+  Instagram, Threads, WhatsApp Business, Reddit; **Azure managed identity**. Tested with mocked
+  providers only.
 - **Writes with autonomy** (`approve` / `approve_prod` / `auto`) and a confined workspace; the hook
   denies paths outside the workspace, force pushes/pushes to protected branches and destructive
-  commands.
-- **Local extensions** (`extensions/<name>/`, outside git) for domain tools/contracts.
-- Public example flow: `flows/repo-review` (repository review, read only).
+  commands. **`workspace.git`**: read-only git.
 - **Flow templates** (New → "Start from", or `agent-flow-studio-flows new --template`):
-  `code-review` (branch vs base, read only), `test-runner` (runs the test command after approval,
-  diagnoses failures), `fix-and-pr` (issue → fix on `fix/<issue>` → tests → push → human check →
-  draft PR on GitHub / Azure DevOps / GitLab). Parameters per template; extensions can add
-  templates. New read-only tool `workspace.git`. Not yet run end to end with a real model.
+  `code-review`, `test-runner`, `fix-and-pr` (typed IO, graph mode); extensions can add templates.
+- **Local extensions** (`extensions/<name>/`, outside git) for domain tools/contracts/templates.
+  `AFS_MOCK` only affects extension tools (the core never uses it).
+- Public example flow: `flows/repo-review` (repository review, read only, graph mode).
 
-**Note for the other machine:** after the translation, the local flows and the extension there
-still have Portuguese prompts/texts (outside git — translate them there if you want). Defaults
-changed: `input.label` "Entrada" → "Input", `task` "Executa o flow para {input}." → "Run the flow
-for {input}.", the "## Fluxo" section of the orchestrator is now "## Flow", and the `fluxo` key in
-the validation API is now `flow_section`. The assistant tools have English names (`view_flow`,
-`set_agent`, `add_edge`…). No YAML key, enum value, tool id or env var changed.
+**Note for the other machine (from the translation):** local flows and the extension there may
+still have Portuguese prompts/texts (outside git). Defaults changed: `input.label` "Entrada" →
+"Input", `task` "Executa o flow para {input}." → "Run the flow for {input}.", the orchestrator
+section "## Fluxo" → "## Flow", the validation API key `fluxo` → `flow_section`; the assistant tools
+have English names. No YAML key, enum value, tool id or env var changed, so old flows still load.
 
 ## Next steps (backlog, in suggested order)
-1. [x] Multilingual interface: pt, en, es (to start with).
-2. [x] Theme choice (light/dark/system, and others).
-3. [x] Connectors phase 2: sign-in on a page (browser session), managed identity, more types.
-   - [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and
-     Threads only accept an https redirect URI, so they need an https tunnel or a hosted editor.
-4. [x] Code flow templates (review, tests, PR) using workspace + connectors.
-   - [ ] Run each template once end to end on a real repository and tune the prompts.
+1. [ ] **Right-click context menu** on the canvas, especially on the cards (nodes): e.g. edit
+   properties, test this agent, run until here, duplicate, rename, change icon, add input/output,
+   delete; on links: edit condition, delete; on the empty canvas: add agent/gate here, paste,
+   arrange. In-app, themed and translated, keyboard accessible (Shift+F10 / context-menu key).
+2. [ ] Run a graph flow and each template end to end with the real model (check `tools=[]` per
+   agent session, the router, parallel sessions) and tune the template prompts.
+3. [ ] Canvas: highlight followed / not followed edges from the `edge` events (today only in the
+   trace).
+4. [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and Threads
+   only accept an https redirect URI, so they need an https tunnel or a hosted editor.
 5. [ ] Writes through external MCPs (today read only).
 6. [ ] More flows/templates and skills (phase 4 of the builder).
 7. [ ] (Optional) Translate backend messages (validation, errors, input reasons such as
    "required") to the UI language.
-8. [ ] Run a graph flow end to end with the real model (check `tools=[]` per agent session, the
-   router, parallel sessions) and tune the template prompts.
-9. [ ] Canvas: highlight followed / not followed edges from the `edge` events (today only in the
-   trace).
+
+Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
+· editor polish (see the Log).
 
 ## Getting started on a new machine
 ```powershell
@@ -86,7 +94,9 @@ cd editor; npm install; npm run build; cd ..
 .\.venv\Scripts\pytest
 .\.venv\Scripts\agent-flow-studio-editor
 ```
-SDK authentication: Claude Code login on this machine (or `ANTHROPIC_API_KEY` in `.env`).
+SDK authentication: the Claude Code login on this machine (run `claude`, then `/login`; the
+Claude app login is separate), or the `ANTHROPIC_API_KEY` environment variable set before you
+start the editor or the CLI (the studio does not read `.env`).
 
 ## Log
 - 2026-11-19 · work machine (account A) · Project renamed and reorganized as agent-flow-studio;
@@ -106,3 +116,19 @@ SDK authentication: Claude Code login on this machine (or `ANTHROPIC_API_KEY` in
 - 2026-11-19 · second machine (account B) · Typed inputs/outputs, data between agents, graph
   engine with parallel agents (execution per flow), `if` expressions + `when` text, run form with
   files, IO editors and typed ports in the editor; example flow and templates migrated.
+- 2026-11-19 · second machine (account B) · Simpler agent test form: one form with the agent's
+  inputs and where each value comes from; flow inputs optional in agent mode (the run keeps its
+  saved ones); given values type-checked and cleared by a full run; ports show `← input.x`.
+- 2026-11-19 · second machine (account B) · Clear message when the Claude Code CLI is not signed
+  in (events marked `hint: "auth"`, a card with the `claude` → `/login` steps in the Run panel);
+  fixed the authentication notes (`ANTHROPIC_API_KEY` is an environment variable, `.env` is not
+  read).
+- 2026-11-19 · second machine (account B) · Run state on the nodes (dot: filled = running, hollow =
+  stopped; "running" badge; moving multicolor bar on the node and on top of the Run panel). Node
+  style selector (Cards, Compact, Avatars; browser preference) and an agent `icon` (20 built-in
+  icons or an emoji). The AFS_MOCK badge now shows only for flows with extension tools (the core
+  never uses it: model, files, git and connectors are always real).
+- 2026-11-19 · second machine (account B) · Fix: after Stop (or an error in the middle of a run)
+  the agents that were running show as interrupted, not "running".
+- 2026-11-20 · second machine (account B) · End of day: STATUS updated for the hand-over; backlog
+  item 1 added (right-click context menu on the canvas and cards).

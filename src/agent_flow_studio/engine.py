@@ -502,12 +502,15 @@ class GraphEngine:
                 self.host.cost += msg.total_cost_usd or 0.0
                 if msg.result:
                     self.summaries[name] = msg.result
-                self.emit({"type": "result", "agent": name, "session_id": sid,
-                           "cost": msg.total_cost_usd, "turns": msg.num_turns,
-                           "is_error": msg.is_error, "subtype": msg.subtype,
-                           "denials": len(msg.permission_denials or [])})
+                ev: dict[str, Any] = {
+                    "type": "result", "agent": name, "session_id": sid,
+                    "cost": msg.total_cost_usd, "turns": msg.num_turns, "is_error": msg.is_error,
+                    "subtype": msg.subtype, "denials": len(msg.permission_denials or [])}
                 if msg.is_error:
-                    detail = "; ".join(msg.errors or []) or msg.subtype
+                    ev["message"] = ("; ".join(msg.errors or []) or msg.result or "")[:500]
+                self.emit(ev)
+                if msg.is_error:
+                    detail = "; ".join(msg.errors or []) or (msg.result or "")[:300] or msg.subtype
                     error = f"the session ended with an error ({detail})"
         return sid, error
 

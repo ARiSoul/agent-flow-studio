@@ -53,6 +53,7 @@ export interface AgentRaw {
   outputs?: Record<string, IOTypeRaw>;
   join?: "all" | "any";
   max_runs?: number;
+  icon?: string | null;  // a built-in icon id (icons.tsx) or an emoji
 }
 
 export interface GateRaw {

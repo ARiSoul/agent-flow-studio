@@ -340,3 +340,105 @@ def test_given_inputs_do_not_need_from():
     d = copy.deepcopy(raw_parallel())
     d["agents"]["writer"]["inputs"]["note"] = {"type": "text", "required": False}
     assert FlowSpec.model_validate(d).input_type("writer", "note") == "text"
+
+
+def _start(rn, **kw):
+    async def go():
+        r = rn.start("parallel", **kw)
+        while r.task and not r.task.done():
+            await asyncio.sleep(0.01)
+        return r
+    return asyncio.run(go())
+
+
+def test_agent_test_needs_only_the_agent_inputs(tmp_path):
+    shutil.copytree(PARALLEL, tmp_path / "flows/parallel")
+
+    async def fake(prompt, options):
+        if False:
+            yield None
+
+    rn = Runner(tmp_path / "flows", fake)
+    _start(rn, inputs={"topic": "agents", "depth": "deep"}, run_id="a-1", mode="agent",
+           target="planner")
+    # a later agent test: no flow inputs sent (topic is required in a full run) → saved ones stay
+    _start(rn, run_id="a-1", mode="agent", target="researcher_a", given={"question": "Why?"})
+    assert io_tool.flow_inputs("a-1") == {"topic": "agents", "depth": "deep"}
+    with pytest.raises(RunError) as e:
+        rn.start("parallel", run_id="a-1", mode="agent", target="planner",
+                 given={"depth": "huge", "nope": 1})
+    assert set(e.value.detail["given"]) == {"depth", "nope"}
+    assert "one of" in e.value.detail["given"]["depth"]  # the type of the source (a choice)
+
+
+def test_given_values_do_not_leak_into_a_full_run(tmp_path):
+    shutil.copytree(PARALLEL, tmp_path / "flows/parallel")
+
+    async def fake(prompt, options):
+        if False:
+            yield None
+
+    rn = Runner(tmp_path / "flows", fake)
+    s = spec_parallel()
+    _start(rn, inputs={"topic": "t"}, run_id="a-2", mode="agent", target="researcher_a",
+           given={"question": "Test only"})
+    assert io_tool.resolve_inputs(s, "a-2", "researcher_a")[0] == {"question": "Test only"}
+    io_tool.store_output(s, "a-2", "planner", "question_a", "Real question")
+    _start(rn, run_id="a-2", mode="agent", target="researcher_a")  # nothing given this time
+    assert io_tool.resolve_inputs(s, "a-2", "researcher_a")[0] == {"question": "Real question"}
+    _start(rn, run_id="a-2", mode="agent", target="researcher_a", given={"question": "Again"})
+    given = io_tool.run_dir("a-2") / "io" / "researcher_a.given.json"
+    assert given.exists()
+    _start(rn, inputs={"topic": "t"}, run_id="a-2")  # a full run clears every test value
+    assert not given.exists()
+
+
+AUTH_MSG = ("Claude Code returned an error result: Failed to authenticate: OAuth session expired "
+            "and could not be refreshed (exit code: 1)")
+
+
+def test_login_errors_get_a_hint_in_both_modes(tmp_path):
+    from claude_agent_sdk import ResultMessage
+
+    from agent_flow_studio.editor.runner import error_hint
+
+    assert error_hint(AUTH_MSG) == "auth" and error_hint("Invalid API key · Please run /login")
+    assert error_hint("HTTP 401 from connector devops") is None
+    shutil.copytree(PARALLEL, tmp_path / "flows/parallel")
+    shutil.copytree(FIX / "pipeline", tmp_path / "flows/pipeline")
+
+    async def raising(prompt, options):
+        raise RuntimeError(AUTH_MSG)
+        yield None
+
+    r = _start(Runner(tmp_path / "flows", raising), inputs={"topic": "t"}, run_id="auth-1")
+    end = [e for e in r.events if e["type"] == "end"][-1]
+    assert r.status == "error" and end.get("hint") == "auth"
+
+    async def failed_result(prompt, options):
+        yield ResultMessage(subtype="error_during_execution", duration_ms=1, duration_api_ms=1,
+                            is_error=True, num_turns=0, session_id="s", result=AUTH_MSG)
+
+    rn = Runner(tmp_path / "flows", failed_result)
+
+    async def go():
+        run = rn.start("pipeline", "INC9")
+        while run.task and not run.task.done():
+            await asyncio.sleep(0.01)
+        return run
+
+    run = asyncio.run(go())
+    res = [e for e in run.events if e["type"] == "result"][-1]
+    assert res["hint"] == "auth" and "OAuth session expired" in res["message"]
+
+
+def test_agent_icon_is_a_short_label():
+    d = raw_parallel()
+    d["agents"]["planner"]["icon"] = "brain"
+    d["agents"]["writer"]["icon"] = "📝"
+    s = FlowSpec.model_validate(d)
+    assert s.agents["planner"].icon == "brain" and s.agents["writer"].icon == "📝"
+    for bad in ("x" * 17, "a\nb", "  "):
+        d["agents"]["planner"]["icon"] = bad
+        with pytest.raises(ValueError):
+            FlowSpec.model_validate(d)

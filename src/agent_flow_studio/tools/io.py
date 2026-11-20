@@ -88,6 +88,14 @@ def save_given(run_id: str, agent: str, values: dict[str, Any]) -> None:
     _write_json(_io_path(run_id, agent + GIVEN_SUFFIX), values)
 
 
+def clear_given(run_id: str, agents: list[str]) -> None:
+    """Drops the values given in earlier agent tests (they would hide the real outputs)."""
+    for a in agents:
+        p = _io_path(run_id, a + GIVEN_SUFFIX)
+        if p.exists():
+            p.unlink()
+
+
 def record_gate(run_id: str, gate: str, decision: str, comment: str) -> None:
     p = _io_path(run_id, GATES_FILE)
     data = _read_json(p)
