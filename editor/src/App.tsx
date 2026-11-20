@@ -14,7 +14,7 @@ import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
 import { AgentIcon, Icon, ICON_IDS } from "./icons";
 import { LibraryManager, locLabel } from "./LibraryManager";
-import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
+import { edgeKey, RunPanel, type RunRequest, type Trace } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
 import { THEMES, useTheme, type Theme } from "./theme";
@@ -103,7 +103,7 @@ function Editor() {
   });
   /** Opens a tab of the right panel (and shows the panel when it is hidden). */
   const setRight = (tab: "props" | "chat" | "run") => { setRightTab(tab); togglePanel("insp", true); };
-  const [trace, setTrace] = useState<Record<string, NodeRun>>({});
+  const [trace, setTrace] = useState<Trace>({ nodes: {}, edges: {} });
   const [assistBusy, setAssistBusy] = useState(false);
   const [showConns, setShowConns] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -270,27 +270,36 @@ function Editor() {
         return {
           id, type: "agent", position: pos(id), measured: dims[id],
           selected: sel?.kind === "node" && sel.id === id,
-          data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace[id], ins, outs,
+          data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace.nodes[id], ins, outs,
             style: nodeStyle, lib: a.origin ? val?.origins?.[id] : undefined },
         };
       }),
       ...Object.entries(s.gates ?? {}).map(([id, g]) => ({
         id, type: "gate", position: pos(id), measured: dims[id],
         selected: sel?.kind === "node" && sel.id === id,
-        data: { name: id, gate: g, error: errNodes.has(id), run: trace[id], style: nodeStyle },
+        data: { name: id, gate: g, error: errNodes.has(id), run: trace.nodes[id], style: nodeStyle },
       })),
     ];
   }, [doc, sel, errNodes, dims, trace, nodeStyle, val]);
   const edges: Edge[] = useMemo(() => {
     if (!doc) return [];
     const s = doc.spec;
-    const control: Edge[] = (s.edges ?? []).map((e, i) => ({
-      id: `e${i}`, source: e.from, target: e.to,
-      label: [e.if?.trim(), e.when?.trim()].filter(Boolean).join(" · ") || undefined,
-      selected: sel?.kind === "edge" && sel.index === i, type: "smoothstep",
-      markerEnd: { type: MarkerType.ArrowClosed },
-      className: [e.to === s.start || e.from in (s.gates ?? {}) ? "back" : "", e.if?.trim() ? "cond" : ""].join(" ").trim(),
-    }));
+    const control: Edge[] = (s.edges ?? []).map((e, i) => {
+      // run state of the link: followed (green; moving while its target runs), not followed (faded)
+      const run = trace.edges[edgeKey(e.from, e.to)];
+      const cond = [e.if?.trim(), e.when?.trim()].filter(Boolean).join(" · ");
+      const mark = run === "followed" ? "✓" : run === "not" ? "✗" : run === "error" ? "!" : "";
+      return {
+        id: `e${i}`, source: e.from, target: e.to,
+        label: [mark, cond].filter(Boolean).join(" ") || undefined,
+        selected: sel?.kind === "edge" && sel.index === i, type: "smoothstep",
+        markerEnd: { type: MarkerType.ArrowClosed },
+        animated: run === "followed" && trace.nodes[e.to] === "active",
+        ariaLabel: run ? t(`run.edge.${run}`) : undefined,
+        className: [e.to === s.start || e.from in (s.gates ?? {}) ? "back" : "", e.if?.trim() ? "cond" : "",
+          run ? `run-${run}` : ""].join(" ").trim(),
+      };
+    });
     if (!showData) return control;
     const data: Edge[] = [];
     for (const [an, a] of Object.entries(s.agents))
@@ -305,7 +314,7 @@ function Editor() {
         });
       }
     return [...control, ...data];
-  }, [doc, sel, showData]);
+  }, [doc, sel, showData, trace, t]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const moves = changes.filter((c) => c.type === "position" && c.position);

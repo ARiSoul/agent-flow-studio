@@ -10,6 +10,11 @@ const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
 const RUN_ID = /^[A-Za-z0-9_-]{1,40}$/;  // same rule as the runner
 
 export type NodeRun = "active" | "done" | "error" | "gate" | "skipped" | "stopped";
+/** State of a link in a run: followed, not followed (its condition did not hold), or its `if`
+ * expression failed. Key: `${from}>${to}`. */
+export type EdgeRun = "followed" | "not" | "error";
+export type Trace = { nodes: Record<string, NodeRun>; edges: Record<string, EdgeRun> };
+export const edgeKey = (from: string, to: string) => `${from}>${to}`;
 type Ev = { i: number; type: string; [k: string]: unknown };
 type RunInfo = { id: string; status: string; gate: { gate: string; kind: string; label: string; reason: string } | null; cost: number; input: string; mode?: string; target?: string | null };
 export type RunMode = "full" | "step" | "until" | "agent";
@@ -51,6 +56,42 @@ export function traceOf(events: Ev[]): Record<string, NodeRun> {
     // a resumed run (continue / decision) can start the same agents again
     if (e.type === "continue" || e.type === "decision") {
       for (const k of Object.keys(s)) if (s[k] === "stopped") delete s[k];
+    }
+  }
+  return s;
+}
+
+/** State of each link from the events. Graph mode: the engine's `edge` events. Orchestrator mode
+ * (no edge events): a link counts as followed when its target starts (delegate or gate) right after
+ * its source finished; at the end, the other links out of the nodes that ran were not followed. */
+export function edgeTraceOf(events: Ev[], links: { from: string; to: string }[]): Record<string, EdgeRun> {
+  const s: Record<string, EdgeRun> = {};
+  const exists = new Set(links.map((l) => edgeKey(l.from, l.to)));
+  let graph = false;
+  let last: string | null = null;  // orchestrator: the node that finished last
+  const ran = new Set<string>();
+  const follow = (to: string) => {
+    if (last && exists.has(edgeKey(last, to))) s[edgeKey(last, to)] = "followed";
+  };
+  for (const e of events) {
+    const a = e.agent as string | undefined;
+    if (e.type === "start") { graph = e.execution === "graph"; continue; }
+    if (graph) {
+      if (e.type === "edge" && e.from && e.to) {
+        const k = edgeKey(String(e.from), String(e.to));
+        s[k] = e.error ? "error" : e.fired ? "followed" : "not";
+      }
+      continue;
+    }
+    if (e.type === "delegate" && a) { follow(a); ran.add(a); }
+    if (e.type === "agent_done" && a && !e.error) last = a;
+    if (e.type === "gate" && e.gate) { follow(String(e.gate)); ran.add(String(e.gate)); }
+    if (e.type === "decision" && e.gate) last = String(e.gate);
+    if (e.type === "end" && e.status === "done") {
+      for (const l of links) {
+        const k = edgeKey(l.from, l.to);
+        if (ran.has(l.from) && !s[k]) s[k] = "not";
+      }
     }
   }
   return s;
@@ -151,7 +192,7 @@ export function usesExtensionTools(spec: FlowRaw): boolean {
 const pretty = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
 
 export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
-  flow: string; doc: Doc; dirty: boolean; mock: boolean; onTrace: (t: Record<string, NodeRun>) => void;
+  flow: string; doc: Doc; dirty: boolean; mock: boolean; onTrace: (t: Trace) => void;
   request?: RunRequest | null;
 }) {
   const i18n = useI18n();
@@ -186,8 +227,12 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const label = spec.input?.label ?? t("insp.inputDefault");
   const rid = typed ? runId.trim() : input.trim();  // the run folder in runs/
 
-  useEffect(() => { onTrace(traceOf(events)); end.current?.scrollIntoView({ block: "nearest" }); }, [events, onTrace]);
-  useEffect(() => () => onTrace({}), [onTrace]);
+  const links = doc.spec.edges ?? [];
+  useEffect(() => {
+    onTrace({ nodes: traceOf(events), edges: edgeTraceOf(events, links) });
+    end.current?.scrollIntoView({ block: "nearest" });
+  }, [events, onTrace]);  // eslint-disable-line react-hooks/exhaustive-deps -- the links of this run
+  useEffect(() => () => onTrace({ nodes: {}, edges: {} }), [onTrace]);
 
   // inputs hidden by their show_if for the values typed so far (the server evaluates it)
   const [hiddenIn, setHiddenIn] = useState<Set<string>>(new Set());

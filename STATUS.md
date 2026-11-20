@@ -70,7 +70,10 @@ Works and is tested (`pytest`: core 371 tests, without extensions; `ruff` clean;
 - **Run** in the editor: typed run form; modes full / step by step / until an agent / single agent
   (one form with that agent's inputs and where each value comes from; flow inputs optional there);
   live trace; run state on the canvas (filled green dot + "running" badge + moving bar while an
-  agent runs, hollow dot when stopped, red-bordered when interrupted by Stop); outputs view;
+  agent runs, hollow dot when stopped, red-bordered when interrupted by Stop); links followed in
+  the run are green with `✓` (moving while their target runs), links not followed are faded with
+  `✗`, a failed `if` is red (graph mode: the engine's `edge` events; orchestrator mode: worked out
+  from the order of the agents and gates); outputs view;
   artifacts; gates with a decision; live write approvals; a card with the `claude` → `/login`
   steps when the CLI is not signed in.
 - **Chat assistant** in the editor: builds/changes the flow in a draft (never saves on its own);
@@ -119,8 +122,7 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
 2. [ ] Website/API actions, next steps: record the steps by clicking on the site; the assistant
    proposes actions for a connector (as proposals the user saves); a "guided" mode (the model
    browses read-only following instructions, URL allow list, screenshots in the audit).
-3. [ ] Canvas: highlight followed / not followed edges from the `edge` events (today only in the
-   trace).
+3. [x] Canvas: highlight followed / not followed edges (done 2026-11-20, second machine).
 4. [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and Threads
    only accept an https redirect URI, so they need an https tunnel or a hosted editor.
 5. [ ] Writes through external MCPs (today read only).
@@ -208,3 +210,6 @@ start the editor or the CLI (the studio does not read `.env`).
   extension) for flows, library agents and connectors, public badge, private terms check.
 - 2026-11-20 · work machine (account A) · Public as an explicit location (flows, library agents,
   connectors) blocked by private terms; move flows between places; agent library window.
+- 2026-11-20 · second machine (account B) · Canvas shows the links of a run: followed (green, ✓,
+  moving while the target runs), not followed (faded, ✗), failed `if` (red). Checked in the browser
+  with a fake model on the `parallel` test flow.

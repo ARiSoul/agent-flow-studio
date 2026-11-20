@@ -52,6 +52,7 @@ approvals, connectors and writes with controlled autonomy.
   and save. It does not approve MCPs or choose `auto` autonomy. It replies in the interface language.
 - **Run**: a form for the flow inputs (files included) and the run id; it runs the saved flow
   and shows the active agents (several at once in graph mode), the finished and skipped ones, the
+  links followed (green) and not followed (faded), the
   gate where it stopped, the trace, the cost, the outputs of each agent and the artifacts. Modes:
   *full flow*, *step by step*, *until agent…* and *single agent (isolated)* — with a form for that
   agent's inputs. Gates and writes ask for a live decision.

@@ -529,3 +529,14 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 }
 .ctx-cell:hover, .ctx-cell:focus { background: var(--accent-soft); outline: none; border-color: var(--accent); }
 .ctx-cell.on { background: var(--accent); color: var(--on-accent); }
+
+/* ---- links in a run: followed (green, moving while the target runs), not followed (faded) */
+.react-flow__edge.run-followed .react-flow__edge-path { stroke: var(--ok); stroke-width: 2.5; }
+.react-flow__edge.run-followed .react-flow__edge-text { fill: var(--ok); font-weight: 700; }
+.react-flow__edge.run-not .react-flow__edge-path { opacity: .35; stroke-dasharray: 2 5; }
+.react-flow__edge.run-not .react-flow__edge-text { opacity: .55; }
+.react-flow__edge.run-error .react-flow__edge-path { stroke: var(--stop); stroke-width: 2.5; }
+.react-flow__edge.run-error .react-flow__edge-text { fill: var(--stop); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.animated .react-flow__edge-path { animation: none; }
+}
