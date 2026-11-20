@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import {
+  useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   Background, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow, MarkerType,
   type Connection, type Edge, type EdgeChange, type IsValidConnection, type Node, type NodeChange,
@@ -6,16 +8,22 @@ import {
 import { api } from "./api";
 import { Chat } from "./Chat";
 import { Connections } from "./Connections";
+import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
+import { Icon, ICON_IDS } from "./icons";
 import { RunPanel, type NodeRun, type RunRequest } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
 import { THEMES, useTheme, type Theme } from "./theme";
 import {
-  autoLayout, clone, ensureLayout, NODE_STYLES, type NodeStyle, inputKind, newAgent, newGate, removeNode, sourceIO, tidy, uniqueKey, uniqueName,
+  autoLayout, clone, ensureLayout, NODE_STYLES, type NodeStyle, inputKind, newAgent, newGate, nodeNames, removeNode,
+  renameNode, SLUG, sourceIO, tidy, uniqueKey, uniqueName,
 } from "./model";
 import { nodeTypes, type Port } from "./nodes";
-import type { Catalog, Doc, FlowSummary, FlowTemplate, Selection, Validation } from "./types";
+import type { AgentRaw, Catalog, Doc, FlowSummary, FlowTemplate, GateRaw, Selection, Validation } from "./types";
+
+/** A copied node (in memory, for paste and duplicate). */
+type Clip = { base: string; agent?: AgentRaw; gate?: GateRaw; prompt?: string };
 
 const PALETTE = [
   { kind: "agent", label: "palette.agent", hint: "palette.agentHint", base: "agent" },
@@ -70,6 +78,10 @@ function Editor() {
   });
   const past = useRef<Doc[]>([]);
   const future = useRef<Doc[]>([]);
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const clip = useRef<Clip | null>(null);
+  const kbMenu = useRef(0);  // time of the last keyboard-opened menu (ignore the browser's own event)
 
   const dirty = doc !== null && JSON.stringify(doc) !== saved;
   const flash = (text: string, bad = false) => { setMsg({ text, bad }); setTimeout(() => setMsg(null), 4000); };
@@ -146,6 +158,15 @@ function Editor() {
       const inField = (e.target as HTMLElement)?.closest("input,textarea,select");
       if (mod && e.key === "z" && !inField) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       if (mod && e.key === "y" && !inField) { e.preventDefault(); redo(); }
+      // node shortcuts: only on the canvas selection, never while typing or in a dialog/menu
+      const busy = inField || (e.target as HTMLElement)?.closest?.(".dialog-layer,.ctx-menu,.modal");
+      const node = sel?.kind === "node" ? sel.id : null;
+      if (busy || menu) return;
+      const textSelected = !!window.getSelection()?.toString();
+      if (mod && e.key === "c" && node && !textSelected) copyNode(node);
+      if (mod && e.key === "v" && clip.current && !textSelected) { e.preventDefault(); pasteNode(); }
+      if (mod && e.key === "d" && node) { e.preventDefault(); duplicateNode(node); }
+      if (e.key === "F2" && node) { e.preventDefault(); renameDialog(node); }
     };
     const onUnload = (e: BeforeUnloadEvent) => { if (dirty) e.preventDefault(); };
     window.addEventListener("keydown", onKey);
@@ -292,6 +313,172 @@ function Editor() {
     if (kind) addNode(kind, rf.screenToFlowPosition({ x: e.clientX - 120, y: e.clientY - 40 }));
   };
 
+  // ---- node operations (context menu and shortcuts)
+  const showProps = (s: Selection) => { setSel(s); setRight("props"); };
+  const requestRun = (mode: "agent" | "until", target: string) => {
+    setRunReq({ mode, target, nonce: Date.now() });
+    setRight("run");
+  };
+  const copyNode = (id: string, quiet = false): Clip | null => {
+    if (!doc) return null;
+    const s = doc.spec, a = s.agents[id], g = s.gates?.[id];
+    if (!a && !g) return null;
+    const c: Clip = { base: id, agent: a && clone(a), gate: g && clone(g),
+      prompt: a?.prompt_file ? doc.prompts[a.prompt_file] : undefined };
+    clip.current = c;
+    if (!quiet) flash(t("menu.copied", { name: id }));
+    return c;
+  };
+  const pasteNode = (c: Clip | null = clip.current, at?: { x: number; y: number }) => {
+    if (!doc || !c) return;
+    const used = [...nodeNames(doc.spec), ...Object.keys(doc.spec.mcp_servers ?? {})];
+    const id = uniqueKey(used, c.base);
+    const p = at ?? rf.screenToFlowPosition({ x: window.innerWidth / 2 - 120, y: window.innerHeight / 2 - 50 });
+    const droppedWrites = !!c.agent?.writes?.length;
+    update((d) => {
+      if (c.agent) {
+        const a = clone(c.agent);
+        delete a.writes;  // an artifact has one writer: the copy does not write the same ones
+        if (a.prompt_file) {
+          const path = uniqueKey(Object.keys(d.prompts), `prompts/${id}.md`);
+          a.prompt_file = path;
+          d.prompts[path] = c.prompt ?? "";
+        }
+        d.spec.agents[id] = a;
+      } else if (c.gate) d.spec.gates = { ...d.spec.gates, [id]: clone(c.gate) };
+      d.spec.layout = { ...d.spec.layout, [id]: { x: Math.round(p.x), y: Math.round(p.y) } };
+    });
+    setSel({ kind: "node", id });
+    if (droppedWrites) flash(t("menu.writesNotCopied"));
+  };
+  const duplicateNode = (id: string) => {
+    const at = doc?.spec.layout?.[id];
+    pasteNode(copyNode(id, true), at && { x: at.x + 40, y: at.y + 40 });
+  };
+  const renameDialog = async (id: string) => {
+    if (!doc) return;
+    const r = await dialog.form({
+      title: t("menu.renameTitle", { name: id }), ok: t("menu.rename"),
+      fields: [{ key: "name", label: t("insp.name"), value: id, hint: t("insp.nameHint"),
+        validate: (v) => !SLUG.test(v.trim()) ? t("insp.nameHint")
+          : v.trim() !== id && nodeNames(doc.spec).includes(v.trim()) ? t("insp.nameTaken") : null }],
+    });
+    if (!r || r.name === id) return;
+    update((d) => renameNode(d.spec, id, r.name));
+    setSel({ kind: "node", id: r.name });
+  };
+  const addPort = (id: string, side: "in" | "out") => {
+    update((d) => {
+      const a = d.spec.agents[id];
+      if (side === "in") a.inputs = { ...a.inputs, [uniqueKey(Object.keys(a.inputs ?? {}), "input")]: {} };
+      else a.outputs = { ...a.outputs, [uniqueKey(Object.keys(a.outputs ?? {}), "output")]: { type: "text" } };
+    });
+    showProps({ kind: "node", id });
+  };
+
+  // ---- context menu
+  const menuAt = (e: { clientX: number; clientY: number }, el?: Element | null) => {
+    if (e.clientX || e.clientY) return { x: e.clientX, y: e.clientY };
+    const r = (el ?? document.querySelector(".canvas"))?.getBoundingClientRect();
+    return r ? { x: r.left + 12, y: r.top + Math.min(r.height, 40) } : { x: 100, y: 100 };
+  };
+  const nodeMenu = (id: string, x: number, y: number) => {
+    if (!doc) return;
+    const s = doc.spec, a = s.agents[id], g = s.gates?.[id];
+    const isStart = s.start === id;
+    const items: MenuItem[] = [
+      { label: t("menu.properties"), onSelect: () => showProps({ kind: "node", id }) },
+    ];
+    if (a) items.push(
+      { label: t("insp.testAgent"), title: t("insp.testAgentTitle"), onSelect: () => requestRun("agent", id) },
+      { label: t("insp.runUntil"), title: t("insp.runUntilTitle"), onSelect: () => requestRun("until", id) },
+      { kind: "sep" },
+      { label: t("menu.rename"), hint: "F2", onSelect: () => renameDialog(id) },
+      { label: t("menu.setStart"), disabled: isStart, onSelect: () => update((d) => { d.spec.start = id; }) },
+      { kind: "grid", label: t("insp.icon"), cells: ICON_IDS.map((k) => ({
+        key: k, title: k, on: (a.icon || "robot") === k, content: <Icon id={k} size={16} />,
+        onSelect: () => update((d) => { d.spec.agents[id].icon = k === "robot" ? undefined : k; }),
+      })) },
+      { label: t("menu.addInput"), onSelect: () => addPort(id, "in") },
+      { label: t("menu.addOutput"), onSelect: () => addPort(id, "out") },
+    );
+    if (g) items.push(
+      { kind: "sep" },
+      { label: t("menu.rename"), hint: "F2", onSelect: () => renameDialog(id) },
+      { label: t(g.kind === "human" ? "menu.toStop" : "menu.toHuman"),
+        onSelect: () => update((d) => { d.spec.gates![id].kind = g.kind === "human" ? "stop" : "human"; }) },
+    );
+    items.push(
+      { kind: "sep" },
+      { label: t("menu.copy"), hint: "Ctrl+C", onSelect: () => copyNode(id) },
+      { label: t("menu.duplicate"), hint: "Ctrl+D", onSelect: () => duplicateNode(id) },
+      { label: t("menu.delete"), hint: "Del", danger: true, disabled: isStart,
+        title: isStart ? t("insp.changeStartFirst") : undefined, onSelect: () => remove({ kind: "node", id }) },
+    );
+    setSel({ kind: "node", id });
+    setMenu({ x, y, title: id, items });
+  };
+  const edgeMenu = (edgeId: string, x: number, y: number) => {
+    if (!doc) return;
+    if (edgeId.startsWith("d:")) {
+      const l = parseDataEdge(edgeId), s: Selection = { kind: "data", ...l };
+      setSel(s);
+      setMenu({ x, y, title: `${doc.spec.agents[l.agent]?.inputs?.[l.input]?.from ?? "—"} → ${l.agent}.${l.input}`, items: [
+        { label: t("menu.properties"), onSelect: () => showProps(s) },
+        { kind: "sep" },
+        { label: t("menu.deleteLink"), hint: "Del", danger: true, onSelect: () => remove(s) },
+      ] });
+      return;
+    }
+    const index = Number(edgeId.slice(1)), e = doc.spec.edges?.[index];
+    if (!e) return;
+    const s: Selection = { kind: "edge", index };
+    setSel(s);
+    setMenu({ x, y, title: `${e.from} → ${e.to}`, items: [
+      { label: t("menu.editCondition"), onSelect: () => showProps(s) },
+      { label: t("menu.clearCondition"), disabled: !e.if?.trim() && !e.when?.trim(),
+        onSelect: () => update((d) => { const x = d.spec.edges![index]; delete x.if; x.when = ""; }) },
+      { kind: "sep" },
+      { label: t("menu.deleteLink"), hint: "Del", danger: true, onSelect: () => remove(s) },
+    ] });
+  };
+  const paneMenu = (x: number, y: number) => {
+    const at = rf.screenToFlowPosition({ x, y });
+    setMenu({ x, y, items: [
+      ...PALETTE.map((p) => ({ label: t(`menu.add.${p.kind}`), onSelect: () => addNode(p.kind, at) })),
+      { label: clip.current ? t("menu.pasteNamed", { name: clip.current.base }) : t("menu.paste"), hint: "Ctrl+V",
+        disabled: !clip.current, onSelect: () => pasteNode(clip.current, at) },
+      { kind: "sep" },
+      { label: t("app.arrange"), onSelect: arrange },
+      { label: t("menu.fitView"), onSelect: () => rf.fitView({ padding: 0.15, duration: 200 }) },
+      { label: t("menu.flowProperties"), onSelect: () => showProps(null) },
+    ] });
+  };
+  const arrange = () => { update((d) => autoLayout(d.spec, undefined, nodeStyle)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); };
+  const fromKeyboard = () => Date.now() - kbMenu.current < 600;
+  // Shift+F10 or the context-menu key: the menu of the focused node/link, else of the selection, else the canvas
+  const onCanvasKey = (e: ReactKeyboardEvent) => {
+    if (!(e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) || !doc) return;
+    if ((e.target as HTMLElement).closest("input,textarea,select")) return;
+    e.preventDefault();
+    kbMenu.current = Date.now();
+    const el = e.target as HTMLElement;
+    const nodeEl = el.closest<HTMLElement>(".react-flow__node");
+    const edgeEl = el.closest<HTMLElement>(".react-flow__edge");
+    const place = (x?: Element | null) => menuAt({ clientX: 0, clientY: 0 }, x);
+    const sNode = sel?.kind === "node" ? sel.id : null;
+    const nodeId = nodeEl?.dataset.id ?? sNode;
+    if (nodeId) {
+      const p = place(nodeEl ?? document.querySelector(`.react-flow__node[data-id="${CSS.escape(nodeId)}"]`));
+      return nodeMenu(nodeId, p.x, p.y);
+    }
+    const edgeId = edgeEl?.dataset.id ?? (edgeEl?.dataset.testid?.replace(/^rf__edge-/, ""))
+      ?? (sel?.kind === "edge" ? `e${sel.index}` : sel?.kind === "data" ? dataEdgeId(sel.agent, sel.input) : null);
+    if (edgeId) { const p = place(edgeEl); return edgeMenu(edgeId, p.x, p.y); }
+    const r = document.querySelector(".canvas")?.getBoundingClientRect();
+    paneMenu(r ? r.left + r.width / 2 : 200, r ? r.top + r.height / 2 : 200);
+  };
+
   // ---- flow management
   const confirmDiscard = async () => !dirty || dialog.confirm({
     title: t("app.discardTitle"), message: t("app.discard"), ok: t("app.discardOk"), danger: true });
@@ -370,7 +557,7 @@ function Editor() {
         <span className="sep" />
         <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">{t("app.undo")}</button>
         <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">{t("app.redo")}</button>
-        <button onClick={() => { update((d) => autoLayout(d.spec, undefined, nodeStyle)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); }}>{t("app.arrange")}</button>
+        <button onClick={arrange}>{t("app.arrange")}</button>
         <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
           title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
         <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
@@ -416,11 +603,27 @@ function Editor() {
         </ul>
       </aside>
 
-      <main className={`canvas${assistBusy ? " busy" : ""}`} onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}>
+      <main className={`canvas${assistBusy ? " busy" : ""}`} onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}
+        onKeyDown={onCanvasKey}>
         {doc && (
           <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode={base}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onDelete={onDelete}
             isValidConnection={isValidConnection}
+            onNodeContextMenu={(e, n) => {
+              e.preventDefault();
+              if (fromKeyboard()) return;
+              const p = menuAt(e, e.currentTarget as Element); nodeMenu(n.id, p.x, p.y);
+            }}
+            onEdgeContextMenu={(e, ed) => {
+              e.preventDefault();
+              if (fromKeyboard()) return;
+              const p = menuAt(e, e.currentTarget as Element); edgeMenu(ed.id, p.x, p.y);
+            }}
+            onPaneContextMenu={(e) => {
+              e.preventDefault();
+              if (fromKeyboard()) return;
+              const p = menuAt(e); paneMenu(p.x, p.y);
+            }}
             onBeforeDelete={async ({ nodes: ns, edges: es }) => ({ nodes: ns.filter((n) => n.id !== doc.spec.start), edges: es })}
             onNodeDragStart={() => { if (doc) { past.current.push(doc); future.current = []; } }}
             onPaneClick={() => setSel(null)} deleteKeyCode={["Delete", "Backspace"]}
@@ -430,6 +633,7 @@ function Editor() {
             <MiniMap pannable zoomable style={{ width: 160, height: 110 }} />
           </ReactFlow>
         )}
+        {menu && <ContextMenu menu={menu} onClose={closeMenu} />}
       </main>
 
       <aside className="right">

@@ -5,16 +5,19 @@ update "Current state" and "Next steps", add a line to the "Log" (date, machine/
 terms — no emails —, what was done) and commit + push.
 
 ## Where we stopped (2026-11-20, second machine / account B)
-- Last work: editor polish after the first real runs — simpler agent test form, a clear card when
-  the Claude Code CLI is not signed in, run state on the nodes (dot, "running" badge, moving bar),
-  node styles (Cards / Compact / Avatars) with an icon per agent, the AFS_MOCK badge only when it
-  matters, and the fix for agents that stayed "running" after Stop.
+- Last work: **right-click context menu** on the canvas (`editor/src/ContextMenu.tsx`, wired in
+  `App.tsx`): on agents (properties, test this agent, run until here, rename, set as start, icon
+  grid, add input/output, copy, duplicate, delete), on gates (rename, human ⇄ stop), on links (edit
+  / clear condition, delete; data links: properties, delete) and on the empty canvas (add agent /
+  approval / stop here, paste, arrange, fit, flow properties). Keyboard: Shift+F10 / context-menu
+  key on a focused node, arrows/Home/End/Enter/Escape in the menu; shortcuts Ctrl+C / Ctrl+V /
+  Ctrl+D / F2 on the selected node. Copies get their own `prompts/<name>.md` and do not keep
+  `writes` (one writer per artifact). Checked in the browser (dark + light, en + pt).
 - First real run done here: `repo-review`, agent `explorer` alone (graph mode), worked
   (≈ 0.40 USD). The full flows and the templates have not run end to end with the model yet.
 - After you pull on the other machine: `cd editor; npm run build` (the built editor is not in git)
-  and restart `agent-flow-studio-editor`. No new Python or npm dependencies. Your local
-  `runs/`, `flows/` outside git, `extensions/` and `connections.yaml` are untouched by git.
-- Next suggested task: the right-click context menu (item 1 below).
+  and restart `agent-flow-studio-editor`. No new Python or npm dependencies.
+- Next suggested task: item 1 below (run the graph flow and templates end to end with the model).
 
 ## Current state
 Works and is tested (`pytest`: core 289 tests, without extensions; `ruff` clean; `npm run build`):
@@ -28,6 +31,8 @@ Works and is tested (`pytest`: core 289 tests, without extensions; `ruff` clean;
 - **Node styles**: Cards, Compact, Avatars (toolbar, `afs.nodeStyle`); each agent can have an
   `icon` (20 built-in icons in `editor/src/icons.tsx`, or an emoji).
 - **In-app dialogs** (`editor/src/Dialog.tsx`), no native `alert/confirm/prompt`.
+- **Context menu** (`editor/src/ContextMenu.tsx`) on nodes, links and the canvas; Shift+F10 /
+  context-menu key; Ctrl+C / Ctrl+V / Ctrl+D / F2 on the selected node.
 - **Flows in YAML** (`flows/<name>/flow.yaml`): agents, gates (human approval / stop), links with
   conditions, artifacts with contracts, approved external MCPs, workspace and autonomy.
 - **Typed inputs/outputs**: flow `inputs` (text, markdown, number, integer, boolean, date,
@@ -68,23 +73,19 @@ section "## Fluxo" → "## Flow", the validation API key `fluxo` → `flow_secti
 have English names. No YAML key, enum value, tool id or env var changed, so old flows still load.
 
 ## Next steps (backlog, in suggested order)
-1. [ ] **Right-click context menu** on the canvas, especially on the cards (nodes): e.g. edit
-   properties, test this agent, run until here, duplicate, rename, change icon, add input/output,
-   delete; on links: edit condition, delete; on the empty canvas: add agent/gate here, paste,
-   arrange. In-app, themed and translated, keyboard accessible (Shift+F10 / context-menu key).
-2. [ ] Run a graph flow and each template end to end with the real model (check `tools=[]` per
+1. [ ] Run a graph flow and each template end to end with the real model (check `tools=[]` per
    agent session, the router, parallel sessions) and tune the template prompts.
-3. [ ] Canvas: highlight followed / not followed edges from the `edge` events (today only in the
+2. [ ] Canvas: highlight followed / not followed edges from the `edge` events (today only in the
    trace).
-4. [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and Threads
+3. [ ] Try a real sign-in per provider (register an app, check the presets). Instagram and Threads
    only accept an https redirect URI, so they need an https tunnel or a hosted editor.
-5. [ ] Writes through external MCPs (today read only).
-6. [ ] More flows/templates and skills (phase 4 of the builder).
-7. [ ] (Optional) Translate backend messages (validation, errors, input reasons such as
+4. [ ] Writes through external MCPs (today read only).
+5. [ ] More flows/templates and skills (phase 4 of the builder).
+6. [ ] (Optional) Translate backend messages (validation, errors, input reasons such as
    "required") to the UI language.
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
-· editor polish (see the Log).
+· editor polish · context menu (see the Log).
 
 ## Getting started on a new machine
 ```powershell
@@ -132,3 +133,5 @@ start the editor or the CLI (the studio does not read `.env`).
   the agents that were running show as interrupted, not "running".
 - 2026-11-20 · second machine (account B) · End of day: STATUS updated for the hand-over; backlog
   item 1 added (right-click context menu on the canvas and cards).
+- 2026-11-20 · second machine (account B) · Right-click context menu on nodes, links and the
+  canvas (keyboard accessible, themed, pt/en/es), copy/paste/duplicate of nodes, F2 rename.

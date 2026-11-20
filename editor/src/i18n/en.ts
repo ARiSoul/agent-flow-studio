@@ -83,7 +83,7 @@ export const en = {
   "palette.humanHint": "The flow pauses until someone approves",
   "palette.stop": "Stop",
   "palette.stopHint": "The flow ends and reports",
-  "palette.help": "Drag to the canvas or click. Link nodes by dragging from the bottom handle to the top one. Delete removes the selection.",
+  "palette.help": "Drag to the canvas or click. Link nodes by dragging from the bottom handle to the top one. Delete removes the selection. Right click (or Shift+F10) opens a menu.",
   "palette.tools": "Internal tools",
 
   // ---- right panel / bottom panel
@@ -520,6 +520,30 @@ export const en = {
   "run.by.when": "text condition",
   "run.by.always": "always",
   "run.by.both": "expression and text",
+  // ---- context menu
+  "menu.properties": "Properties",
+  "menu.rename": "Rename…",
+  "menu.renameTitle": "Rename {name}",
+  "menu.setStart": "Set as start",
+  "menu.addInput": "Add input",
+  "menu.addOutput": "Add output",
+  "menu.toStop": "Change to stop",
+  "menu.toHuman": "Change to human approval",
+  "menu.copy": "Copy",
+  "menu.copied": "Copied {name}. Paste with Ctrl+V or right click on the canvas.",
+  "menu.duplicate": "Duplicate",
+  "menu.writesNotCopied": "The copy does not write the original's artifacts (each artifact has one writer).",
+  "menu.delete": "Delete",
+  "menu.deleteLink": "Delete link",
+  "menu.editCondition": "Edit condition",
+  "menu.clearCondition": "Clear condition",
+  "menu.add.agent": "Add agent here",
+  "menu.add.human": "Add human approval here",
+  "menu.add.stop": "Add stop here",
+  "menu.paste": "Paste",
+  "menu.pasteNamed": "Paste {name}",
+  "menu.fitView": "Fit to screen",
+  "menu.flowProperties": "Flow properties",
 };
 
 export type Messages = typeof en;
