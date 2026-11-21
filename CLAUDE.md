@@ -126,7 +126,8 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   `with_command` puts its instructions before the message), `chats.py` (conversation history per
   flow in `runs/chats/<flow>/<id>.json`: the editor saves its items + session id after each reply;
   `/api/chats`), `runner.py` (full/step/until/agent runs,
-  gates, live approvals, decisions in `runs/<id>/decisions.jsonl`), `yaml_io.py`, `validation.py`.
+  gates, live approvals, decisions in `runs/<id>/decisions.jsonl`; `ask` = ask an agent for more
+  after a run; `past_runs`/`open_past` = open a saved run again from its `events.jsonl`), `yaml_io.py`, `validation.py`.
 - `extensions.py`: loads `extensions/<name>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
 - Frontend in `editor/` (Vite + React + @xyflow/react, i18n in `editor/src/i18n/`) → build in
   `src/agent_flow_studio/editor/static/`.

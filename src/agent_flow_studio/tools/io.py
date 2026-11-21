@@ -32,6 +32,7 @@ IO_DIR = "io"
 INPUTS_FILE = "_inputs.json"
 GATES_FILE = "_gates.json"
 GIVEN_SUFFIX = ".given.json"  # free inputs given to an agent (agent test mode)
+OUTPUTS_DIR = "outputs"  # runs/<id>/outputs/: text and markdown outputs as files
 PREVIOUS_DIR = ".previous"  # runs/.previous/<flow>.json: outputs of the last finished run
 MAX_READ = 200_000
 _FILE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
@@ -108,6 +109,26 @@ def clear_outputs(run_id: str, agent: str) -> None:
     p = _io_path(run_id, f"{agent}.json")
     if p.exists():
         p.unlink()
+    out = run_dir(run_id) / OUTPUTS_DIR
+    if out.is_dir():
+        for f in out.glob(f"{agent}.*"):
+            f.unlink()
+
+
+def output_file(run_id: str, agent: str, name: str, t: Any, value: Any) -> str | None:
+    """A text or markdown output also as a file the person can open: runs/<id>/outputs/
+    <agent>.<output>.md (.txt for text). Returns its path in the run folder, or None."""
+    if t.type not in ("text", "markdown"):
+        return None
+    items = value if isinstance(value, list) else [value]
+    if not all(isinstance(x, str) for x in items):
+        return None
+    ext = ".md" if t.type == "markdown" else ".txt"
+    d = run_dir(run_id) / OUTPUTS_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{agent}.{name}{ext}"
+    path.write_text("\n\n---\n\n".join(items), encoding="utf-8")
+    return f"{OUTPUTS_DIR}/{path.name}"
 
 
 def _previous_file(flow: str) -> Path:
@@ -211,6 +232,7 @@ def store_output(spec: FlowSpec, run_id: str, agent: str, name: str, value: Any,
     data = _read_json(p)
     data[name] = clean
     _write_json(p, data)
+    output_file(run_id, agent, name, t, clean)
     return clean
 
 
@@ -287,7 +309,12 @@ async def set_output(args):
     except ValueError as e:
         return err(f"output {args.get('name')!r} not saved: {e}. Fix the value and try again.")
     shown = clean if len(json.dumps(clean, ensure_ascii=False)) < 300 else "(saved)"
-    return ok({"saved": args["name"], "value": shown})
+    out: dict[str, Any] = {"saved": args["name"], "value": shown}
+    f = run_dir(args["run_id"]) / OUTPUTS_DIR
+    files = sorted(f.glob(f"{args['agent']}.{args['name']}.*")) if f.is_dir() else []
+    if files:  # say where the person finds it (do not invent another place)
+        out["file"] = f"runs/{args['run_id']}/{OUTPUTS_DIR}/{files[0].name}"
+    return ok(out)
 
 
 @tool("read_file", "Reads a text file of the run (an uploaded input or a file output), by its "

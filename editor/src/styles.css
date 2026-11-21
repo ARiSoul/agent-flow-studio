@@ -268,7 +268,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .run-head textarea { margin-bottom: 6px; }
 .gate-card.write { border-color: var(--accent); background: var(--accent-soft); }
 .gate-card .art-view { max-height: 240px; }
-.run-arts { border-top: 1px solid var(--border); padding: 0 14px 10px; max-height: 45%; display: flex; flex-direction: column; min-height: 0; }
+.run-arts { border-top: 1px solid var(--border); padding: 0 14px 10px; max-height: 33%; display: flex; flex-direction: column; min-height: 0; overflow: auto; }
 .arts { display: flex; flex-wrap: wrap; gap: 4px; }
 .arts button.on { border-color: var(--accent); color: var(--accent); }
 .art-view { overflow: auto; margin: 8px 0 0; background: var(--panel-2); padding: 8px; border-radius: 6px; white-space: pre-wrap; }
@@ -629,3 +629,27 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 .resize-line::after { content: ""; position: absolute; inset: -10px; }
 .resize-handle::after { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
 .resize-handle { width: 10px !important; height: 10px !important; }
+
+/* run panel: text boxes that grow (and can be resized); output actions and the output viewer */
+textarea.grow { resize: vertical; min-height: 3em; max-height: 70vh; overflow-y: auto; }
+.out-head { justify-content: space-between; align-items: center; }
+.out-row > .row { align-items: center; gap: 6px; }
+.out-actions { margin-left: auto; display: inline-flex; gap: 4px; }
+.modal-box.out-viewer { width: min(1100px, 100%); height: 90vh; }
+.out-viewer .panel-head { gap: 6px; }
+.out-viewer .panel-head h2 { flex: 1; margin: 0; font-size: 14px; text-transform: none; letter-spacing: 0; }
+.out-viewer-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; }
+.out-viewer-body pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+.ev.you { align-self: flex-end; max-width: 90%; background: var(--accent-soft); border-radius: 8px;
+  padding: 6px 8px; margin: 4px 0; white-space: pre-wrap; }
+.gate-card.ask-card { border-color: var(--accent); }
+.past-runs { margin: 4px 0; }
+.past-runs ul { list-style: none; margin: 4px 0 0; padding: 0; max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+.past-runs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 4px; border-radius: 4px; }
+.past-runs li.on { background: var(--accent-soft); }
+/* run panel: the outputs block has a splitter on top and folding headings */
+.run-arts { position: relative; flex-shrink: 0; }
+.run-arts.folded { max-height: none; }
+.run-arts button.fold { all: unset; cursor: pointer; display: block; }
+.run-arts button.fold:focus-visible { outline: 2px solid var(--accent); }
+.run-arts .out-head .fold-h { flex: 1; }

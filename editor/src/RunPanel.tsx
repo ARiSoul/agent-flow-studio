@@ -4,6 +4,8 @@ import { api } from "./api";
 import { useDialog } from "./Dialog";
 import { useI18n, type I18n } from "./i18n";
 import { localizeServer, type ServerMsg } from "./i18n/server";
+import { GrowingTextarea } from "./fields";
+import { Splitter } from "./Splitter";
 import { flowInputs, inputKind, isTyped, sourceIO } from "./model";
 import { formValue, sendValue, ValueField, type FormVal } from "./RunForm";
 import type { Doc, FlowRaw, IOTypeRaw, RunIO } from "./types";
@@ -124,6 +126,7 @@ function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
     case "approval_result": return { cls: e.approved ? "ok" : "err", text: `${t(e.approved ? "run.ev.approved" : "run.ev.rejected")}: ${e.summary}${e.comment ? ` — ${e.comment}` : ""}` };
     case "agent_blocked": return null;
     case "continue": return { cls: "info", text: t(e.how === "full" ? "run.ev.continueFull" : e.how === "auto" ? "run.ev.continueAuto" : "run.ev.continueStep") };
+    case "ask": return { cls: "you", text: `${t("run.ev.ask", { who: e.agent ? String(e.agent) : t("run.askFlow") })}\n${e.text}` };
     case "decision": return { cls: "info", text: `${t("run.ev.decision", { gate: String(e.gate), decision: tOr(`run.decision.${String(e.decision)}`, String(e.decision)) })}${e.comment ? ` — ${e.comment}` : ""}` };
     case "result": return { cls: "info", text: `${who}${t("run.ev.result", { session: String(e.session_id).slice(0, 8), turns: String(e.turns), cost: Number(e.cost ?? 0).toFixed(3) })}${e.denials ? t("run.ev.denials", { n: String(e.denials) }) : ""}` };
     case "skipped": return { cls: "info", text: t("run.ev.skipped", { node: String(e.node) }) };
@@ -199,6 +202,15 @@ export function usesExtensionTools(spec: FlowRaw): boolean {
 }
 
 const pretty = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
+
+/** A value kept in this browser (localStorage). */
+function useStored<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [v, setV] = useState<T>(() => {
+    try { const raw = localStorage.getItem(key); return raw === null ? initial : (JSON.parse(raw) as T); } catch { return initial; }
+  });
+  const set = (x: T) => { setV(x); try { localStorage.setItem(key, JSON.stringify(x)); } catch { /* no storage */ } };
+  return [v, set];
+}
 
 export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   flow: string; doc: Doc; dirty: boolean; mock: boolean; onTrace: (t: Trace) => void;
@@ -384,6 +396,25 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     }
   };
 
+  // past runs of this flow (runs/): open one again to look at it, ask for more or answer its gate
+  const [past, setPast] = useState<{ input: string; run: string; started: number; status: string;
+    gate?: string | null; cost: number; mode?: string }[]>([]);
+  const loadPast = useCallback(() => {
+    fetch(`/api/flows/${encodeURIComponent(flow)}/runs`).then((r) => (r.ok ? r.json() : { runs: [] }))
+      .then((d) => setPast(d.runs ?? [])).catch(() => setPast([]));
+  }, [flow]);
+  useEffect(() => { if (run?.status !== "running") loadPast(); }, [loadPast, run?.status]);
+  const openPast = async (inp: string) => {
+    setError(null);
+    try {
+      const r = await post<RunInfo>("/api/runs/open", { input: inp });
+      evRef.current = []; setEvents([]); setView(null); setShown(null);
+      if (idOnly) setRunId(inp); else setInput(inp);
+      setRun(r);
+      await follow(r.id, r.input);
+    } catch (e) { setError(String((e as Error).message)); }
+  };
+
   const cont = async (how: "step" | "full") => {
     if (!run) return;
     setError(null);
@@ -419,11 +450,70 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     catch (e) { setError(String((e as Error).message)); }
   };
   const running = run?.status === "running";
+  // the setup block and the outputs/artifacts blocks can be collapsed, and a splitter sets how
+  // much height the outputs take from the conversation (kept in this browser)
+  const [headOpen, setHeadOpen] = useStored("afs.run.head", true);
+  const [outsOpen, setOutsOpen] = useStored("afs.run.outs", true);
+  const [artsOpen, setArtsOpen] = useStored("afs.run.arts", true);
+  const [artsH, setArtsH] = useStored<number | null>("afs.run.artsH", null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const resizeArts = (px: number | null) => {
+    const max = (panelRef.current?.getBoundingClientRect().height ?? 600) - 120;
+    setArtsH(px === null ? null : Math.round(Math.max(60, Math.min(max, px))));
+  };
+  const headToggle = (
+    <button className="icon" title={t(headOpen ? "run.headHide" : "run.headShow")} aria-expanded={headOpen}
+      onClick={() => setHeadOpen(!headOpen)}>{headOpen ? "▴" : "▾"}</button>);
+  // after a run (or at a gate): who can be asked for more (the agents that ran, the last first)
+  const [askable, setAskable] = useState<string[]>([]);
+  const [askTo, setAskTo] = useState<string>("");
+  const [askText, setAskText] = useState("");
+  useEffect(() => {
+    if (!run || run.status === "running") { setAskable([]); return; }
+    fetch(`/api/runs/${run.id}/askable`).then((r) => (r.ok ? r.json() : { agents: [] }))
+      .then((d: { agents: string[] }) => { setAskable(d.agents); setAskTo((x) => (d.agents.includes(x) ? x : d.agents[0] ?? "")); })
+      .catch(() => setAskable([]));
+  }, [run?.id, run?.status]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const ask = async () => {
+    if (!run || !askText.trim()) return;
+    setError(null);
+    try {
+      const r = await post<RunInfo>(`/api/runs/${run.id}/ask`, { message: askText, agent: askTo });
+      setAskText(""); setRun(r);
+      await follow(r.id, run.input);
+    } catch (e) { setError(String((e as Error).message)); }
+  };
   const gate = run?.status === "gate" ? run.gate : null;
   const paused = run?.status === "paused";
   const agents = Object.keys(spec.agents);
   const savedInputs = typed && saved && Object.keys(saved.inputs).length > 0;
   const outputs = useMemo(() => Object.entries(saved?.outputs ?? {}).filter(([, o]) => Object.keys(o).length), [saved]);
+  // the agent that saved outputs last in this run: its group starts open (the result)
+  const lastOut = useMemo(() => [...events].reverse().find((e) => e.type === "outputs")?.agent as string | undefined, [events]);
+  const [shown, setShown] = useState<{ title: string; value: unknown; md: boolean } | null>(null);
+  const isMarkdown = (agent: string, n: string) => {
+    const tp = spec.agents[agent]?.outputs?.[n]?.type;
+    return tp === "markdown" || tp === "text";
+  };
+  const [copied, setCopied] = useState<string | null>(null);  // the output just copied ("Copied")
+  const copyValue = (v: unknown, key: string) => {
+    navigator.clipboard?.writeText(pretty(v)).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
+    }).catch(() => undefined);
+  };
+  const download = (name: string, v: unknown, md: boolean) => {
+    const text = pretty(v);
+    const url = URL.createObjectURL(new Blob([text], { type: md ? "text/markdown" : "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name}${md ? ".md" : typeof v === "string" ? ".txt" : ".json"}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const openFolder = () => {
+    if (rid) post(`/api/runs/${encodeURIComponent(rid)}/reveal`).catch((e) => setError(String(e)));
+  };
   // the Claude Code CLI is not signed in: the runner marks these errors with hint "auth"; the same
   // test runs here too, so the card also shows with events from an older server
   const authErr = events.find((e) => e.hint === "auth"
@@ -434,7 +524,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     : <button className="primary" disabled={dirty || (idOnly ? !RUN_ID.test(rid) : !rid)} onClick={start}
       title={dirty ? t("run.saveFirstTitle") : t("run.run")}>{t("run.run")}</button>;
   return (
-    <div className="runp">
+    <div className="runp" ref={panelRef}>
       <div className="run-head">
         {running && <div className="kit-bar global" aria-hidden="true" />}
         {idOnly ? <>
@@ -444,6 +534,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
               onChange={(e) => { setRunId(e.target.value); setRunIdErr(null); }} />
             <button className="icon" disabled={running} title={t("run.newRunId")} onClick={() => setRunId(defaultRunId(flow))}>↻</button>
             {runButton}
+            {headToggle}
           </div>
           {(runIdErr || (rid && !RUN_ID.test(rid))) && <span className="field-err">{runIdErr ?? t("run.runIdHint")}</span>}
         </> : (
@@ -451,7 +542,24 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             <input placeholder={t("run.inputPlaceholder", { label })} value={input} disabled={running}
               onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && start()} />
             {runButton}
+            {headToggle}
           </div>)}
+        {headOpen && <>{/* the rest of the setup: past runs, mode, inputs (collapsible) */}
+        {!running && past.length > 0 && (
+          <details className="past-runs">
+            <summary className="small">{t("run.pastRuns", { n: past.length })}</summary>
+            <ul>
+              {past.map((p) => (
+                <li key={p.input} className={run?.input === p.input ? "on" : undefined}>
+                  <button className="small link" onClick={() => openPast(p.input)} title={t("run.pastOpenTitle")}>
+                    <span className="mono">{p.input}</span>
+                  </button>
+                  <span className="muted small">{p.started ? new Date(p.started * 1000).toLocaleString(i18n.lang) : ""}</span>
+                  <span className={`badge${p.status === "error" ? " warn" : ""}`}>{status(i18n, p.status)}{p.gate ? ` · ${p.gate}` : ""}</span>
+                  {p.cost > 0 && <span className="muted small">≈ {p.cost.toFixed(3)} USD</span>}
+                </li>))}
+            </ul>
+          </details>)}
         <div className="row mode-row">
           <select value={mode} disabled={running} onChange={(e) => setMode(e.target.value as RunMode)}
             title={t("run.modeTitle")}>
@@ -483,7 +591,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             ))}
           </details>)}
         {mode === "agent" && <>
-          <textarea rows={2} disabled={running} placeholder={t("run.instruction")}
+          <GrowingTextarea minRows={2} disabled={running} placeholder={t("run.instruction")}
             value={instruction} onChange={(e) => setInstruction(e.target.value)} />
           {target && targetInputs.length > 0 && (
             <details className="run-form" open>
@@ -507,6 +615,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
         </>}
         {usesExtensionTools(spec) && (
           <span className={`badge ${mock ? "" : "warn"}`} title={t("run.mockTitle")}>{mock ? t("run.mock") : t("run.real")}</span>)}
+        </>}
         {dirty && <span className="muted small">{t("run.saveFirst")}</span>}
         {run && <span className="muted small"> · {status(i18n, run.status)}{run.cost ? ` · ≈ ${run.cost.toFixed(3)} USD` : ""}</span>}
         {error && <div className="field-err">{error}</div>}
@@ -541,7 +650,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             <p className="small mono">{String(p.summary)}</p>
             <details open><summary className="small">{t("run.detail")}</summary>
               <pre className="mono art-view">{JSON.stringify(p.detail, null, 2)}</pre></details>
-            <textarea rows={2} placeholder={t("run.writeComment")} value={comment} onChange={(e) => setComment(e.target.value)} />
+            <GrowingTextarea minRows={2} placeholder={t("run.writeComment")} value={comment} onChange={(e) => setComment(e.target.value)} />
             <div className="row">
               <button className="primary small" onClick={() => answer(p.id as string, true)}>{t("run.approveWrite")}</button>
               <button className="danger small" onClick={() => answer(p.id as string, false)}>{t("run.reject")}</button>
@@ -564,7 +673,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
           <div className="gate-card">
             <b>{t("run.humanApproval", { label: gate.label })}</b>
             <p className="small">{gate.reason}</p>
-            <textarea rows={3} placeholder={t("run.gateComment")} value={comment} onChange={(e) => setComment(e.target.value)} />
+            <GrowingTextarea minRows={3} placeholder={t("run.gateComment")} value={comment} onChange={(e) => setComment(e.target.value)} />
             <div className="row">
               <button className="primary small" onClick={() => decide("approve")}>{t("run.approve")}</button>
               <button className="small" onClick={() => decide("answer")} disabled={!comment.trim()}>{t("run.answerContinue")}</button>
@@ -573,33 +682,97 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             <p className="muted small">{t("run.gateHelp")}</p>
           </div>
         )}
+        {!running && askable.length > 0 && (
+          <div className="gate-card ask-card">
+            <b>{t("run.askTitle")}</b>
+            <p className="small muted">{t("run.askHelp")}</p>
+            {(askable.length > 1 || askable[0] !== "") && (
+              <label className="row small">
+                {t("run.askTo")}
+                <select value={askTo} onChange={(e) => setAskTo(e.target.value)}>
+                  {askable.map((a) => <option key={a} value={a}>{a || t("run.askFlow")}</option>)}
+                </select>
+              </label>)}
+            <GrowingTextarea minRows={2} placeholder={t("run.askPlaceholder")} value={askText}
+              onChange={(e) => setAskText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); } }} />
+            <div className="row">
+              <button className="primary small" disabled={!askText.trim()} onClick={ask} title="Ctrl+Enter">{t("run.askSend")}</button>
+            </div>
+          </div>)}
         <div ref={end} />
       </div>
 
       {(arts.length > 0 || outputs.length > 0) && (
-        <div className="run-arts">
+        <div className={`run-arts${outsOpen || artsOpen ? "" : " folded"}`}
+          style={artsH !== null && (outsOpen || artsOpen) ? { height: artsH, maxHeight: "none" } : undefined}>
+          {(outsOpen || artsOpen) && <Splitter edge="top" size={artsH ?? 200} onSize={resizeArts} label={t("run.resizeOutputs")} />}
           {outputs.length > 0 && <>
-            <h2>{t("run.outputs", { input: rid })}</h2>
-            <div className="outs">{outputs.map(([agent, o]) => (
-              <details key={agent} className="out-group">
+            <div className="row out-head">
+              <h2 className="fold-h"><button className="fold" aria-expanded={outsOpen} onClick={() => setOutsOpen(!outsOpen)}>
+                {outsOpen ? "▾" : "▸"} {t("run.outputs", { input: rid })}</button></h2>
+              <button className="small" title={t("run.openFolderTitle")} onClick={openFolder}>{t("run.openFolder")}</button>
+            </div>
+            {outsOpen && <div className="outs">{outputs.map(([agent, o]) => (
+              <details key={agent} className="out-group" open={agent === lastOut}>
                 <summary><b>{agent}</b> <span className="muted small">{Object.keys(o).join(", ")}</span></summary>
                 {Object.entries(o).map(([n, v]) => (
                   <div key={n} className="out-row">
-                    <code>{n}</code>
+                    <div className="row">
+                      <code>{n}</code>
+                      <span className="out-actions">
+                        <button className="small" onClick={() => setShown({ title: `${agent}.${n}`, value: v, md: isMarkdown(agent, n) })}>{t("run.outOpen")}</button>
+                        <button className="small" onClick={() => copyValue(v, `${agent}.${n}`)}>{t(copied === `${agent}.${n}` ? "run.outCopied" : "run.outCopy")}</button>
+                        <button className="small" onClick={() => download(`${agent}.${n}`, v, isMarkdown(agent, n))}>{t("run.outDownload")}</button>
+                      </span>
+                    </div>
                     <pre className="mono art-view">{pretty(v)}</pre>
                   </div>))}
               </details>))}
-            </div>
+            </div>}
           </>}
           {arts.length > 0 && <>
-            <h2>{t("run.artifacts", { input: run?.input ?? "" })}</h2>
-            <div className="arts">{arts.map((a) => (
+            <h2 className="fold-h"><button className="fold" aria-expanded={artsOpen} onClick={() => setArtsOpen(!artsOpen)}>
+              {artsOpen ? "▾" : "▸"} {t("run.artifacts", { input: run?.input ?? "" })}</button></h2>
+            {artsOpen && <div className="arts">{arts.map((a) => (
               <button key={a.name} className={`small${view?.name === a.name ? " on" : ""}`} onClick={() => open(a.name)}>{a.name}</button>
-            ))}</div>
-            {view && <pre className="mono art-view">{view.name.endsWith(".json") ? (() => { try { return JSON.stringify(JSON.parse(view.text), null, 2); } catch { return view.text; } })() : view.text}</pre>}
+            ))}</div>}
+            {artsOpen && view && <pre className="mono art-view">{view.name.endsWith(".json") ? (() => { try { return JSON.stringify(JSON.parse(view.text), null, 2); } catch { return view.text; } })() : view.text}</pre>}
           </>}
         </div>
       )}
+      {shown && <OutputViewer {...shown} copied={copied === shown.title} onClose={() => setShown(null)} onCopy={() => copyValue(shown.value, shown.title)}
+        onDownload={() => download(shown.title, shown.value, shown.md)} />}
+    </div>
+  );
+}
+
+/** One output in a large view: Markdown formatted (or the plain text), with copy and download. */
+function OutputViewer({ title, value, md, copied, onClose, onCopy, onDownload }: {
+  title: string; value: unknown; md: boolean; copied: boolean; onClose: () => void; onCopy: () => void; onDownload: () => void;
+}) {
+  const { t } = useI18n();
+  const [raw, setRaw] = useState(!md);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  const text = pretty(value);
+  return (
+    <div className="modal" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box out-viewer" role="dialog" aria-label={title}>
+        <div className="panel-head">
+          <h2><code>{title}</code></h2>
+          {md && <button className="small" onClick={() => setRaw((x) => !x)}>{t(raw ? "run.viewFormatted" : "run.viewRaw")}</button>}
+          <button className="small" onClick={onCopy}>{t(copied ? "run.outCopied" : "run.outCopy")}</button>
+          <button className="small" onClick={onDownload}>{t("run.outDownload")}</button>
+          <button className="small" onClick={onClose}>{t("conn.close")}</button>
+        </div>
+        <div className="out-viewer-body">
+          {raw || typeof value !== "string" ? <pre className="mono">{text}</pre> : <Markdown text={value} />}
+        </div>
+      </div>
     </div>
   );
 }

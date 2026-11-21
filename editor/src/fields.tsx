@@ -1,5 +1,5 @@
 // Small form pieces shared by the Inspector and the IO editors.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { useI18n } from "./i18n";
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -61,4 +61,26 @@ export function NumberInput({ value, onChange, min, max, step, placeholder }: {
     <input type="number" value={value ?? ""} min={min} max={max} step={step} placeholder={placeholder ?? "—"}
       onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />
   );
+}
+
+/** A text box that grows with its text up to half the window (then it scrolls), and that the
+ * person can also resize by hand. */
+export function GrowingTextarea({ value, minRows = 3, className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  value: string; minRows?: number;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const lastSet = useRef(0);  // the height this box gave itself
+  const [manual, setManual] = useState(false);  // resized by hand: keep that size
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || manual) return;
+    el.style.height = "auto";
+    const h = Math.round(Math.min(el.scrollHeight + 2, window.innerHeight * 0.5));
+    el.style.height = `${h}px`;
+    lastSet.current = el.offsetHeight;
+  }, [value, manual]);
+  return <textarea ref={ref} rows={minRows} value={value} className={`grow${className ? ` ${className}` : ""}`}
+    // a different height after a mouse-up on the box = the person dragged its corner
+    onMouseUp={(e) => { if (lastSet.current && Math.abs(e.currentTarget.offsetHeight - lastSet.current) > 2) setManual(true); }}
+    {...rest} />;
 }

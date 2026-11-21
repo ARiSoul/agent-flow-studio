@@ -98,6 +98,15 @@ class RunBody(BaseModel):
     instruction: str = Field(default="", max_length=20_000)
 
 
+class OpenRunBody(BaseModel):
+    input: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class AskBody(BaseModel):
+    message: str = Field(min_length=1, max_length=20_000)
+    agent: str | None = Field(default=None, max_length=64)
+
+
 class ContinueBody(BaseModel):
     how: Literal["step", "full"] = "step"
 
@@ -239,6 +248,18 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _open_folder(path: Path) -> None:
+    """The file manager of this machine on a folder (Explorer, Finder or xdg-open)."""
+    import os
+    import sys
+    if sys.platform.startswith("win"):
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
 
 
 def _tests_file(name: str) -> Path:
@@ -726,6 +747,29 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
                          body.instruction, run_id=body.run_id, inputs=body.inputs,
                          given=body.given)
 
+    @app.get("/api/flows/{flow}/runs")
+    def past_runs(flow: str) -> dict[str, Any]:
+        """The saved runs of a flow (runs/), newest first."""
+        _flow_dir(base, flow)
+        return {"runs": runner.past_runs(flow)}
+
+    @app.post("/api/runs/open", dependencies=[Depends(csrf)])
+    def open_run(body: OpenRunBody) -> dict[str, Any]:
+        """A saved run again (its log, outputs and sessions): to look at it or ask for more."""
+        return _run_call(runner.open_past, body.input)
+
+    @app.post("/api/runs/{run_id}/ask", dependencies=[Depends(csrf)])
+    async def ask_run(run_id: str, body: AskBody) -> dict[str, Any]:
+        """After a run: ask the agent that did a step (or the orchestrator) for more."""
+        return _run_call(runner.ask, run_id, body.message, body.agent)
+
+    @app.get("/api/runs/{run_id}/askable")
+    def run_askable(run_id: str) -> dict[str, Any]:
+        try:
+            return {"agents": runner.askable(run_id)}
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
     @app.post("/api/runs/{run_id}/continue", dependencies=[Depends(csrf)])
     async def continue_run(run_id: str, body: ContinueBody) -> dict[str, Any]:
         return _run_call(runner.continue_, run_id, body.how)
@@ -770,6 +814,20 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             raise HTTPException(400, str(e)) from e
         except FileNotFoundError as e:
             raise HTTPException(404, "artifact does not exist") from e
+
+    @app.post("/api/runs/{run_input}/reveal", dependencies=[Depends(csrf)])
+    def reveal_run(run_input: str) -> dict[str, Any]:
+        """Opens the run folder (its outputs folder when it has one) in the file manager of this
+        machine. The server only listens on this machine, and the folder is under runs/."""
+        try:
+            d = io_tool.run_dir(run_input)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        if not d.is_dir():
+            raise HTTPException(404, "the run has no folder yet")
+        target = d / io_tool.OUTPUTS_DIR if (d / io_tool.OUTPUTS_DIR).is_dir() else d
+        _open_folder(target)
+        return {"opened": str(target)}
 
     @app.get("/api/io/{run_input}")
     def run_io(run_input: str, flow: str) -> dict[str, Any]:

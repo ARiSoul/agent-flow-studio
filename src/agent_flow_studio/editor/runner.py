@@ -398,6 +398,134 @@ class Runner:
         self._launch(run, prompt, run.session_id)
         return run
 
+    # --- past runs: the log in runs/<id>/events.jsonl is enough to open one again ---------------
+    def past_runs(self, flow: str, limit: int = 30) -> list[dict[str, Any]]:
+        """The runs of a flow saved in runs/ (the last run in each folder), newest first."""
+        out = []
+        root = settings.runs_dir
+        if not root.is_dir():
+            return []
+        for d in root.iterdir():
+            if not d.is_dir() or d.name.startswith(".") or d.name == "chats":
+                continue
+            events = _last_run_events(d / "events.jsonl")
+            if not events or events[0].get("flow") != flow:
+                continue
+            start = events[0]
+            end = next((e for e in reversed(events) if e.get("type") == "end"), None)
+            gate = (end or {}).get("gate") or {}
+            out.append({
+                "input": d.name, "run": start.get("run"), "started": start.get("ts"),
+                "mode": start.get("mode"), "execution": start.get("execution"),
+                "status": (end or {}).get("status", "stopped"), "gate": gate.get("label"),
+                "cost": round(sum(float(e.get("cost") or 0) for e in events
+                                  if e.get("type") == "result"), 4),
+                "open": any(r.id == start.get("run") for r in self.runs.values()),
+            })
+        out.sort(key=lambda x: -(x["started"] or 0))
+        return out[:limit]
+
+    def open_past(self, run_input: str) -> Run:
+        """A saved run again, as it ended (done, at a gate, stopped…): its log, its outputs and the
+        session of each agent, so the person can look at it, ask for more or answer its gate. The
+        agents use the flow as it is now."""
+        path = safe_artifact_path(settings.runs_dir, run_input, "events.jsonl")
+        events = _last_run_events(path)
+        if not events:
+            raise RunError(404, "no saved run in this folder")
+        start = events[0]
+        rid = str(start.get("run"))
+        if rid in self.runs:  # still in memory: that one
+            return self.runs[rid]
+        flow = str(start.get("flow"))
+        compiled = load_flow(flow, base=self.base)  # the flow must still exist and be valid
+        run = Run(rid, flow, run_input, self.base, mode=start.get("mode") or "full",
+                  target=start.get("target"), started=float(start.get("ts") or time.time()))
+        run.events = [{k: v for k, v in e.items() if k != "run"} | {"i": i}
+                      for i, e in enumerate(events)]
+        end = next((e for e in reversed(events) if e.get("type") == "end"), None)
+        run.status = (end or {}).get("status") or "stopped"
+        if run.status == "running":
+            run.status = "stopped"  # the editor stopped while it ran
+        run.gate = (end or {}).get("gate") if run.status == "gate" else None
+        if run.status == "done" and (end or {}).get("gate"):
+            run.gate = end["gate"]  # a stop with its message
+        run.cost = sum(float(e.get("cost") or 0) for e in events if e.get("type") == "result")
+        results = [e for e in events if e.get("type") == "result" and e.get("session_id")]
+        run.done_agents = {str(e["agent"]) for e in events
+                           if e.get("type") == "agent_done" and not e.get("error") and e.get("agent")}
+        if start.get("execution") == "graph" and compiled.spec.execution == "graph":
+            graph = load_graph(flow, base=self.base)
+            graph.policy.approver = self._approver(run)
+            run.engine = GraphEngine(graph, run_input, host=run,
+                                     emit=lambda ev: self._emit(run, ev), query_fn=self._query,
+                                     route_fn=self._route, mode=run.mode, target=run.target)
+            _restore_engine(run.engine, events, run)
+        else:
+            orch = [e for e in results if not e.get("agent")]
+            run.session_id = orch[-1]["session_id"] if orch else None
+        self.runs[run.id] = run
+        return run
+
+    def askable(self, run_id: str) -> list[str]:
+        """Who can be asked for more after (or between) the steps of a run: in graph mode the
+        agents that ran in a session (the last one first); in orchestrator mode the orchestrator
+        ("" = the whole flow)."""
+        run = self.get(run_id)
+        if run.status == "running":
+            return []
+        if run.engine is not None:
+            return run.engine.asked_agents()
+        return [""] if run.session_id and run.status in ("done", "stopped", "error") else []
+
+    def ask(self, run_id: str, message: str, agent: str | None = None) -> Run:
+        """The person asks for more after a run (improve an output, change something): the
+        session of the agent that did it is resumed (graph mode), or the orchestrator's. The run
+        keeps its state (done, at a gate…) when the answer ends."""
+        run = self.get(run_id)
+        if self.active():
+            raise RunError(409, "a run is already in progress")
+        who = self.askable(run_id)
+        if not who:
+            raise RunError(409, "nothing to ask in this run (it has no finished session)")
+        message = message.strip()
+        if not message:
+            raise RunError(422, "write what you want")
+        target = agent if agent is not None else who[0]
+        if target not in who:
+            raise RunError(422, f"{target!r} cannot be asked in this run; choose one of: "
+                           + ", ".join(w or "the flow" for w in who))
+        self._emit(run, {"type": "ask", "agent": target or None, "text": message[:4000]})
+        before = (run.status, run.gate)
+        run.status = "running"
+        if run.engine is not None:
+            self._spawn(run, self._drive_ask(run, target, message, before))
+            return run
+        prompt = ("The person asks, after the run:\n\n" + message + "\n\nAnswer it. You may "
+                  "delegate to the agents again to change their outputs, with the same rules; do "
+                  "not start the flow over. Drafts stay drafts.")
+        run.gate = None
+        self._launch(run, prompt, run.session_id)
+        return run
+
+    async def _drive_ask(self, run: Run, agent: str, message: str,
+                         before: tuple[Status, dict[str, Any] | None]) -> None:
+        engine = run.engine
+        assert engine is not None
+        try:
+            await engine.ask(agent, message)
+            run.status, run.gate = before  # back where it was (done, at its gate…)
+            ev: dict[str, Any] = {"type": "end", "status": run.status, "gate": run.gate}
+            self._emit(run, ev)
+        except asyncio.CancelledError:
+            run.status = "stopped"
+            self._emit(run, {"type": "end", "status": "stopped"})
+        except Exception as e:  # noqa: BLE001 — report in the trace instead of losing the run
+            run.status = before[0] if before[0] != "running" else "error"
+            run.gate = before[1]
+            self._emit(run, {"type": "end", "status": run.status, "gate": run.gate,
+                             "message": f"{type(e).__name__}: {e}"})
+
     def _launch(self, run: Run, prompt: str, resume: str | None) -> None:
         self._spawn(run, self._drive(run, prompt, resume))
 
@@ -599,6 +727,57 @@ class Runner:
                 yield {"type": "state", **run.summary()}
                 return
             await asyncio.sleep(0.25)
+
+
+def _last_run_events(path: Path) -> list[dict[str, Any]]:
+    """The events of the last run written in an events.jsonl (a folder can hold several runs
+    with the same run id); [] when there is none."""
+    if not path.is_file():
+        return []
+    events = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict):
+            events.append(e)
+    starts = [i for i, e in enumerate(events) if e.get("type") == "start"]
+    if not starts:
+        return []
+    last = events[starts[-1]]
+    return [e for e in events[starts[-1]:] if e.get("run") == last.get("run")]
+
+
+def _restore_engine(engine: GraphEngine, events: list[dict[str, Any]], run: Run) -> None:
+    """The state of a graph run again, from its events: done/skipped/failed nodes, the decided
+    edges, the gate it waits at, the agents' sessions (for "ask for more")."""
+    spec = engine.spec
+    engine.started = True
+    for e in events:
+        t, node = e.get("type"), e.get("agent") or e.get("node") or e.get("gate")
+        if t == "delegate" and node in engine.runs:
+            engine.runs[node] += 1
+        elif t == "agent_done" and node in engine.state:
+            engine.state[node] = "failed" if e.get("error") else "done"
+        elif t in ("skipped", "decided") and node in engine.state:
+            engine.state[node] = "skipped" if t == "skipped" else "done"
+        elif t == "gate" and node in spec.gates:
+            engine.state[node] = "done" if e.get("kind") == "stop" else "gate"
+        elif t == "decision" and node in spec.gates:
+            engine.state[node] = "done"
+        elif t == "edge":
+            i = next((k for k, x in enumerate(spec.edges)
+                      if x.from_ == e.get("from") and x.to == e.get("to")
+                      and k not in engine.back), None)
+            if i is not None:
+                engine.decided[i] = bool(e.get("fired"))
+        elif t == "result" and e.get("agent") and e.get("session_id"):
+            engine.sessions[str(e["agent"])] = str(e["session_id"])
+    if run.status == "gate" and run.gate and run.gate.get("kind") == "human":
+        engine.pending_gates = [run.gate]
+    elif run.gate and run.gate.get("kind") == "stop":
+        engine.stop_gate = run.gate
 
 
 def list_artifacts(run_input: str) -> list[dict[str, Any]]:

@@ -62,7 +62,7 @@ record it again after "Sign in" and rebuild the flow with a decision.
 **Next suggested task**: item 1 of the backlog.
 
 ## Current state
-Works and is tested (`pytest`: core 437 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 443 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -317,3 +317,18 @@ start the editor or the CLI (the studio does not read `.env`).
   adapts with container queries (no description below 130 px, compact-like below 105 px);
   avatars resize too (the circle follows the size, ports stay on the ring); the handles
   have a bigger invisible grab margin (10–12 px).
+- 2026-11-21 · second machine (account B) · Run panel: text boxes grow with the text (and resize
+  by hand); text/markdown outputs are also files (`runs/<id>/outputs/<agent>.<output>.md`,
+  set_output tells the agent the path); each output has Open (large view, Markdown
+  formatted), Copy and Download, the last result opens by itself, and "Open folder" opens
+  the run folder (`/api/runs/<id>/reveal`). "Ask for more" after a run (or at a gate):
+  resumes the session of the agent that did the step (graph) or the orchestrator, with the
+  same tools and rules (`Runner.ask`, `GraphEngine.ask`, `/api/runs/<id>/ask`).
+- 2026-11-21 · second machine (account B) · Past runs: the Run panel lists the saved runs of the
+  flow (`/api/flows/<flow>/runs`) and opens one again from its `events.jsonl`
+  (`Runner.open_past`: state, gate, outputs, the agents' session ids; graph engine state
+  restored), so "Ask for more" and gate decisions work after a restart. The agents use the
+  flow as it is now.
+- 2026-11-21 · second machine (account B) · Run panel layout: a drag bar between the conversation
+  and the outputs (double click: default), the run setup can be hidden (▴/▾ next to Run),
+  and the Outputs/Artifacts blocks fold; all kept in the browser (`afs.run.*`).

@@ -70,7 +70,12 @@ approvals, connectors and writes with controlled autonomy.
   links followed (green) and not followed (faded), the
   gate where it stopped, the trace, the cost, the outputs of each agent and the artifacts. Modes:
   *full flow*, *step by step*, *until agent…* and *single agent (isolated)* — with a form for that
-  agent's inputs. Gates and writes ask for a live decision.
+  agent's inputs. Gates and writes ask for a live decision. Text and markdown outputs are also
+  files (`runs/<id>/outputs/`); each output can be opened large, copied or downloaded, and
+  "Open folder" shows the run folder. **Ask for more**: after a run (or at a gate) you can ask
+  the agent that did a step to improve or change its output — it continues its own session,
+  with the same tools and rules. **Past runs**: the Run panel lists the saved runs of the flow; open
+  one to see its log and outputs again, ask for more or answer its gate (also after a restart).
 - **Connectors**: HTTP API, Azure Resource Manager, Azure DevOps, Microsoft Graph, GitHub, GitLab
   and Atlassian Cloud (Jira, Confluence), with environment, allowed paths, read/write access and
   "Test connection". Each connector can have **instructions for the agents** (how to use that

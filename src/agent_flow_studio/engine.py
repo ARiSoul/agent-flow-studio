@@ -77,6 +77,12 @@ FOLLOW_UP = ("You finished without saving these required outputs: {names}. Save 
              "with `set_output` (run_id `{run_id}`, agent `{agent}`), then finish.")
 
 
+ASK = ("The person who ran this flow asks you, about your work in this run (run id `{run_id}`):"
+       "\n\n{message}\n\nDo what they ask within your own step and its rules. If it changes your "
+       "outputs, save them again with `set_output` (run_id `{run_id}`, agent `{agent}`); then say "
+       "in a few lines what you changed.")
+
+
 class Host(Protocol):
     """What the engine updates on the run (the editor's `Run`, or the CLI's state)."""
 
@@ -250,6 +256,32 @@ class GraphEngine:
         self.pending_gates = [g for g in self.pending_gates if g["gate"] != gate]
         self.state[gate] = "done"
         self._apply(gate, await self._evaluate(gate))
+
+    def asked_agents(self) -> list[str]:
+        """The agents of this run that can be asked something now (they ran in a session; an
+        action node has none), the last one to finish first."""
+        return list(reversed(list(self.sessions)))
+
+    async def ask(self, name: str, message: str) -> bool:
+        """After a node ran: the person asks its agent for more (improve or change its output).
+        The same session is resumed, with the same tools, guard and policy. True when it ended
+        without an error."""
+        sid = self.sessions.get(name)
+        if not sid:
+            raise ValueError(f"agent {name!r} has no session in this run")
+        self.compiled.activate()
+        self.emit({"type": "delegate", "agent": name, "task": "follow-up"})
+        prompt = ASK.format(run_id=self.run_id, agent=name, message=message)
+        _, error = await self._session(name, prompt, self.compiled.agent_options(name, resume=sid))
+        if error:
+            self.emit({"type": "agent_done", "agent": name, "error": True,
+                       "message": error[:500]})
+            return False
+        if self.spec.agents[name].outputs:
+            self.emit({"type": "outputs", "agent": name,
+                       "names": sorted(io_tool.outputs(self.run_id, name))})
+        self.emit({"type": "agent_done", "agent": name, "error": False})
+        return True
 
     async def cancel(self) -> None:
         for t in self.tasks:
