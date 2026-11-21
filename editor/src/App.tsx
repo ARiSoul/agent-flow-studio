@@ -35,6 +35,8 @@ const PALETTE = [
   { kind: "agent", label: "palette.agent", hint: "palette.agentHint", base: "agent" },
   { kind: "human", label: "palette.human", hint: "palette.humanHint", base: "approval" },
   { kind: "stop", label: "palette.stop", hint: "palette.stopHint", base: "stop" },
+  { kind: "decision", label: "palette.decision", hint: "palette.decisionHint", base: "decision" },
+  { kind: "action", label: "palette.action", hint: "palette.actionHint", base: "action" },
 ] as const;
 type PaletteKind = (typeof PALETTE)[number]["kind"];
 const FLOW_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;  // same rule as the server
@@ -288,7 +290,9 @@ function Editor() {
     const control: Edge[] = (s.edges ?? []).map((e, i) => {
       // run state of the link: followed (green; moving while its target runs), not followed (faded)
       const run = trace.edges[edgeKey(e.from, e.to)];
-      const cond = [e.if?.trim(), e.when?.trim()].filter(Boolean).join(" · ");
+      // a branch label ("yes", "no") reads better than the expression; the expression stays in the panel
+      const cond = e.label?.trim() || [e.if?.trim(), e.when?.trim()].filter(Boolean).join(" · ");
+      const fromDecision = s.gates?.[e.from]?.kind === "decision";
       const mark = run === "followed" ? "✓" : run === "not" ? "✗" : run === "error" ? "!" : "";
       return {
         id: `e${i}`, source: e.from, target: e.to,
@@ -297,7 +301,8 @@ function Editor() {
         markerEnd: { type: MarkerType.ArrowClosed },
         animated: run === "followed" && trace.nodes[e.to] === "active",
         ariaLabel: run ? t(`run.edge.${run}`) : undefined,
-        className: [e.to === s.start || e.from in (s.gates ?? {}) ? "back" : "", e.if?.trim() ? "cond" : "",
+        className: [e.to === s.start || (e.from in (s.gates ?? {}) && !fromDecision) ? "back" : "",
+          fromDecision ? (e.if?.trim() ? "branch" : "branch else") : "", e.if?.trim() ? "cond" : "",
           run ? `run-${run}` : ""].join(" ").trim(),
       };
     });
@@ -392,7 +397,10 @@ function Editor() {
     const p = at ?? rf.screenToFlowPosition({ x: window.innerWidth / 2 - 120, y: window.innerHeight / 2 - 50 });
     update((d) => {
       if (kind === "agent") d.spec.agents[id] = newAgent(t("default.agentDescription"), t("default.agentPrompt"));
-      else d.spec.gates = { ...d.spec.gates, [id]: newGate(kind, t(kind === "human" ? "node.human" : "node.stop")) };
+      // an action node: a connector action run by the studio (no prompt, no model)
+      else if (kind === "action") d.spec.agents[id] = { description: t("default.actionDescription"),
+        action: { connector: Object.keys(catalog?.connections ?? {})[0] ?? "", name: "" }, outputs: {} };
+      else d.spec.gates = { ...d.spec.gates, [id]: newGate(kind, t(`node.${kind}`)) };
       d.spec.layout = { ...d.spec.layout, [id]: { x: Math.round(p.x), y: Math.round(p.y) } };
     });
     setSel({ kind: "node", id });
@@ -591,8 +599,8 @@ function Editor() {
     if (g) items.push(
       { kind: "sep" },
       { label: t("menu.rename"), hint: "F2", onSelect: () => renameDialog(id) },
-      { label: t(g.kind === "human" ? "menu.toStop" : "menu.toHuman"),
-        onSelect: () => update((d) => { d.spec.gates![id].kind = g.kind === "human" ? "stop" : "human"; }) },
+      ...(g.kind !== "decision" ? [{ label: t(g.kind === "human" ? "menu.toStop" : "menu.toHuman"),
+        onSelect: () => update((d) => { d.spec.gates![id].kind = g.kind === "human" ? "stop" : "human"; }) }] : []),
     );
     items.push(
       { kind: "sep" },

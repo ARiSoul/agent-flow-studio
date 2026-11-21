@@ -9,7 +9,10 @@ Last commit: `dcb9990` (all the work of this session; pushed by the user).
 
 **After you pull on the other machine**
 1. `.\.venv\Scripts\python -m pip install -e ".[dev,web]"` (`web` = Playwright, optional: only for
-   website connectors; it uses the installed Edge/Chrome, no browser download).
+   website connectors; it uses the installed Edge/Chrome, no browser download). **Stop the
+   editor first**: on Windows a running `agent-flow-studio-editor.exe` is locked, pip stops halfway
+   and the package disappears from the venv (`No module named 'agent_flow_studio'`; fix: delete
+   `.venv/Lib/site-packages/~gent_flow_studio-*` and install again).
 2. `cd editor; npm run build; cd ..` and **restart** `agent-flow-studio-editor` (the server has new
    routes; with an old server the editor says "restart agent-flow-studio-editor").
 3. `git status`: flows in `flows/` other than `repo-review` are now **ignored by git** (nothing is
@@ -40,13 +43,26 @@ chat with the model; resuming a conversation after a server restart.
 work machine (the core draft marker is English since the translation; the extension test expects
 the Portuguese one). Fix it in the extension (outside git).
 
-**Since then, on the second machine (account B)**: backlog items 3 (links of a run on the canvas)
-and 7 (server messages in the UI language). After you pull: `npm run build` and restart the editor.
+**Since then, on the second machine (account B)**: backlog items 3 (links of a run on the canvas),
+7 (server messages in the UI language) and the first part of item 2 (record a website action).
+Recording is tested with Playwright and Edge (headless, on a local page); it was not tried yet by
+a person on a real site: try it on the work machine. After you pull: `npm run build` and restart the editor.
+
+Then the fixes from the first real run of a hand-made flow (a website connector, one agent, a stop):
+run log with the tool detail and its error text, Markdown in the log, a default turn limit per
+agent (40) and "retry at most once" for the orchestrator, a run id only for flows without inputs,
+the agent panel says what each connector gives (no more automatic `http_get` for websites), the
+recorder leaves out sign-in steps and warns without extracts, resizable visible browser windows,
+`previous.<agent>.<output>` (the last finished run), stop **messages** with `{expression}` parts
+and the **decision** node (diamond, first branch whose `if` holds, "otherwise", labels "yes/no").
+Checked in the browser with a fake model (no real model run). The flow on this machine
+(local, outside git) still has its old recorded action (with the sign-in clicks and no extract):
+record it again after "Sign in" and rebuild the flow with a decision.
 
 **Next suggested task**: item 1 of the backlog.
 
 ## Current state
-Works and is tested (`pytest`: core 376 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 433 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -91,7 +107,8 @@ Works and is tested (`pytest`: core 376 tests, without extensions; `ruff` clean;
   Cloud and **Website** (your sign-in in a browser, Playwright optional); secrets in the keyring or
   `${VAR}`; test connection; `http_get`/`http_write` per agent; **instructions** for the agents;
   named **actions** with typed params (`run_action`, checked by the policy; "only these actions";
-  website actions run declared steps or `get_json`, `redact` for phones/emails).
+  website actions run declared steps or `get_json`, `redact` for phones/emails; **Record**
+  writes a draft action from your clicks in a visible window).
   **Sign-in on a page** (OAuth 2 + PKCE, tokens only in the keyring) with presets for Facebook,
   Instagram, Threads, WhatsApp Business, Reddit; **Azure managed identity**. Tested with mocked
   providers only.
@@ -125,7 +142,8 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
 1. [ ] Run `ticket-triage` end to end with the model and a real connector (work machine), then the
    other templates and a graph flow (check `tools=[]` per agent session, the router, parallel
    sessions); tune the template prompts. Try the assistant's library tools in a real chat.
-2. [ ] Website/API actions, next steps: record the steps by clicking on the site; the assistant
+2. [ ] Website/API actions, next steps: ~~record the steps by clicking on the site~~ (done
+   2026-11-20: Connectors → website → Record; try it with a real site); the assistant
    proposes actions for a connector (as proposals the user saves); a "guided" mode (the model
    browses read-only following instructions, URL allow list, screenshots in the audit).
 3. [x] Canvas: highlight followed / not followed edges (done 2026-11-20, second machine).
@@ -135,6 +153,10 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
 6. [ ] More flows/templates, library agents and skills (phase 4 of the builder).
 7. [x] Translate backend messages (validation, errors, input reasons such as "required") to the
    UI language (done 2026-11-20, second machine).
+8. [ ] Make building flows much easier. The first real flow by hand (website action → compare
+   with the last run → message) took many rounds; with the assistant it worked. Ideas: starters
+   for common patterns ("check a value and compare it with the last run"), the assistant as the
+   default way to start a flow, a guided wizard, clearer empty states and hints on the canvas.
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
 · editor polish · context menu · agent library · assistant commands/history · connector actions
@@ -222,3 +244,61 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-20 · second machine (account B) · Server messages in the UI language: codes + params
   (`messages.py`) in spec, types, expressions, compile, run form and validation (pydantic errors
   get `pydantic.<type>`); tables `server.pt.ts` / `server.es.ts`; `test_messages.py`.
+- 2026-11-20 · second machine (account B) · Record a website action: Connectors → website → Record
+  opens a visible window (connector session), a page script reports clicks/fields/choices/Enter and
+  Alt+click extracts; typed values become params, passwords skipped; draft added to the actions
+  text (`connections/recorder.py`, `test_web_recorder.py`). Playwright installed on this machine
+  (Edge and Chrome both start); the recorder test runs headless with Edge.
+- 2026-11-20 · second machine (account B) · Fixes from the first real run + decision node: tool
+  detail/error in the run log (`trace.py`), Markdown log, default agent turns 40, retry rule, run id
+  only for flows without inputs, connector info in the agent panel (`compile.http_tool_unused`),
+  recorder skips sign-in steps, `no_viewport` windows, `previous.*`, stop `message`, `decision`
+  gates and edge `label` (`test_decisions.py`). Known: `test_chats.py::test_rename_keeps_the_order`
+  can fail once in a while (two saves in the same clock tick); it passes on a rerun.
+- 2026-11-20 · second machine (account B) · Recorder: each typed field is a parameter or, if
+  ticked in the editor, a fixed value (the typed text stays in memory/local editor until
+  chosen; passwords never leave the page); the hint in the recording window moves away from
+  the mouse and hides while Alt is held. Blank flows: no `read_artifact` by default and no
+  legacy task (only a run id); agents with `read_artifact` and no `reads` are told not to
+  guess names.
+- 2026-11-20 · second machine (account B) · Website actions say where they failed: the step,
+  the page path and the requests a read action blocked (with the `allow_post` hint). Connectors
+  → an action → Test runs a read action now (a website one in a visible window, slow, open 20 s
+  after a failure) and shows what an agent gets (`test_action_test.py`, real Edge headless).
+- 2026-11-20 · second machine (account B) · Recorder: list items/options are recorded by their
+  text (ids ending in a number are positions, not stable); extracts never by text. POST seen
+  while recording → an `allow_post` checkbox on the draft; a failed Test that blocked POST →
+  "Allow POST in this action and test again" (`/actions/<a>/allow-post`, audited). Sites that
+  connect to their server by POST (e.g. a live-connection negotiate) need it.
+- 2026-11-20 · second machine (account B) · Website actions keep the window size they were
+  recorded at (`viewport: {width, height}`; sites change menus with the size, e.g. a "More"
+  link only in a narrow layout); the recorder warns when the window is resized while
+  recording; a failed step says the window size and, on a timeout, suggests the viewport.
+- 2026-11-20 · second machine (account B) · Website steps act on the first VISIBLE match (a
+  hidden copy of a menu before the visible one made clicks wait forever); Playwright errors
+  keep the reasons of their call log ("resolved to …", "element is not visible").
+- 2026-11-20 · second machine (account B) · `tag:text-is("…")` steps also find the element
+  whose VISIBLE text is that text (`:text-is` counts hidden text inside, e.g. a counter badge
+  drawn once the site connects); website actions keep the browser language they were
+  recorded in (`locale`, e.g. pt-PT: multilingual sites change the texts the steps look for).
+- 2026-11-20 · second machine (account B) · Recorder: a click on a link to a page of the site
+  becomes `goto <address>` (language-free); a goto right after a goto replaces it, so menu
+  paths collapse to the final page (Home → More → Users = `goto /admin/users`).
+- 2026-11-20 · second machine (account B) · The last Test of each action is kept on this
+  machine (`runs/.connector-tests/<connector>.json`, removed with the connector) and shown
+  again from "last test ✓/✗" next to the action, with its date and parameters.
+- 2026-11-20 · second machine (account B) · Action nodes (palette → "Action (no model)"): an
+  agent with `action:` runs one read action of a connector in graph mode, with no model, and
+  maps the result to typed outputs (`from`, `match`); validated (graph only, read actions,
+  known params, mapped outputs exist), audited with names only, `test_action_nodes.py`. Checked
+  in the browser with a fake action: action → decision → stop messages ("14 users", "2 new
+  users").
+- 2026-11-21 · second machine (account B) · Decision panel: every branch in one row (label,
+  destination, condition, and the stop's message) with value chips, ↑/↓ and "+ Branch" (a new
+  stop, placed before "otherwise"); diamond text centered. Assistant: `set_agent(action=…)`
+  builds action nodes, `view_catalog` shows each action's last Test values, and `http_get` is
+  only added for connectors used with direct requests; its instructions explain action
+  nodes, decisions, stop messages and `previous.*`.
+- 2026-11-21 · second machine (account B) · First real flow working end to end (local, not in
+  git): a website action node → decision with the previous run → stop messages, built
+  with the assistant. Backlog item 8 added: make building flows much easier.

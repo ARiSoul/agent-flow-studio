@@ -9,11 +9,17 @@ approvals, connectors and writes with controlled autonomy.
 
 ## Concepts
 - **Flow** (`flows/<name>/flow.yaml` + `prompts/*.md`): a graph of **agents** (with a prompt,
-  tools, model, skills), **gates** (human approval or stop) and **links** with conditions.
+  tools, model, skills), **gates** (human approval, stop or decision) and **links** with
+  conditions. A **decision** (a diamond on the canvas) does not pause: it follows the first branch
+  whose `if` holds, in order, and a branch without `if` means "otherwise"; branches can have a
+  label ("yes", "no"). A **stop** can show a **message** with `{expression}` parts filled in from
+  the values, e.g. `You have {checker.count - previous.checker.count} new users`.
 - **Typed data**: the flow declares its **inputs** (text, markdown, number, integer, boolean,
   date, datetime, url, path, file, choice, json — with required, default, min/max, pattern,
   options, accept, contract, multiple); the Run panel shows them as a form. Each agent declares
-  **inputs** (`from: input.<x>` or `from: <agent>.<output>`) and typed **outputs**, which the
+  **inputs** (`from: input.<x>`, `from: <agent>.<output>` or `from: previous.<agent>.<output>`,
+  the same output in the last finished run of the flow — empty on the first run) and typed
+  **outputs**, which the
   studio checks when the agent saves them (`io.set_output`): the output of one agent is the input
   of the next. Values live in `runs/<run id>/io/`; the run id is separate from the inputs.
 - **Execution** (per flow): `orchestrator` — an LLM orchestrator receives the graph as
@@ -23,8 +29,15 @@ approvals, connectors and writes with controlled autonomy.
   for the first), skipped branches propagate, and loops stop at `max_runs`.
 - **Conditions** on links: `if` — an expression on the inputs and outputs, evaluated by the studio
   without an LLM (`triage.severity == "high"`, `tests.failed > 0`, `len(scan.items) > 0`,
-  `approve.decision == "approve"`); `when` — text, decided by the orchestrator (or by a small
+  `approve.decision == "approve"`, `counter.count > previous.counter.count`); `when` — text,
+  decided by the orchestrator (or by a small
   router call in graph mode). Both on one link: both must hold.
+- **Action nodes** (graph mode): an agent with `action:` instead of a prompt. The studio runs
+  that read action of a connector itself — no model, no cost, the same result every time — and
+  saves the values of its result as the node's typed outputs: `params` are texts with
+  `{expression}` parts, and each output can say where it comes from (`from`: a value or field
+  path; `match`: a regular expression whose first group is the value, e.g. `(\d+)\D*$` takes 14
+  out of "1–14 of 14"). Example: action → decision → stops with a message, no model at all.
 - **Artifacts** (`reads`/`writes`): free files in `runs/<id>/`, still supported.
 - **Tools**: `artifacts.*` (intermediate results in `runs/<id>/`, with optional contracts),
   `connections.http_get|http_write` (connectors), `workspace.read|glob|grep|edit|write|bash`
@@ -89,6 +102,16 @@ Read actions block every request that is not GET/HEAD (so they cannot change any
 must stay on the site and its allowed paths, and an expired session is detected ("signed-in
 element" / "sign-in URL marker"). Needs Playwright (`pip install -e ".[web]"`), which uses the
 installed Edge or Chrome.
+
+**Record an action** (Connectors → a website → Record) opens the site in a window with the
+connector's session: you do the operation once (clicks, typed fields, choices, Enter) and Alt+click
+each text to extract. The editor shows the steps as you go; at the end, "Add to the actions" puts
+a draft action in the actions text, for you to check, rename, describe and save. Typed values
+become parameters (or, if you tick it, fixed values), password fields are not recorded, and the
+draft follows the same rules as a hand-written action. A click on a link to a page of the site is
+recorded as its address (`goto`), and pages passed through on the way are dropped, so the action
+does not depend on the language of the texts or on menus that change with the window size; the
+draft also keeps the window size and the browser language.
 
 ## Flow templates
 **New** in the editor (or `agent-flow-studio-flows new`) can start from a template; you fill in its

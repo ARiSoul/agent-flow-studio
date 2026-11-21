@@ -2,10 +2,10 @@ import { useState, type ReactNode } from "react";
 import { CommitInput, Field, NumberInput } from "./fields";
 import { Icon, ICON_IDS } from "./icons";
 import { AgentInputsEditor, ExprInput, IOListEditor, exprRefs } from "./IOEditors";
-import { artifactOwners, isTyped, renameNode, SLUG, nodeNames } from "./model";
+import { artifactOwners, isTyped, renameNode, SLUG, nodeNames, uniqueName } from "./model";
 import { useI18n } from "./i18n";
-import { localizeParam } from "./i18n/server";
-import type { AgentRaw, ArtifactRaw, Catalog, Doc, FlowRaw, McpRaw, Selection, Validation } from "./types";
+import { localizeParam, localizeServer } from "./i18n/server";
+import type { AgentRaw, ArtifactRaw, Catalog, Doc, FlowRaw, GateRaw, McpRaw, Selection, Validation } from "./types";
 
 type Update = (fn: (d: Doc) => void) => void;
 interface Props {
@@ -161,6 +161,16 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
   const owners = artifactOwners(spec);
   const readable = [...owners.entries()].filter(([, o]) => o !== id).map(([n]) => n);
   const extraReads = (a.reads ?? []).filter((r) => !readable.includes(r));
+  // a connector used with direct requests (http_get/http_write); websites and "only these
+  // actions" are used only through their actions (run_action, given implicitly)
+  const direct = (n: string) => { const i = catalog.connections[n]; return !!i && i.type !== "website" && !i.actions_only; };
+  const gives = (n: string, access: "read" | "write") => {
+    const acts = Object.entries(catalog.connections[n]?.actions ?? {}).filter(([, x]) => access === "write" || x.access === "read");
+    const parts = [];
+    if (acts.length) parts.push(t("insp.connGivesActions", { actions: acts.map(([k]) => k).join(", ") }));
+    if (direct(n)) parts.push(t(access === "write" ? "insp.connGivesWrite" : "insp.connGivesGet"));
+    return parts.length ? parts.join(" · ") : t("insp.connGivesNothing");
+  };
   return (
     <>
       {testAgent && (
@@ -212,10 +222,12 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
       <Field label={t("insp.description")} hint={t("insp.descriptionHint")}>
         <textarea rows={3} value={a.description} onChange={(e) => setA((x) => { x.description = e.target.value; })} />
       </Field>
-      <Field label={t("insp.prompt")}>
-        <PromptEditor owner={a} defaultPath={`prompts/${id}.md`} doc={doc} update={update}
-          pick={(d) => d.spec.agents[id]} />
-      </Field>
+      {a.action
+        ? <ActionNodeEditor a={a} catalog={catalog} setA={setA} />
+        : <Field label={t("insp.prompt")}>
+          <PromptEditor owner={a} defaultPath={`prompts/${id}.md`} doc={doc} update={update}
+            pick={(d) => d.spec.agents[id]} />
+        </Field>}
       <h3>{t("io.inputs")}</h3>
       <p className="muted small">{t("io.agentInputsHint")}</p>
       <AgentInputsEditor id={id} doc={doc} update={update} focus={focus} />
@@ -235,14 +247,17 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
               onChange={(v) => setA((x) => { if (v === null) delete x.max_runs; else x.max_runs = v; })} />
           </Field>
         </div>)}
+      {!a.action && <>{/* a model agent: model, tools, connectors, artifacts (not for an action node) */}
       <div className="grid2">
         <Field label={t("insp.model")}>
           <input list="models" value={a.model ?? ""} placeholder={t("insp.modelFromFlow")}
             onChange={(e) => setA((x) => { x.model = e.target.value || undefined; })} />
         </Field>
-        <Field label={t("insp.maxTurns")}>
-          <input type="number" min={1} max={200} value={a.max_turns ?? ""} placeholder="—"
+        <Field label={t("insp.agentMaxTurns")} hint={t("insp.agentMaxTurnsHint")}>
+          <input type="number" min={1} max={200} value={a.max_turns ?? ""} placeholder="40"
+            className={(a.max_turns ?? 3) < 3 ? "bad" : undefined}
             onChange={(e) => setA((x) => { x.max_turns = e.target.value ? Number(e.target.value) : undefined; })} />
+          {(a.max_turns ?? 3) < 3 && <span className="field-err">{t("insp.agentMaxTurnsLow")}</span>}
         </Field>
       </div>
       <Field label={t("insp.tools")} hint={t("insp.toolsHint")}>
@@ -259,11 +274,14 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
                   const s = new Set(x.connections ?? []);
                   if (e.target.checked) s.add(c); else s.delete(c);
                   if (s.size) x.connections = [...s]; else delete x.connections;
+                  // http_get only for connectors used with direct requests (not websites or
+                  // "only these actions": those come with run_action)
                   const tools = new Set(x.tools ?? []);
-                  if (s.size) tools.add("connections.http_get"); else tools.delete("connections.http_get");
+                  if ([...s].some((n) => direct(n))) tools.add("connections.http_get"); else tools.delete("connections.http_get");
                   x.tools = [...(x.tools ?? []).filter((t) => tools.has(t)), ...[...tools].filter((t) => !(x.tools ?? []).includes(t))];
                 })} />
                 <span>{c}</span><span className="muted small">{info ? `${info.type} · ${info.environment}` : t("insp.notConfiguredHere")}</span>
+                {info && (a.connections ?? []).includes(c) && <span className="conn-gives muted small">{gives(c, "read")}</span>}
               </label>);
           })}
         </div>
@@ -282,10 +300,11 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
                   if (e.target.checked) s.add(c); else s.delete(c);
                   if (s.size) x.write_connections = [...s]; else delete x.write_connections;
                   const tools = new Set(x.tools ?? []);
-                  if (s.size) tools.add("connections.http_write"); else tools.delete("connections.http_write");
+                  if ([...s].some((n) => direct(n))) tools.add("connections.http_write"); else tools.delete("connections.http_write");
                   x.tools = [...(x.tools ?? []).filter((t) => tools.has(t)), ...[...tools].filter((t) => !(x.tools ?? []).includes(t))];
                 })} />
                 <span>{c}</span><span className="muted small">{info ? `${info.type} · ${info.environment}` : t("insp.notConfigured")}</span>
+                {info && (a.write_connections ?? []).includes(c) && <span className="conn-gives muted small">{gives(c, "write")}</span>}
               </label>);
           })}
         </div>
@@ -317,13 +336,79 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
       <Field label={t("insp.skills")} hint={t("insp.skillsHint")}>
         <input value={(a.skills ?? []).join(", ")} onChange={(e) => setA((x) => { x.skills = csv(e.target.value); })} />
       </Field>
+      </>}
     </>
   );
 }
 
-function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "sel" | "remove" | "catalog" | "val">) {
+/** An action node: which connector action the studio runs, its parameters (texts with
+ * {expression} parts) and where each output comes from in the result (`from`, `match`). */
+function ActionNodeEditor({ a, catalog, setA }: { a: AgentRaw; catalog: Catalog; setA: (fn: (a: AgentRaw) => void) => void }) {
   const { t } = useI18n();
+  const act = a.action!;
+  const conn = catalog.connections[act.connector];
+  const actions = Object.entries(conn?.actions ?? {}).filter(([, x]) => x.access === "read");
+  const chosen = conn?.actions?.[act.name];
+  const setAct = (fn: (x: NonNullable<AgentRaw["action"]>) => void) => setA((x) => { fn(x.action!); });
+  const setOut = (o: string, key: "from" | "match", v: string) => setAct((x) => {
+    const outs = (x.outputs = x.outputs ?? {});
+    const m = (outs[o] = { ...outs[o] });
+    if (v) m[key] = v; else delete m[key];
+    if (!m.from && !m.match) delete outs[o];
+  });
+  return <>
+    <p className="muted small">{t("insp.actionNodeHint")}</p>
+    <div className="grid2">
+      <Field label={t("insp.actionConnector")}>
+        <select value={act.connector} onChange={(e) => setAct((x) => { x.connector = e.target.value; x.name = ""; x.params = {}; })}>
+          {!conn && <option value={act.connector}>{act.connector || "—"}</option>}
+          {Object.keys(catalog.connections).map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </Field>
+      <Field label={t("insp.actionName")} hint={chosen?.description}>
+        <select value={act.name} onChange={(e) => setAct((x) => { x.name = e.target.value; x.params = {}; })}>
+          <option value="">—</option>
+          {actions.map(([n]) => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </Field>
+    </div>
+    {(chosen?.params ?? []).length > 0 && (
+      <div className="field">
+        <span className="field-label">{t("insp.actionParams")}</span>
+        <span className="field-hint">{t("insp.actionParamsHint")}</span>
+        {(chosen?.params ?? []).map((p) => (
+          <label key={p} className="field"><span className="field-label">{p}</span>
+            <input className="mono" value={act.params?.[p] ?? ""} placeholder="{input.x}"
+              onChange={(e) => setAct((x) => { const ps = (x.params = x.params ?? {}); if (e.target.value) ps[p] = e.target.value; else delete ps[p]; })} />
+          </label>))}
+      </div>)}
+    <div className="field">
+      <span className="field-label">{t("insp.actionOutputs")}</span>
+      <span className="field-hint">{t("insp.actionOutputsHint")}</span>
+      {Object.keys(a.outputs ?? {}).length === 0 && <span className="muted small">{t("insp.actionNoOutputs")}</span>}
+      {Object.keys(a.outputs ?? {}).map((o) => (
+        <div key={o} className="grid2">
+          <label className="field"><span className="field-label">{o} ← {t("insp.actionFrom")}</span>
+            <input className="mono" value={act.outputs?.[o]?.from ?? ""} placeholder={o}
+              onChange={(e) => setOut(o, "from", e.target.value)} /></label>
+          <label className="field"><span className="field-label">{t("insp.actionMatch")}</span>
+            <input className="mono" value={act.outputs?.[o]?.match ?? ""} placeholder={"(\\d+)\\D*$"}
+              onChange={(e) => setOut(o, "match", e.target.value)} /></label>
+        </div>))}
+    </div>
+  </>;
+}
+
+function GatePanel({ id, doc, update, select, val }: { id: string } & Omit<Props, "sel" | "remove" | "catalog">) {
+  const { t, lang } = useI18n();
   const g = doc.spec.gates![id];
+  const mine = (x: { params?: Record<string, unknown> }) => x.params?.gate === `'${id}'`;
+  const errs = val?.errors ?? [];
+  // "gate 'x': message: <reason>": the reason, in the UI language
+  const msgErrors = errs.filter((x) => mine(x) && (x.code === "spec.message_reason" || x.code === "spec.message_only_stop"))
+    .map((x) => (x.code === "spec.message_reason" ? localizeParam(x.params?.reason, lang) : null) ?? localizeServer(x, x.msg, lang));
+  const decErrors = errs.filter((x) => mine(x) && x.code?.startsWith("spec.decision_")).map((x) => localizeServer(x, x.msg, lang));
+  const setMessage = (v: string) => update((d) => { const x = d.spec.gates![id]; if (v) x.message = v; else delete x.message; });
   return (
     <>
       <Field label={t("insp.name")}>
@@ -335,15 +420,122 @@ function GatePanel({ id, doc, update, select }: { id: string } & Omit<Props, "se
         }} />
       </Field>
       <Field label={t("insp.gateKind")} hint={t("insp.gateKindHint")}>
-        <select value={g.kind} onChange={(e) => update((d) => { d.spec.gates![id].kind = e.target.value as "human" | "stop"; })}>
+        <select value={g.kind} onChange={(e) => update((d) => { d.spec.gates![id].kind = e.target.value as GateRaw["kind"]; })}>
           <option value="human">{t("node.human")}</option>
           <option value="stop">{t("node.stop")}</option>
+          <option value="decision">{t("node.decision")}</option>
         </select>
       </Field>
-      <Field label={t("insp.gateLabel")}>
+      <Field label={g.kind === "decision" ? t("insp.decisionQuestion") : t("insp.gateLabel")}>
         <input value={g.label} onChange={(e) => update((d) => { d.spec.gates![id].label = e.target.value; })} />
       </Field>
+      {g.kind === "stop" && (
+        <div className="field">
+          <span className="field-label">{t("insp.stopMessage")}</span>
+          <span className="field-hint">{t("insp.stopMessageHint")}</span>
+          <textarea rows={3} className={msgErrors.length ? "bad" : undefined} value={g.message ?? ""}
+            placeholder={t("insp.stopMessagePlaceholder")} onChange={(e) => setMessage(e.target.value)} />
+          {msgErrors.map((m, k) => <span key={k} className="field-err">{m}</span>)}
+          <div className="refs">
+            {exprRefs(doc.spec, "").map((r) => (
+              <button key={r} className="small ref" title={t("insp.insert")}
+                onClick={() => setMessage(`${g.message ?? ""}{${r}}`)}>{r}</button>))}
+          </div>
+        </div>)}
+      {g.kind === "decision" && (
+        <BranchesEditor id={id} doc={doc} update={update} select={select} val={val} />)}
+      {decErrors.map((m, k) => <span key={k} className="field-err">{m}</span>)}
     </>
+  );
+}
+
+/** The branches of a decision, each one a row: its label, its condition (checked in order; empty
+ * = "otherwise"), where it goes and, for a stop, the message shown at the end. "+ Branch" adds a
+ * branch with a new stop, so a decision is set up here without drawing links by hand. */
+function BranchesEditor({ id, doc, update, select, val }: { id: string; doc: Doc; update: Update;
+  select: Props["select"]; val: Validation | null }) {
+  const { t, lang } = useI18n();
+  const spec = doc.spec;
+  const branches = (spec.edges ?? []).map((e, i) => ({ e, i })).filter(({ e }) => e.from === id);
+  const [active, setActive] = useState<number | null>(null);  // the branch the reference chips go to
+  const swap = (a: number, b: number) => update((d) => { const es = d.spec.edges!; [es[a], es[b]] = [es[b], es[a]]; });
+  const setEdge = (i: number, key: "if" | "label", v: string) => update((d) => {
+    const e = d.spec.edges![i]; if (v) e[key] = v; else delete e[key];
+  });
+  const setMessage = (gate: string, v: string) => update((d) => {
+    const x = d.spec.gates![gate]; if (v) x.message = v; else delete x.message;
+  });
+  const errorsOf = (e: { from: string; to: string }) => (val?.errors ?? [])
+    .filter((x) => x.code === "spec.edge_reason" && x.params?.edge === `${e.from}→${e.to}`)
+    .map((x) => localizeParam(x.params?.reason, lang) ?? x.msg);
+  const msgErrorsOf = (gate: string) => (val?.errors ?? [])
+    .filter((x) => x.code === "spec.message_reason" && x.params?.gate === `'${gate}'`)
+    .map((x) => localizeParam(x.params?.reason, lang) ?? x.msg);
+  // a new branch: a new stop below the decision, linked with an empty condition to fill in
+  const addBranch = () => update((d) => {
+    const stop = uniqueName(d.spec, "stop");
+    d.spec.gates = { ...d.spec.gates, [stop]: { kind: "stop", label: t("node.stop") } };
+    const at = d.spec.layout?.[id] ?? { x: 0, y: 0 };
+    const n = (d.spec.edges ?? []).filter((e) => e.from === id).length;
+    d.spec.layout = { ...d.spec.layout, [stop]: { x: Math.round(at.x - 260 + n * 260), y: Math.round(at.y + 170) } };
+    // before the "otherwise" branch (a branch after it would never be chosen)
+    const es = [...(d.spec.edges ?? [])];
+    const other = es.findIndex((e) => e.from === id && !e.if?.trim());
+    es.splice(other >= 0 ? other : es.length, 0, { from: id, to: stop, if: "" });
+    d.spec.edges = es;
+  });
+  const targets = [...Object.keys(spec.agents), ...Object.keys(spec.gates ?? {})].filter((n) => n !== id);
+  const setTarget = (i: number, to: string) => update((d) => { d.spec.edges![i].to = to; });
+  const refs = exprRefs(spec, "");
+  return (
+    <div className="field">
+      <span className="field-label">{t("insp.branches")}</span>
+      <span className="field-hint">{t("insp.branchesHint2")}</span>
+      {branches.length === 0 && <span className="muted small">{t("insp.noBranches")}</span>}
+      <ol className="branch-rows">
+        {branches.map(({ e, i }, k) => {
+          const stop = spec.gates?.[e.to]?.kind === "stop" ? spec.gates[e.to] : null;
+          const errs = errorsOf(e);
+          return (
+            <li key={i} className="branch-row">
+              <div className="row">
+                <input className="branch-label" value={e.label ?? ""} maxLength={40} placeholder={t("insp.edgeLabelPlaceholder")}
+                  title={t("insp.edgeLabel")} onChange={(ev) => setEdge(i, "label", ev.target.value)} />
+                <span className="muted small">→</span>
+                <select value={e.to} title={t("insp.branchTarget")} onChange={(ev) => setTarget(i, ev.target.value)}>
+                  {targets.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <span className="branch-move">
+                  <button className="icon" disabled={k === 0} title={t("insp.moveUp")} onClick={() => swap(i, branches[k - 1].i)}>↑</button>
+                  <button className="icon" disabled={k === branches.length - 1} title={t("insp.moveDown")} onClick={() => swap(i, branches[k + 1].i)}>↓</button>
+                  <button className="icon" title={t("insp.branchOpen")} onClick={() => select({ kind: "edge", index: i })}>⋯</button>
+                </span>
+              </div>
+              <input className={`mono${errs.length ? " bad" : ""}`} value={e.if ?? ""} placeholder={t("insp.branchIfPlaceholder")}
+                aria-label={t("insp.expression")} onFocus={() => setActive(i)} onChange={(ev) => setEdge(i, "if", ev.target.value)} />
+              {errs.map((m, j) => <span key={j} className="field-err">{m}</span>)}
+              {stop && <>
+                <textarea rows={2} value={stop.message ?? ""} placeholder={t("insp.stopMessagePlaceholder")}
+                  aria-label={t("insp.stopMessage")} onFocus={() => setActive(-1 - i)}
+                  onChange={(ev) => setMessage(e.to, ev.target.value)} />
+                {msgErrorsOf(e.to).map((m, j) => <span key={j} className="field-err">{m}</span>)}
+              </>}
+            </li>);
+        })}
+      </ol>
+      <div className="row"><button className="small" onClick={addBranch}>{t("insp.branchAdd")}</button></div>
+      {active !== null && (
+        <div className="refs">
+          {refs.map((r) => (
+            <button key={r} className="small ref" title={t("insp.insert")} onClick={() => {
+              const i = active >= 0 ? active : -1 - active;
+              const e = spec.edges?.[i];
+              if (!e) return;
+              if (active >= 0) setEdge(i, "if", `${e.if ? `${e.if} ` : ""}${r}`);
+              else setMessage(e.to, `${spec.gates?.[e.to]?.message ?? ""}{${r}}`);
+            }}>{r}</button>))}
+        </div>)}
+    </div>
   );
 }
 
@@ -352,22 +544,29 @@ function EdgePanel({ index, doc, val, update }: { index: number; doc: Doc; val: 
   const e = doc.spec.edges![index];
   if (!e) return null;
   const tag = `edge ${e.from}→${e.to}: `;
+  const fromDecision = doc.spec.gates?.[e.from]?.kind === "decision";  // a branch: `if` only
   // "edge a→b: <reason>": show the reason, in the UI language when it has a code
   const errors = (val?.errors ?? []).filter((x) => x.msg.startsWith(tag)).map((x) =>
     (x.code === "spec.edge_reason" ? localizeParam(x.params?.reason, lang) : null) ?? x.msg.slice(tag.length));
   return (
     <>
       <p className="edge-title"><code>{e.from}</code> → <code>{e.to}</code></p>
+      <Field label={t("insp.edgeLabel")} hint={t(fromDecision ? "insp.edgeLabelHintBranch" : "insp.edgeLabelHint")}>
+        <input value={e.label ?? ""} maxLength={40} placeholder={fromDecision ? t("insp.edgeLabelPlaceholder") : ""}
+          onChange={(ev) => update((d) => { const x = d.spec.edges![index]; if (ev.target.value) x.label = ev.target.value; else delete x.label; })} />
+      </Field>
       <div className="field">
         <span className="field-label">{t("insp.expression")}</span>
-        <span className="field-hint">{t("insp.expressionHint")}</span>
+        <span className="field-hint">{t(fromDecision ? "insp.expressionHintBranch" : "insp.expressionHint")}</span>
         <ExprInput value={e.if ?? ""} refs={exprRefs(doc.spec, e.from)} errors={errors}
           onChange={(v) => update((d) => { d.spec.edges![index].if = v; })} />
       </div>
-      <Field label={t("insp.condition")} hint={doc.spec.execution === "graph" ? t("insp.conditionHintGraph") : t("insp.conditionHint")}>
-        <textarea rows={3} value={e.when ?? ""} onChange={(ev) => update((d) => { d.spec.edges![index].when = ev.target.value; })} />
-      </Field>
-      <p className="muted small">{t("insp.bothHint")}</p>
+      {!fromDecision && <>
+        <Field label={t("insp.condition")} hint={doc.spec.execution === "graph" ? t("insp.conditionHintGraph") : t("insp.conditionHint")}>
+          <textarea rows={3} value={e.when ?? ""} onChange={(ev) => update((d) => { d.spec.edges![index].when = ev.target.value; })} />
+        </Field>
+        <p className="muted small">{t("insp.bothHint")}</p>
+      </>}
     </>
   );
 }
@@ -460,6 +659,8 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
       <h3>{t("io.flowInputs")}</h3>
       {isTyped(s)
         ? <p className="muted small">{t("io.flowInputsHint")}</p>
+        // no inputs and no legacy input of its own: each run only gets an id (no input to fill in)
+        : !s.input && !s.task ? <p className="muted small">{t("io.noInputsHint")}</p>
         : <>
           <p className="muted small">{t("io.legacyHint")}</p>
           <div className="grid2">

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_flow_studio import hooks
+from agent_flow_studio import engine, hooks
 from agent_flow_studio.config import settings
 from agent_flow_studio.editor import chats
 from agent_flow_studio.editor import runner as runner_mod
@@ -25,7 +25,7 @@ def _runs_dir(tmp_path, monkeypatch):
     """Safety net: no test writes in the real runs/ folder. Fixtures that need the folder use
     the same path (tmp_path / "runs")."""
     s = replace(settings, runs_dir=tmp_path / "runs")
-    for mod in (hooks, runner_mod, artifacts, io_tool, chats, server_mod):
+    for mod in (hooks, engine, runner_mod, artifacts, io_tool, chats, server_mod):
         monkeypatch.setattr(mod, "settings", s)
 
 

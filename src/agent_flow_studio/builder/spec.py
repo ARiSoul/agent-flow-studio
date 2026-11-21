@@ -27,6 +27,7 @@ _ENV_REF = re.compile(r"^\$\{[A-Z_][A-Z0-9_]*\}$")
 _ENV_IN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _TASK_VAR = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 LEGACY_INPUT = "input"  # the one implicit input of flows without `inputs`
+RESERVED_NAMES = {"input", "previous"}  # roots of references: not names of agents or gates
 
 
 class _Strict(BaseModel):
@@ -55,8 +56,9 @@ class ArtifactSpec(_Strict):
 
 
 class AgentInput(_Strict):
-    """An agent input: `from` a flow input (`input.<name>`) or an agent output (`<agent>.<out>`),
-    or free (no `from`: given by the orchestrator, or in the editor when testing the agent).
+    """An agent input: `from` a flow input (`input.<name>`), an agent output (`<agent>.<out>`), the
+    same output in the last finished run of the flow (`previous.<agent>.<out>`: empty on the first
+    run, so never missing), or free (no `from`: given by the orchestrator, or in the editor when testing the agent).
     Without `type`, it takes the type of its source (text when free)."""
 
     from_: str | None = Field(default=None, alias="from")
@@ -67,10 +69,11 @@ class AgentInput(_Strict):
     @field_validator("from_")
     @classmethod
     def _ref(cls, v: str | None) -> str | None:
-        if v is not None and not re.fullmatch(r"[a-z][a-z0-9_]{0,39}\.[a-z][a-z0-9_]{0,39}", v):
+        name = r"[a-z][a-z0-9_]{0,39}"
+        if v is not None and not re.fullmatch(rf"(previous\.)?{name}\.{name}", v):
             raise MsgError(msg("spec.from_format",
-                               "'from' must be input.<name> or <agent>.<output>, not {value}",
-                               value=repr(v)))
+                               "'from' must be input.<name>, <agent>.<output> or "
+                               "previous.<agent>.<output>, not {value}", value=repr(v)))
         return v
 
 
@@ -85,6 +88,36 @@ class AgentOrigin(_Strict):
 
     agent: str = Field(pattern=SLUG)
     hash: str = Field(pattern=r"^[0-9a-f]{8,64}$")
+
+
+class ActionOutput(_Strict):
+    """Where an output of an action node comes from: a value of the action's result (`from`, a
+    name or a field path such as `a.b`; default: the output's own name), and optionally `match`,
+    a regular expression whose first group (or whole match) is the value, e.g. `(\\d+)\\D*$`
+    takes 14 out of "1–14 of 14"."""
+    from_: str | None = Field(default=None, alias="from", max_length=200)
+    match: str | None = Field(default=None, max_length=200)
+
+    @field_validator("match")
+    @classmethod
+    def _regex(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                re.compile(v)
+            except re.error as e:
+                raise MsgError(msg("spec.action_match", "match: invalid regular expression: "
+                                   "{reason}", reason=str(e))) from None
+        return v
+
+
+class ActionCall(_Strict):
+    """An action node: the studio runs one read action of a connector, without a model, and saves
+    the values as the node's outputs. `params` are texts with {expression} parts (flow inputs,
+    outputs of earlier nodes, previous.*)."""
+    connector: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
+    params: dict[str, str] = Field(default_factory=dict)
+    outputs: dict[str, ActionOutput] = Field(default_factory=dict)
 
 
 class AgentSpec(_Strict):
@@ -106,6 +139,7 @@ class AgentSpec(_Strict):
     join: Literal["all", "any"] = "all"  # graph: wait for all incoming branches, or the first
     max_runs: int = Field(default=3, ge=1, le=20)  # graph: limit for loops (back edges)
     origin: AgentOrigin | None = None  # copied from the agent library (editor only)
+    action: ActionCall | None = None  # an action node (graph mode): no prompt, no model
 
     @field_validator("icon")
     @classmethod
@@ -117,14 +151,25 @@ class AgentSpec(_Strict):
 
     @model_validator(mode="after")
     def _one_prompt(self) -> AgentSpec:
+        if self.action is not None:
+            if self.prompt is not None or self.prompt_file is not None or self.tools:
+                raise MsgError(msg("spec.action_no_prompt",
+                                   "an action node has no prompt and no tools (the studio runs "
+                                   "the action)"))
+            return self
         if (self.prompt is None) == (self.prompt_file is None):
             raise MsgError(msg("spec.one_prompt", "give exactly one of 'prompt' or 'prompt_file'"))
         return self
 
 
 class GateSpec(_Strict):
-    kind: Literal["human", "stop"]
+    """human: pauses for a person · stop: ends the run · decision: no pause, takes the first
+    branch (outgoing edge, in order) whose `if` holds; a branch without `if` is "otherwise"."""
+    kind: Literal["human", "stop", "decision"]
     label: str = Field(min_length=1)
+    # stop: the result shown at the end; the studio fills in its {expression} parts from the saved
+    # values, e.g. "{checker.count - previous.checker.count} new users"
+    message: str = Field(default="", max_length=2000)
 
 
 class Edge(_Strict):
@@ -132,6 +177,7 @@ class Edge(_Strict):
     to: str
     when: str = ""  # condition in natural language (orchestrator, or the router in graph mode)
     if_: str = Field(default="", alias="if")  # expression on inputs/outputs (see expr.py)
+    label: str = Field(default="", max_length=40)  # shown on the canvas, e.g. "yes" / "no"
 
 
 class ExternalMcp(_Strict):
@@ -227,6 +273,9 @@ class FlowSpec(_Strict):
     @model_validator(mode="after")
     def _graph(self) -> FlowSpec:
         errors: list[str] = []
+        for kind, names in (("agent", self.agents), ("gate", self.gates)):
+            errors += [msg("spec.reserved_name", "{kind} {name}: this name is reserved (input, previous)",
+                           kind=kind, name=repr(n)) for n in names if n in RESERVED_NAMES]
         for kind, names in (("agent", self.agents), ("gate", self.gates), ("mcp", self.mcp_servers)):
             errors += [msg("spec.node_name", "{kind} {name}: invalid name (use {rule})", kind=kind,
                            name=repr(n), rule=SLUG) for n in names if not _SLUG_RE.fullmatch(n)]
@@ -267,8 +316,7 @@ class FlowSpec(_Strict):
             if a.writes and "artifacts.save_artifact" not in a.tools:
                 errors.append(msg("spec.writes_no_save",
                                   "agent {agent} writes artifacts but does not have artifacts.save_artifact",
-                                  agent=repr(an)))
-            # (connectors without named actions need http_get / http_write: checked when the
+                                  agent=repr(an)))            # (connectors without named actions need http_get / http_write: checked when the
             # flow compiles, where connections.yaml and its actions are known)
             has_write = "connections.http_write" in a.tools
             if has_write and not a.write_connections:
@@ -314,6 +362,7 @@ class FlowSpec(_Strict):
         return src or "text"
 
     def source_io(self, ref: str) -> IOType | None:
+        ref = ref.removeprefix("previous.")  # the same output, in the last finished run
         root, name = ref.split(".", 1)
         if root == "input":
             return self.flow_inputs().get(name)
@@ -387,7 +436,15 @@ class FlowSpec(_Strict):
                 if i.from_ is None:
                     continue
                 root, src = i.from_.split(".", 1)
-                if root == "input":
+                if root == "previous":  # any agent, itself included: it ran in an earlier run
+                    pa, _, po = src.partition(".")
+                    if pa not in self.agents or po not in self.agents[pa].outputs:
+                        errors.append(msg("spec.from_no_previous",
+                                          "agent {agent}, input {name}: {source} is not an output of "
+                                          "an agent of this flow", agent=repr(an), name=repr(n),
+                                          source=repr(src)))
+                        continue
+                elif root == "input":
                     if src not in flow_in:
                         errors.append(msg("spec.from_no_input",
                                           "agent {agent}, input {name}: flow input {source} does not exist",
@@ -421,6 +478,57 @@ class FlowSpec(_Strict):
             if e.if_:
                 errors += [msg("spec.edge_reason", "edge {edge}: {reason}", edge=f"{e.from_}→{e.to}",
                                reason=m) for m in self._expr_errors(e.if_)]
+        for an, a in self.agents.items():
+            if a.action is None:
+                continue
+            if self.execution != "graph":
+                errors.append(msg("spec.action_needs_graph",
+                                  "agent {agent}: an action node runs only with execution: graph",
+                                  agent=repr(an)))
+            for o in a.action.outputs:
+                if o not in a.outputs:
+                    errors.append(msg("spec.action_output_unknown",
+                                      "agent {agent}: the action maps {output}, which is not one of "
+                                      "its outputs", agent=repr(an), output=repr(o)))
+            for pn, pv in a.action.params.items():
+                try:
+                    parts = expr.template_parts(pv)
+                except expr.ExprError as x:
+                    parts = []
+                    errors.append(msg("spec.action_param_reason",
+                                      "agent {agent}, parameter {name}: {reason}", agent=repr(an),
+                                      name=repr(pn), reason=reason(x)))
+                for p in parts:
+                    errors += [msg("spec.action_param_reason",
+                                   "agent {agent}, parameter {name}: {reason}", agent=repr(an),
+                                   name=repr(pn), reason=m) for m in self._expr_errors(p)]
+        for gn, g in self.gates.items():
+            if g.message.strip():
+                if g.kind != "stop":
+                    errors.append(msg("spec.message_only_stop",
+                                      "gate {gate}: only a stop shows a message", gate=repr(gn)))
+                try:
+                    parts = expr.template_parts(g.message)
+                except expr.ExprError as x:
+                    parts = []
+                    errors.append(msg("spec.message_reason", "gate {gate}: message: {reason}",
+                                      gate=repr(gn), reason=reason(x)))
+                for p in parts:
+                    errors += [msg("spec.message_reason", "gate {gate}: message: {reason}",
+                                   gate=repr(gn), reason=m) for m in self._expr_errors(p)]
+            if g.kind == "decision":
+                outs = self.outgoing(gn)
+                if not outs:
+                    errors.append(msg("spec.decision_no_branch", "decision {gate} has no branches",
+                                      gate=repr(gn)))
+                if sum(1 for e in outs if not e.if_) > 1:
+                    errors.append(msg("spec.decision_else",
+                                      "decision {gate}: only one branch can have no `if` (the "
+                                      "\"otherwise\")", gate=repr(gn)))
+                if any(e.when for e in outs):
+                    errors.append(msg("spec.decision_when",
+                                      "decision {gate}: its branches use `if` expressions, not "
+                                      "`when` text", gate=repr(gn)))
         return errors
 
     def _expr_errors(self, text: str) -> list[str]:
@@ -433,6 +541,11 @@ class FlowSpec(_Strict):
             if len(r) < 2:
                 out.append(msg("spec.condition_field", "condition: {root} needs a field (e.g. {example})",
                                root=repr(r[0]), example=f"{r[0]}.x"))
+            elif r[0] == "previous":
+                if len(r) < 3 or r[1] not in self.agents or r[2] not in self.agents[r[1]].outputs:
+                    out.append(msg("spec.condition_previous",
+                                   "condition: {ref} is not an output of an agent (use "
+                                   "previous.<agent>.<output>)", ref=".".join(map(str, r))))
             elif r[0] == "input":
                 if r[1] not in self.flow_inputs():
                     out.append(msg("spec.condition_input", "condition: flow input {name} does not exist",
@@ -447,7 +560,8 @@ class FlowSpec(_Strict):
                                    "condition: a gate has only .decision and .comment, not {field}",
                                    field=repr(r[1])))
             else:
-                out.append(msg("spec.condition_root", "condition: {root} is not input, an agent or a gate",
+                out.append(msg("spec.condition_root",
+                               "condition: {root} is not input, previous, an agent or a gate",
                                root=repr(r[0])))
         return out
 

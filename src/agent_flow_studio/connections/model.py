@@ -199,6 +199,13 @@ class ActionParam(_Strict):
         return self
 
 
+class Viewport(_Strict):
+    """The window size a website action runs at: many sites change their layout (menus, links)
+    with the size, so the action uses the size it was recorded at."""
+    width: int = Field(ge=320, le=3840)
+    height: int = Field(ge=240, le=2160)
+
+
 class Action(_Strict):
     """A named operation of a connector: the only way the agents use it when `actions_only`.
     HTTP: method + path/query/body templates with {param} placeholders. Website connectors use
@@ -218,6 +225,10 @@ class Action(_Strict):
     # personal data written in free text that the agents should not see: replaced in every value
     # the action returns ("[phone]", "[email]") before it reaches the model
     redact: list[Literal["phone", "email"]] = Field(default_factory=list)
+    viewport: Viewport | None = None  # website: the window size (default 1280x720)
+    # website: the browser language (e.g. pt-PT): a multilingual site shows its texts, and the
+    # steps find buttons and links by those texts, in the language it was recorded in
+    locale: str | None = Field(default=None, pattern=r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$")
 
     def placeholders(self) -> set[str]:
         texts = [self.path, *self.query.values(), json.dumps(self.body)]
@@ -379,6 +390,9 @@ class Connection(_Strict):
             else:
                 if act.allow_post:
                     raise ValueError(f"action {an}: allow_post is only for website connectors")
+                if act.viewport or act.locale:
+                    raise ValueError(f"action {an}: viewport and locale are only for website "
+                                     "connectors")
                 if not act.path:
                     raise ValueError(f"action {an}: 'path' is required")
                 if act.steps:

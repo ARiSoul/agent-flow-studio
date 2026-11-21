@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { errorText, PRIVATE_TERMS } from "./api";
 import { useDialog } from "./Dialog";
 import { LANGS, useI18n } from "./i18n";
+import { localizeServer, type ServerMsg } from "./i18n/server";
 import { locLabel } from "./LibraryManager";
 
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
@@ -29,6 +30,25 @@ interface Conn {
   secret?: { field: string | null; source: string | null; set: boolean; optional?: boolean };
   oauth?: OAuthStatus | null;
 }
+// a website action being recorded in a visible window (connections/recorder.py)
+interface Recorded {
+  name: string;  // the connector
+  recording: boolean; steps: Record<string, unknown>[]; params: Record<string, unknown>;
+  typed?: Record<string, { label: string; value: string }>;  // param → what was typed (local only)
+  posted?: boolean;  // the page sent POST requests while recording
+  warnings: (ServerMsg & { msg: string })[]; problems: string[]; error: string | null; yaml?: string;
+}
+const stepLine = (s: Record<string, unknown>) => {
+  const [k, v] = Object.entries(s)[0] ?? ["?", ""];
+  return `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`;
+};
+// recorded_1, recorded_2…: the first name not used in the actions text
+const freeActionName = (text: string) => {
+  const used = new Set([...text.matchAll(/^([a-z][a-z0-9_]*):/gm)].map((m) => m[1]));
+  let i = 1;
+  while (used.has(`recorded_${i}`)) i++;
+  return `recorded_${i}`;
+};
 interface Preset { label: string; base_url: string; test_path: string; auth: Partial<Auth> }
 interface Meta {
   types: Record<string, { label: string; methods: string[]; base_url: string | null; test_path: string;
@@ -109,6 +129,23 @@ export function Connections({ onClose }: { onClose: () => void }) {
   const [envVar, setEnvVar] = useState("");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [rec, setRec] = useState<Recorded | null>(null);
+  const [fixed, setFixed] = useState<Set<string>>(new Set());  // typed fields kept as fixed values
+  const [tested, setTested] = useState<{ action: string; ok: boolean; text: string; blocked?: string[];
+    params: Record<string, string>; ts?: number } | null>(null);
+  // the last test of each action of the selected connector (kept on this machine)
+  const [lastTests, setLastTests] = useState<Record<string, { ok: boolean; result?: unknown; error?: string;
+    blocked?: string[]; params?: Record<string, string>; ts: number }>>({});
+  useEffect(() => {
+    setTested(null);
+    if (!sel) { setLastTests({}); return; }
+    fetch(`/api/connections/${sel}/tests`).then((r) => (r.ok ? r.json() : { tests: {} }))
+      .then((d) => setLastTests(d.tests ?? {})).catch(() => setLastTests({}));
+  }, [sel]);
+  const showTest = (action: string, x: (typeof lastTests)[string]) => setTested({
+    action, ok: x.ok, text: x.ok ? JSON.stringify(x.result, null, 2) : String(x.error),
+    blocked: x.blocked, params: x.params ?? {}, ts: x.ts });
+  const [allowPost, setAllowPost] = useState(false);  // the recorded draft lets the page POST
 
   const reload = async (pick?: string | null) => {
     const r = await fetch("/api/connections");
@@ -134,6 +171,17 @@ export function Connections({ onClose }: { onClose: () => void }) {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, []);
+
+  // while a recording window is open, read the steps it has so far
+  useEffect(() => {
+    if (!rec?.recording) return;
+    const id = window.setInterval(() => {
+      fetch(`/api/connections/${rec.name}/browser/record`).then((r) => (r.ok ? r.json() : null))
+        .then((d: Omit<Recorded, "name"> | null) => d && setRec((old) => old && old.name === rec.name ? { ...d, name: rec.name } : old))
+        .catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(id);
+  }, [rec?.recording, rec?.name]);
 
   if (!meta) return <div className="modal"><div className="modal-box">{t("conn.loading")}</div></div>;
   const isNew = sel === "";
@@ -206,6 +254,66 @@ export function Connections({ onClose }: { onClose: () => void }) {
       ok: t("conn.signOut"), danger: true }))) return;
     await req(`/api/connections/${sel}/browser`, "DELETE");
     await reload(sel);
+  });
+  // website: record an action while the person clicks on the site (a draft, saved with the rest)
+  const startRecord = () => run(async () => {
+    if (!sel) return;
+    const r = await req<Omit<Recorded, "name">>(`/api/connections/${sel}/browser/record`, "POST", { banner: t("conn.recordBanner") });
+    setRec({ ...r, name: sel });
+    setFixed(new Set());
+    setAllowPost(false);
+    setMsg({ text: t("conn.recordOpened") });
+  });
+  const stopRecord = () => run(async () => {
+    if (rec) await req(`/api/connections/${rec.name}/browser/record`, "DELETE");
+  });
+  const discardRecord = () => run(async () => {
+    if (rec && !rec.recording) await req(`/api/connections/${rec.name}/browser/record`, "DELETE");
+    setRec(null);
+  });
+  const addRecorded = () => run(async () => {
+    if (!rec || !form) return;
+    const action = freeActionName(form.actions_yaml ?? "");
+    const keep = [...fixed].map(encodeURIComponent).join(",");
+    const r = await req<Omit<Recorded, "name">>(
+      `/api/connections/${rec.name}/browser/record?action=${action}&fixed=${keep}&allow_post=${allowPost}`, "GET");
+    if (!r.yaml) return;
+    const old = (form.actions_yaml ?? "").trimEnd();
+    set({ actions_yaml: (old ? `${old}
+` : "") + r.yaml });
+    await req(`/api/connections/${rec.name}/browser/record`, "DELETE");
+    setRec(null);
+    setMsg({ text: t("conn.recordAdded", { name: action }) });
+  });
+  const recHere = rec && rec.name === sel ? rec : null;
+  // run one saved read action now (a website one in a visible window) and show what an agent gets
+  const testAction = (action: string, again?: Record<string, string>) => run(async () => {
+    if (!sel || !saved) return;
+    const params = Object.entries(saved.actions?.[action]?.params ?? {}) as [string, { description?: string }][];
+    let values: Record<string, string> = again ?? {};
+    if (params.length && !again) {
+      const got = await dialog.form({ title: t("conn.actionTestTitle", { name: action }), ok: t("conn.actionTest"),
+        fields: params.map(([k, x]) => ({ key: k, label: k, hint: x?.description })) });
+      if (!got) return;
+      values = got;
+    }
+    setTested(null);
+    setMsg({ text: t(saved.type === "website" ? "conn.actionTestingWeb" : "conn.actionTesting") });
+    const r = await req<{ ok: boolean; result?: unknown; error?: string; blocked?: string[] }>(
+      `/api/connections/${sel}/actions/${action}/test`, "POST", { params: values });
+    setMsg(null);
+    const now = Date.now() / 1000;
+    setLastTests((old) => ({ ...old, [action]: { ...r, params: values, ts: now } }));
+    setTested({ action, ok: r.ok, text: r.ok ? JSON.stringify(r.result, null, 2) : String(r.error),
+      blocked: r.blocked, params: values, ts: now });
+  });
+  // the test failed and the read action blocked POST requests: allow them (the person decides) and
+  // test again with the same values
+  const allowPostAndRetest = () => run(async () => {
+    if (!sel || !tested) return;
+    await req(`/api/connections/${sel}/actions/${tested.action}/allow-post`, "POST", { allow: true });
+    await reload(sel);
+    testAction(tested.action, tested.params);
   });
   const setWeb = (p: Partial<NonNullable<Conn["web"]>>) => setForm((f) => (f ? { ...f, web: { ...f.web, ...p } } : f));
   const withPreset = (base: Conn, key: string): Conn => {
@@ -353,8 +461,27 @@ export function Connections({ onClose }: { onClose: () => void }) {
                     <li key={n}><code>{n}</code>
                       <span className={`badge${a.access === "write" ? " warn" : ""}`}>{t(a.access === "write" ? "conn.accessWrite" : "conn.accessRead")}</span>
                       {a.path && <code className="muted">{a.method ?? "GET"} {a.path}</code>}
-                      <span className="muted small">{a.description}</span></li>))}
+                      <span className="muted small">{a.description}</span>
+                      {a.access !== "write" && (
+                        <button className="small" disabled={busy} title={t("conn.actionTestHint")}
+                          onClick={() => testAction(n)}>{t("conn.actionTest")}</button>)}
+                      {lastTests[n] && tested?.action !== n && (
+                        <button className="small link" onClick={() => showTest(n, lastTests[n])}>
+                          {t(lastTests[n].ok ? "conn.lastTestOk" : "conn.lastTestFailed")}</button>)}</li>))}
                 </ul>)}
+              {tested && saved?.actions?.[tested.action] && (
+                <div className={`conn-test-out${tested.ok ? "" : " bad"}`}>
+                  <b>{t(tested.ok ? "conn.actionTestOk" : "conn.actionTestFailed", { name: tested.action })}</b>
+                  {tested.ts && <span className="muted small"> · {new Date(tested.ts * 1000).toLocaleString(LANGS[lang].html)}
+                    {Object.keys(tested.params).length > 0 && ` · ${Object.entries(tested.params).map(([k, v]) => `${k}=${v}`).join(", ")}`}</span>}
+                  <button className="small link" onClick={() => setTested(null)}>{t("conn.close")}</button>
+                  <pre>{tested.text}</pre>
+                  {!tested.ok && (tested.blocked?.length ?? 0) > 0 && saved?.type === "website" && <>
+                    <span className="field-hint">{t("conn.allowPostHint")}</span>
+                    <div className="row"><button className="small primary" disabled={busy} onClick={allowPostAndRetest}>
+                      {t("conn.allowPostRetest")}</button></div>
+                  </>}
+                </div>)}
               <label className="check">
                 <input type="checkbox" checked={!!form.actions_only} onChange={(e) => set({ actions_only: e.target.checked })} />
                 {t("conn.actionsOnly")}
@@ -368,6 +495,62 @@ export function Connections({ onClose }: { onClose: () => void }) {
                     onClick={() => set({ actions_yaml: form.type === "website" ? WEB_ACTIONS_EXAMPLE : API_ACTIONS_EXAMPLE })}>
                     {t("conn.actionsInsertExample")}</button></div>)}
               </div>
+              {form.type === "website" && (
+                <div className="secret-box">
+                  <b>{t("conn.record")}</b>
+                  <span className="field-hint">{t("conn.recordHint")}</span>
+                  {isNew ? <span className="field-hint">{t("conn.signInSaveFirst")}</span>
+                    : !recHere ? (
+                      <div className="row">
+                        <button className="small primary" disabled={busy || !!saved?.web_session?.signing_in} onClick={startRecord}>
+                          {t("conn.recordBtn")}</button>
+                      </div>)
+                    : <>
+                      <span className="badge">{t(recHere.recording ? "conn.recording" : "conn.recordDone", { n: recHere.steps.length })}</span>
+                      {recHere.steps.length > 0 && (
+                        <ol className="rec-steps">
+                          {recHere.steps.map((s, i) => <li key={i}><code>{stepLine(s)}</code></li>)}
+                        </ol>)}
+                      {Object.keys(recHere.typed ?? {}).length > 0 && <>
+                        <span className="field-label">{t("conn.recordTyped")}</span>
+                        <span className="field-hint">{t("conn.recordTypedHint")}</span>
+                        <ul className="rec-typed">
+                          {Object.entries(recHere.typed ?? {}).map(([p, x]) => (
+                            <li key={p}>
+                              <code>{p}</code>
+                              <span className="muted small">{x.label}: «{x.value}»</span>
+                              <label className="check">
+                                <input type="checkbox" checked={fixed.has(p)} onChange={(e) => setFixed((old) => {
+                                  const n = new Set(old);
+                                  if (e.target.checked) n.add(p); else n.delete(p);
+                                  return n;
+                                })} />
+                                {t("conn.recordFixed")}
+                              </label>
+                            </li>))}
+                        </ul>
+                      </>}
+                      {recHere.warnings.map((w, i) => <span key={i} className="field-hint warn-text">{localizeServer(w, w.msg, lang)}</span>)}
+                      {recHere.posted && !recHere.recording && <>
+                        <label className="check">
+                          <input type="checkbox" checked={allowPost} onChange={(e) => setAllowPost(e.target.checked)} />
+                          {t("conn.recordAllowPost")}
+                        </label>
+                        <span className="field-hint">{t("conn.allowPostHint")}</span>
+                      </>}
+                      {recHere.problems.map((p, i) => <span key={i} className="field-hint warn-text">{p}</span>)}
+                      {recHere.error && <span className="msg bad">{recHere.error}</span>}
+                      <div className="row">
+                        {recHere.recording
+                          ? <button className="small" disabled={busy} onClick={stopRecord}>{t("conn.recordStop")}</button>
+                          : <>
+                            {recHere.steps.length > 0 && (
+                              <button className="small primary" disabled={busy} onClick={addRecorded}>{t("conn.recordAdd")}</button>)}
+                            <button className="small" disabled={busy} onClick={discardRecord}>{t("conn.recordDiscard")}</button>
+                          </>}
+                      </div>
+                    </>}
+                </div>)}
 
               <h3>{t("conn.auth")}</h3>
               <label className="field"><span className="field-label">{t("conn.method")}</span>

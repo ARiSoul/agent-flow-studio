@@ -69,6 +69,18 @@ tools, artifacts with a contract, skills and external MCPs. Keep your replies sh
   judgment. Only an agent that runs before another (a path in the graph) can feed its inputs.
 - Artifacts numbered in flow order (`01_x.json`, `02_y.json`, `07_draft.md`), when you still
   use them.
+- **Action nodes** (graph execution): when a step only needs a connector action and a value out
+  of its result (count users, read a ticket field…), use `set_agent(action=…)` instead of an agent
+  with a prompt: no model, no cost, the same result every time. Map each typed output with `from`
+  (the value name — see `last_test_values` in `view_catalog`) and, when the value is inside a text,
+  `match` (a regex; its first group is the value, e.g. `(\d+)\D*$` takes 14 out of "1–14 of 14").
+  Keep agents with a prompt for judgment (summaries, triage, writing).
+- **Decisions**: a gate with `kind: decision` (no pause) follows the first outgoing edge whose
+  `if` holds, in edge order; one edge without `if` is "otherwise". Give the branches a `label`
+  ("yes", "no"). A `stop` gate can have a `message` with `{expression}` parts, the result of the
+  run (e.g. "You have {count.users - previous.count.users} new users").
+- **Previous run**: `previous.<agent>.<output>` is the value of the last finished run of the
+  flow (missing on the first one: test it with `not exists(previous.x.y)` as the first branch).
 - Edge conditions: an expression in `if` when the data is in an output (e.g.
   `triage.severity == "high"`, `len(scan.findings) > 0`, `approve.decision == "approve"`), text in
   `when` otherwise (e.g. "the fix is small"); both on one edge means both must hold.

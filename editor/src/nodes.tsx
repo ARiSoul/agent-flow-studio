@@ -170,7 +170,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
       <Handle type="target" position={Position.Top} />
       <div className="node-head">
         <span className="node-icon"><AgentIcon icon={a.icon} size={16} /></span>
-        <span className="node-kind">{t("node.agent")}</span>
+        <span className="node-kind">{t(a.action ? "node.action" : "node.agent")}</span>
         <RunningBadge run={data.run} />
         <RunDot run={data.run} />
         {data.start && <span className="badge start">{t("node.start")}</span>}
@@ -203,6 +203,24 @@ export function GateNode({ data, selected }: NodeProps<GateNodeT>) {
   const { t } = useI18n();
   const g = data.gate;
   const style = data.style ?? "card";
+  if (g.kind === "decision") {  // a diamond: the branches leave from the bottom, in order
+    const cls = `node gate decision style-${style}${selected ? " sel" : ""}${data.error ? " err" : ""}${data.run ? ` run-${data.run}` : ""}`;
+    return (
+      <div className={cls} title={g.label}>
+        <Handle type="target" position={Position.Top} />
+        <svg className="diamond" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <polygon points="50,2 98,50 50,98 2,50" />
+        </svg>
+        <div className="diamond-text">
+          {style === "card" && <span className="node-kind">{t("node.decision")}</span>}
+          <span className="node-name">{data.name}</span>
+          {style === "card" && <span className="node-desc">{g.label}</span>}
+        </div>
+        <RunDot run={data.run} />
+        <Handle type="source" position={Position.Bottom} />
+      </div>
+    );
+  }
   const icon = g.kind === "human" ? "hand" : "stop";
   const cls = `node gate ${g.kind} style-${style}${selected ? " sel" : ""}${data.error ? " err" : ""}${data.run ? ` run-${data.run}` : ""}`;
   if (style === "avatar") {

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html as html_mod
 import json
 import os
@@ -33,7 +34,9 @@ _locks: dict[str, asyncio.Lock] = {}  # one browser per profile at a time
 
 
 class WebError(ActionError):
-    pass
+    def __init__(self, *args: object, blocked: list[str] | None = None):
+        super().__init__(*args)
+        self.blocked = blocked or []  # requests a read action refused (e.g. POST /api/x)
 
 
 class SignedOut(WebError):
@@ -156,14 +159,25 @@ async def _check_session(conn: Connection, d: Driver) -> None:
         raise SignedOut("the signed-in element was not found")
 
 
+def step_text(n: int, kind: str, arg: Any) -> str:
+    """"step 5 (extract span.count)": which step, for an error message."""
+    if isinstance(arg, dict):
+        arg = arg.get("selector") or arg.get("path") or ", ".join(map(str, arg.values()))
+    text = " ".join(str(arg).split())
+    return f"step {n} ({kind} {text[:80]})"
+
+
 async def run_steps(conn: Connection, action: Action, values: dict[str, Any],
-                    d: Driver) -> dict[str, Any]:
-    """Runs the steps on a page; returns the extracted values and the final URL."""
+                    d: Driver, progress: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Runs the steps on a page; returns the extracted values and the final URL. `progress`
+    gets the step being run (for the error message when a step fails)."""
     base = conn.resolved_base_url()
     out: dict[str, Any] = {}
     checked = navigated = False
-    for st in action.steps:
+    for n, st in enumerate(action.steps, 1):
         (kind, arg), = st.items()
+        if progress is not None:
+            progress["step"] = step_text(n, kind, arg)
         if kind == "get_json":
             url = base + fill(str(arg["path"]), values, encode=True)
             if not _path_allowed(conn, url):
@@ -227,37 +241,73 @@ def _playwright():
     return async_playwright
 
 
+# `tag:text-is("…")` (the recorder's selector for a button, link or list item by its text)
+_TEXT_IS = re.compile(r'^([a-z][a-z0-9]*):text-is\(("(?:[^"\\]|\\.)*")\)$')
+# the index of the first visible element whose VISIBLE text (innerText, as the recorder reads it)
+# is exactly the text; :text-is also counts hidden text inside (a hidden badge, a counter "0")
+_FIND_BY_TEXT = """(els, t) => els.findIndex(e => {
+  const visible = e.checkVisibility ? e.checkVisibility() : e.getClientRects().length > 0;
+  return visible && (e.innerText || "").trim().replace(/\\s+/g, " ") === t;
+})"""
+
+
 class _PwDriver:
     def __init__(self, page: Any, timeout_ms: int):
         self.p, self.t = page, timeout_ms
+
+    def _one(self, selector: str) -> Any:
+        """The first VISIBLE match: many pages keep a hidden copy of a menu (e.g. the phone
+        layout) before the visible one, and the first match would wait for it forever."""
+        return self.p.locator(selector).filter(visible=True).first
+
+    async def _find(self, selector: str) -> Any:
+        """The element of a step. A `tag:text-is("…")` selector also finds an element whose
+        visible text is exactly that text (its full text may hold hidden parts); the page may
+        draw it later, so this waits up to the timeout."""
+        loc = self._one(selector)
+        m = _TEXT_IS.fullmatch(selector)
+        if not m:
+            return loc
+        tag, text = m.group(1), json.loads(m.group(2))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.t / 1000
+        while True:
+            if await loc.count():
+                return loc
+            i = await self.p.locator(tag).evaluate_all(_FIND_BY_TEXT, text)
+            if i >= 0:
+                return self.p.locator(tag).nth(i)
+            if loop.time() >= deadline:
+                return loc  # the action waits a little more and fails with Playwright's reason
+            await asyncio.sleep(0.25)
 
     async def goto(self, url: str) -> None:
         await self.p.goto(url, timeout=self.t, wait_until="domcontentloaded")
 
     async def click(self, selector: str) -> None:
-        await self.p.locator(selector).first.click(timeout=self.t)
+        await (await self._find(selector)).click(timeout=self.t)
 
     async def fill(self, selector: str, value: str) -> None:
-        await self.p.locator(selector).first.fill(value, timeout=self.t)
+        await (await self._find(selector)).fill(value, timeout=self.t)
 
     async def select(self, selector: str, value: str) -> None:
-        await self.p.locator(selector).first.select_option(value, timeout=self.t)
+        await (await self._find(selector)).select_option(value, timeout=self.t)
 
     async def press(self, selector: str, key: str) -> None:
-        await self.p.locator(selector).first.press(key, timeout=self.t)
+        await (await self._find(selector)).press(key, timeout=self.t)
 
     async def wait_for(self, selector: str) -> None:
-        await self.p.locator(selector).first.wait_for(timeout=self.t)
+        await (await self._find(selector)).wait_for(timeout=self.t)
 
     async def exists(self, selector: str) -> bool:
         try:
-            await self.p.locator(selector).first.wait_for(timeout=min(self.t, 5000))
+            await self._one(selector).wait_for(timeout=min(self.t, 5000))
             return True
         except Exception:  # noqa: BLE001 — Playwright's TimeoutError: not there
             return False
 
     async def text(self, selector: str) -> str:
-        return await self.p.locator(selector).first.inner_text(timeout=self.t)
+        return await (await self._find(selector)).inner_text(timeout=self.t)
 
     async def texts(self, selector: str) -> list[str]:
         return await self.p.locator(selector).all_inner_texts()
@@ -279,21 +329,54 @@ class _PwDriver:
         return self.p.url
 
 
+_PW_REASONS = ("resolved to", "not visible", "not enabled", "not stable", "intercepts pointer",
+               "outside of the viewport", "detached", "not attached")
+
+
+def _pw_error(e: Exception) -> str:
+    """A Playwright error in one line: its first line and the reasons in its call log (which
+    element it found and why it waited), without the retries."""
+    lines = [x.strip(" -") for x in str(e).splitlines() if x.strip()]
+    reasons: list[str] = []
+    for x in lines[1:]:
+        x = re.sub(r"^\d+\s*\W\s*", "", x)  # "2 × waiting…" → "waiting…"
+        if any(r in x for r in _PW_REASONS) and x not in reasons:
+            reasons.append(x)
+    return " · ".join([lines[0] if lines else "", *reasons[:3]])[:600]
+
+
 def _launch_args(conn: Connection, headless: bool) -> dict[str, Any]:
     args: dict[str, Any] = {"headless": headless, "accept_downloads": False}
+    if not headless:  # a visible window: the page follows the window size (no fixed 1280x720)
+        args["no_viewport"] = True
     if conn.web.browser != "chromium":
         args["channel"] = conn.web.browser
     return args
 
 
+VISIBLE_SLOW_MO_MS = 300  # a test in a visible window: slow enough to follow each step
+VISIBLE_LOOK_S = 20  # after a failed visible test, the window stays open so the person can look
+
+
 async def run_action(name: str, conn: Connection, action_name: str, action: Action,
-                     values: dict[str, Any]) -> dict[str, Any]:
+                     values: dict[str, Any], *, visible: bool = False) -> dict[str, Any]:
+    """Runs an action headless; `visible`: in a window the person can watch (a test from the
+    Connectors window)."""
     if not has_profile(name):
         raise SignedOut(f"connector {name!r} is not signed in: Connectors → {name} → Sign in")
     lock = _locks.setdefault(name, asyncio.Lock())
+    blocked: list[str] = []  # requests a read action refused (they may be how the page loads data)
+    progress: dict[str, Any] = {}
+    args = _launch_args(conn, headless=not visible)
+    if visible:
+        args["slow_mo"] = VISIBLE_SLOW_MO_MS
+    if action.locale:  # the language it was recorded in: steps find links by their texts
+        args["locale"] = action.locale
+    if action.viewport:  # the layout it was recorded at (menus and links change with the size)
+        args.pop("no_viewport", None)
+        args["viewport"] = {"width": action.viewport.width, "height": action.viewport.height}
     async with lock, _playwright()() as pw:
-        ctx = await pw.chromium.launch_persistent_context(str(profile_dir(name)),
-                                                          **_launch_args(conn, headless=True))
+        ctx = await pw.chromium.launch_persistent_context(str(profile_dir(name)), **args)
         try:
             await _restore_state(name, ctx)  # the session cookies kept at sign-in
             if action.access == "read" and not action.allow_post:
@@ -301,21 +384,45 @@ async def run_action(name: str, conn: Connection, action_name: str, action: Acti
                     if route.request.method in ("GET", "HEAD"):
                         await route.continue_()
                     else:  # a read action cannot change anything on the site
+                        what = f"{route.request.method} {urlsplit(route.request.url).path}"
+                        if what not in blocked and len(blocked) < 5:
+                            blocked.append(what)
                         await route.abort()
                 await ctx.route("**/*", guard)
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             try:
-                r = await run_steps(conn, action, values, _PwDriver(page, conn.web.timeout_s * 1000))
+                r = await run_steps(conn, action, values,
+                                    _PwDriver(page, conn.web.timeout_s * 1000), progress)
             except SignedOut as e:
                 raise SignedOut(f"{name}: {e}: sign in again (Connectors → {name} → Sign in)") from None
-            except WebError:
-                raise
-            except Exception as e:  # noqa: BLE001 — Playwright errors: say which step, no stack
-                raise WebError(f"{name}.{action_name}: {type(e).__name__}: {str(e)[:300]}") from None
+            except Exception as e:  # noqa: BLE001 — say which step, where, and what was blocked
+                size = ""
+                with contextlib.suppress(Exception):
+                    w, h = await page.evaluate("[innerWidth, innerHeight]")
+                    size = f", window {w}x{h}"
+                where = f"{progress.get('step', 'a step')} on {urlsplit(page.url).path or '/'}{size}"
+                text = str(e) if isinstance(e, WebError) else f"{type(e).__name__}: {_pw_error(e)}"
+                hint = ""
+                if blocked:
+                    hint = (f" · the read action blocked {', '.join(blocked)}: if the page loads its "
+                            "data this way, add allow_post: true to the action")
+                elif "Timeout" in text and not action.viewport:
+                    hint = (" · the element never appeared: if the site changes its layout with the "
+                            "window size, record the action again (it keeps the window size) or "
+                            "set viewport: {width, height}")
+                if visible:  # let the person see the page where it stopped
+                    with contextlib.suppress(Exception):
+                        await page.wait_for_event("close", timeout=VISIBLE_LOOK_S * 1000)
+                raise WebError(f"{name}.{action_name}: {where}: {text}{hint}",
+                               blocked=blocked) from None
             _save_state(name, await ctx.storage_state())  # the site may renew its cookies
         finally:
-            await ctx.close()
-    return {"action": action_name, **r}
+            with contextlib.suppress(Exception):
+                await ctx.close()
+    out = {"action": action_name, **r}
+    if blocked:
+        out["blocked"] = blocked
+    return out
 
 
 async def sign_in(name: str, conn: Connection) -> dict[str, Any]:

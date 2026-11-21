@@ -212,6 +212,9 @@ def _io_section(spec: FlowSpec, agent: str) -> str:
             io = spec.source_io(i.from_) if i.from_ and not i.type else None
             shown = describe_type(io) if io else spec.input_type(agent, n)
             lines.append(f"- `{n}` ({shown}, {need}, {src}){desc}")
+        if any((i.from_ or "").startswith("previous.") for i in a.inputs.values()):
+            lines.append("Inputs from `previous.*` are the values of the last finished run of this "
+                         "flow; on the first run they are missing.")
         if any(spec.input_type(agent, n) == "file" for n in a.inputs):
             lines.append("File inputs are references {name, path}: read text files with "
                          "`read_file` (path in the run folder).")
@@ -230,6 +233,9 @@ def _artifacts_section(a: AgentSpec) -> str:
     lines = []
     if a.reads:
         lines.append("You read with `read_artifact`: " + ", ".join(f"`{r}`" for r in a.reads) + ".")
+    if not a.reads and "artifacts.read_artifact" in a.tools:  # it would guess names
+        lines.append("No artifacts are listed for you to read: call `read_artifact` only with a "
+                     "name you were given; do not guess names.")
     for w in a.writes:
         extra = f" (contract {w.contract})" if w.contract else (" (draft)" if w.draft else "")
         lines.append(f"You save with `save_artifact`: `{w.name}`{extra}.")
@@ -240,6 +246,8 @@ def _describe_target(spec: FlowSpec, node: str) -> str:
     if node in spec.agents:
         return f"delegate to `{node}`"
     g = spec.gates[node]
+    if g.kind == "decision":
+        return f"go to the decision **{g.label}** (`{node}`)"
     if g.kind == "human":
         return f"STOP and ask for human approval: **{g.label}** (gate `{node}`)"
     return f"STOP and report: **{g.label}** (gate `{node}`)"
@@ -248,7 +256,7 @@ def _describe_target(spec: FlowSpec, node: str) -> str:
 def _typed(spec: FlowSpec) -> bool:
     """The flow uses typed inputs/outputs or expressions (legacy flows keep their old prompt)."""
     return (bool(spec.inputs) or any(a.inputs or a.outputs for a in spec.agents.values())
-            or any(e.if_ for e in spec.edges))
+            or _has_if(spec))
 
 
 def _edge_condition(e: Edge) -> str:
@@ -295,7 +303,15 @@ def flow_section(spec: FlowSpec) -> str:
             else:
                 cond = f"if {e.when}" if e.when else "next"
             out.append(f"   - {cond}: {_describe_target(spec, e.to)}.")
-    gates_out = [g for g in spec.gates if spec.outgoing(g)]
+    decisions = [g for g, x in spec.gates.items() if x.kind == "decision"]
+    if decisions:
+        out.append("\nDecisions (no agent runs there): call `next_steps` with the run id and the "
+                   "decision name, and follow only the branch it marks `chosen` (`go_to`):")
+        for g in decisions:
+            for e in spec.outgoing(g):
+                cond = f"if `{e.if_}`" if e.if_ else "otherwise"
+                out.append(f"- **{spec.gates[g].label}**, {cond}: {_describe_target(spec, e.to)}.")
+    gates_out = [g for g in spec.gates if spec.outgoing(g) and g not in decisions]
     if gates_out:
         out.append("\nAfter a human stop (in a run resumed with the answer):")
         for g in gates_out:
@@ -319,7 +335,9 @@ def flow_section(spec: FlowSpec) -> str:
                        "edges whose condition holds.")
     out.append("\nNever skip a step or use an agent outside this graph. When you reach a "
                "stop, call `reach_gate` with the gate name and the reason, then end the "
-               "run and explain what is left to decide.")
+               "run and explain what is left to decide. If an agent fails or ends without its "
+               "outputs, delegate to it again at most once; if it fails again, stop and report "
+               "what went wrong (do not keep retrying).")
     return "\n".join(out)
 
 
@@ -346,6 +364,7 @@ def _external_config(name: str, m: ExternalMcp) -> dict[str, Any]:
 
 def _connections(spec: FlowSpec) -> dict[str, Any]:
     wanted = {c for a in spec.agents.values() for c in (*a.connections, *a.write_connections)}
+    wanted |= {a.action.connector for a in spec.agents.values() if a.action}
     if not wanted:
         return {}
     try:
@@ -361,6 +380,29 @@ def _connections(spec: FlowSpec) -> dict[str, Any]:
                             agents=", ".join(users), connectors=", ".join(missing)))
     errors = []
     for n, a in spec.agents.items():
+        if a.action:  # an action node: a read action that exists, with known parameters
+            act = conns[a.action.connector].actions.get(a.action.name)
+            if act is None:
+                errors.append(msg("compile.action_unknown",
+                                  "agent {agent}: connector {connector} has no action {action}",
+                                  agent=repr(n), connector=repr(a.action.connector),
+                                  action=repr(a.action.name)))
+            elif act.access != "read":
+                errors.append(msg("compile.action_write",
+                                  "agent {agent}: {action} is a write action; an action node runs "
+                                  "only read actions (writes go through an agent and its autonomy)",
+                                  agent=repr(n), action=repr(a.action.name)))
+            else:
+                extra = sorted(set(a.action.params) - set(act.params))
+                lacking = sorted(k for k, p in act.params.items()
+                                 if p.required and k not in a.action.params)
+                if extra or lacking:
+                    errors.append(msg("compile.action_params",
+                                      "agent {agent}: parameters of {action}: unknown {extra}; "
+                                      "missing {lacking}", agent=repr(n),
+                                      action=repr(a.action.name),
+                                      extra=", ".join(extra) or "—",
+                                      lacking=", ".join(lacking) or "—"))
         for c in a.connections:  # a connector without read actions is used with http_get
             if conns[c].type == "website" and not conns[c].actions:
                 errors.append(msg("compile.website_no_actions",
@@ -372,6 +414,14 @@ def _connections(spec: FlowSpec) -> dict[str, Any]:
                 errors.append(msg("compile.needs_http_get",
                                   "agent {agent}: connector {connector} has no read actions, so the "
                                   "agent needs connections.http_get", agent=repr(n), connector=repr(c)))
+        direct = [c for c in {*a.connections, *a.write_connections}
+                  if conns[c].type != "website" and not conns[c].actions_only]
+        for http in ("connections.http_get", "connections.http_write"):
+            if http in a.tools and not direct and (a.connections or a.write_connections):
+                errors.append(msg("compile.http_tool_unused",
+                                  "agent {agent}: {tool} is refused on its connectors (websites and "
+                                  "'only these actions' are used through run_action): remove it",
+                                  agent=repr(n), tool=http))
         for c in a.write_connections:
             if not _has_actions(conns[c], "write") and "connections.http_write" not in a.tools:
                 errors.append(msg("compile.needs_http_write",
@@ -399,12 +449,17 @@ def action_tools(a: AgentSpec, conns: dict[str, Any]) -> list[str]:
 def _connections_section(a: AgentSpec, conns: dict[str, Any]) -> str:
     out = ""
     if a.connections:
-        lines = [f"- `{n}`: {conns[n].type}, environment {conns[n].environment}"
+        def how(n: str) -> str:  # a website (or "only these actions") is used only by its actions
+            c = conns[n]
+            if c.type == "website" or c.actions_only:
+                return "only through `run_action` (its actions below)"
+            return "with `http_get`" + (" or `run_action`" if c.actions else "")
+        lines = [f"- `{n}`: {conns[n].type}, environment {conns[n].environment}, {how(n)}"
                  + (f" — {conns[n].description}" if conns[n].description else "")
                  + (f" (paths: {', '.join(conns[n].allowed_paths)})" if conns[n].allowed_paths
-                    else "")
+                    and conns[n].type != "website" else "")
                  for n in a.connections]
-        out = "\n\n## Connectors (read-only, with `http_get`)\n" + "\n".join(lines)
+        out = "\n\n## Connectors (read-only)\n" + "\n".join(lines)
     return out + _instructions_section(a, conns)
 
 
@@ -493,7 +548,37 @@ def _gate_server(spec: FlowSpec) -> Any:
 
 
 def _has_if(spec: FlowSpec) -> bool:
-    return any(e.if_ for e in spec.edges)
+    return any(e.if_ for e in spec.edges) or any(g.kind == "decision" for g in spec.gates.values())
+
+
+def decide_branch(spec: FlowSpec, node: str, scope: dict[str, Any]
+                  ) -> tuple[int | None, dict[int, str]]:
+    """A decision: the index (in spec.edges) of the first branch whose `if` holds, else the
+    branch without `if` ("otherwise"); None when none applies. Also the errors per branch."""
+    idxs = [i for i, e in enumerate(spec.edges) if e.from_ == node]
+    errors: dict[int, str] = {}
+    for i in idxs:
+        e = spec.edges[i]
+        if not e.if_:
+            continue
+        try:
+            if expr.evaluate(e.if_, scope):
+                return i, errors
+        except expr.ExprError as x:
+            errors[i] = str(x)
+    other = [i for i in idxs if not spec.edges[i].if_]
+    return (other[0] if other else None), errors
+
+
+def gate_message(spec: FlowSpec, gate: str, run_id: str) -> str:
+    """A stop's message with its {expression} parts filled in ("" without a message)."""
+    g = spec.gates[gate]
+    if g.kind != "stop" or not g.message.strip():
+        return ""
+    try:
+        return expr.render(g.message, io_tool.scope(spec, run_id))[:2000]
+    except ValueError:
+        return g.message
 
 
 def next_steps_result(spec: FlowSpec, run_id: str, node: str,
@@ -505,6 +590,17 @@ def next_steps_result(spec: FlowSpec, run_id: str, node: str,
         scope = io_tool.scope(spec, run_id)
     except ValueError as e:
         return err(str(e))
+    if node in spec.gates and spec.gates[node].kind == "decision":
+        chosen, errors = decide_branch(spec, node, scope)
+        branches = []
+        for i, e in enumerate(spec.edges):
+            if e.from_ == node:
+                b: dict[str, Any] = {"to": e.to, "if": e.if_ or "otherwise", "chosen": i == chosen}
+                if i in errors:
+                    b["error"] = errors[i]
+                branches.append(b)
+        return ok({"node": node, "decision": True, "next": branches,
+                   "go_to": spec.edges[chosen].to if chosen is not None else None})
     steps = []
     for e in spec.outgoing(node):
         item: dict[str, Any] = {"to": e.to, "if": e.if_ or None, "if_holds": None,
@@ -526,6 +622,8 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
     conns = _connections(spec)
     ws = _workspace_dir(spec, check=configure_artifacts)
     for name, a in spec.agents.items():
+        if a.action is not None:  # an action node: the graph engine runs it (no subagent)
+            continue
         body = _read_prompt(flow_dir, a.prompt, a.prompt_file, f"agent {name}")
         tools = [_sdk_tool(spec, t) for t in a.tools]
         tools += [t for t in (*io_tools(spec, name), *action_tools(a, conns)) if t not in tools]
@@ -538,7 +636,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
             tools=tools,
             model=a.model,
             skills=a.skills or None,
-            maxTurns=a.max_turns,
+            maxTurns=a.max_turns or DEFAULT_AGENT_TURNS,  # never without a limit
         )
 
     used = {t for ts in spec.agents.values() for t in ts.tools}
@@ -698,7 +796,7 @@ def compile_graph(spec: FlowSpec, flow_dir: Path, *, resolve_secrets: bool = Tru
     ws = _workspace_dir(spec, check=configure_artifacts)
     policy = _write_policy(spec, ws, conns)
     compiled = CompiledGraph(spec, flow_dir, policy, ws)
-    for name in spec.agents:
+    for name in (n for n, a in spec.agents.items() if a.action is None):  # action nodes: no session
         compiled.agents[name] = compile_agent(spec, flow_dir, name, policy=policy, conns=conns,
                                               workspace=ws, resolve_secrets=resolve_secrets)
     if configure_artifacts:

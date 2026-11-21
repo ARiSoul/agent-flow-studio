@@ -125,8 +125,10 @@ def get_action(conn_name: str, conn: Connection, action: str) -> Action:
 
 
 async def run(name: str, action: str, params: dict[str, Any] | None = None,
-              conns: dict[str, Connection] | None = None) -> dict[str, Any]:
-    """Runs a named action; returns the response (HTTP) or the extracted values (website)."""
+              conns: dict[str, Connection] | None = None, *, visible: bool = False
+              ) -> dict[str, Any]:
+    """Runs a named action; returns the response (HTTP) or the extracted values (website).
+    `visible`: a website action in a window the person can watch (a test)."""
     conns = store.load() if conns is None else conns
     conn = conns.get(name)
     if conn is None:
@@ -135,7 +137,7 @@ async def run(name: str, action: str, params: dict[str, Any] | None = None,
     values = check_params(a, params)
     if conn.type == "website":
         from . import web  # optional dependency (Playwright), only for website connectors
-        r = await web.run_action(name, conn, action, a, values)
+        r = await web.run_action(name, conn, action, a, values, visible=visible)
         return {**r, "values": redact(r.get("values"), a.redact)}
     path = fill(a.path, values, encode=True)
     query = {k: fill(v, values) for k, v in a.query.items()}

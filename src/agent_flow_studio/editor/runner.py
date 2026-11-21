@@ -35,7 +35,7 @@ from claude_agent_sdk import (
 
 from ..builder import expr, load_flow
 from ..builder.catalog import CONTRACTS
-from ..builder.compile import GATE_TOOL, CompiledFlow, load_graph
+from ..builder.compile import GATE_TOOL, CompiledFlow, gate_message, load_graph
 from ..builder.spec import LEGACY_INPUT, FlowSpec
 from ..builder.types import IOType, check_value
 from ..config import settings
@@ -46,6 +46,7 @@ from ..messages import reason, to_json
 from ..policy import ApprovalRequest
 from ..tools import io as io_tool
 from ..tools.guards import safe_artifact_path
+from ..trace import error_text, tool_detail
 
 Status = Literal["running", "gate", "paused", "done", "error", "stopped"]
 Mode = Literal["full", "step", "until", "agent"]
@@ -92,6 +93,7 @@ class Run:
     mode: Mode = "full"
     target: str | None = None  # until/agent mode
     done_agents: set[str] = field(default_factory=set)
+    tool_names: dict[str, str] = field(default_factory=dict)  # tool_use_id → tool (for errors)
     pending: dict[str, tuple[ApprovalRequest, asyncio.Future[tuple[bool, str]]]] = field(
         default_factory=dict)
     engine: GraphEngine | None = None  # graph mode: the engine state (continue/decide resume it)
@@ -264,6 +266,11 @@ class Runner:
             if hint:
                 ev["hint"] = hint
         run.events.append(ev)
+        if ev.get("type") == "end" and ev.get("status") == "done" and run.mode != "agent":
+            try:  # its outputs become previous.<agent>.<output> for the next run of the flow
+                io_tool.save_previous(run.flow, run.input)
+            except (OSError, ValueError):
+                pass
         try:
             path = safe_artifact_path(settings.runs_dir, run.input, "events.jsonl")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -298,6 +305,8 @@ class Runner:
         else:
             if run_input is None:
                 run_input = str((inputs or {}).get(LEGACY_INPUT, ""))
+            if not run_input.strip():  # a flow without inputs: the input is just the run id
+                run_input = (run_id or "").strip() or new_run_id(flow)
             compiled.task(run_input)  # pattern check (FlowError)
             rid, values = run_input, {LEGACY_INPUT: run_input}
         if mode == "agent" and target:
@@ -535,11 +544,18 @@ class Runner:
                         if g:
                             run.gate = {"gate": name, "kind": g.kind, "label": g.label,
                                         "reason": str(b.input.get("reason", ""))[:500]}
+                            message = gate_message(spec, name, run.input)
+                            if message:
+                                run.gate["message"] = message
                             self._emit(run, {"type": "gate", **run.gate})
                     else:
                         ev: dict[str, Any] = {"type": "tool", "agent": agent, "tool": _short(b.name)}
                         if _short(b.name) in ("save_artifact", "read_artifact"):
                             ev["artifact"] = str(b.input.get("name", ""))[:80]
+                        detail = tool_detail(b.name, b.input)
+                        if detail:
+                            ev["detail"] = detail
+                        run.tool_names[b.id] = _short(b.name)
                         self._emit(run, ev)
         elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
             for b in msg.content:
@@ -555,7 +571,9 @@ class Runner:
                                      "error": bool(b.is_error)})
                 elif isinstance(b, ToolResultBlock) and b.is_error:
                     agent = delegations.get(msg.parent_tool_use_id or "")
-                    self._emit(run, {"type": "tool_error", "agent": agent})
+                    self._emit(run, {"type": "tool_error", "agent": agent,
+                                     "tool": run.tool_names.get(b.tool_use_id),
+                                     "error": error_text(b.content)})
         elif isinstance(msg, ResultMessage):
             run.session_id = msg.session_id
             run.cost += msg.total_cost_usd or 0.0

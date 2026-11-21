@@ -237,3 +237,42 @@ def test_propose_library_agent_creates_and_edits_without_saving(draft: Draft, tm
     assert "not in the catalog" in call(draft, "propose_library_agent", id="bad", description="x",
                                         prompt="p", tools=["crm.list_items"])[1]
     assert not call(draft, "propose_library_agent", id="empty", description="x")[0]  # no prompt
+
+
+def test_action_nodes_and_connectors(draft: Draft, tmp_path, monkeypatch):
+    """The assistant builds an action node (no prompt, no tools) and does not give http_get for a
+    website connector; view_catalog shows the values of the last Test of each action."""
+    from agent_flow_studio.connections import store
+    from agent_flow_studio.connections.model import Connection
+    from agent_flow_studio.editor import server
+
+    monkeypatch.setenv("CONNECTIONS_FILE", str(tmp_path / "connections.yaml"))
+    monkeypatch.setenv("AFS_PUBLIC_CONNECTIONS_FILE", str(tmp_path / "connections.public.yaml"))
+    store.save({
+        "site": Connection.model_validate({
+            "type": "website", "base_url": "https://tickets.example.com",
+            "auth": {"method": "browser_session"},
+            "actions": {"count_users": {"description": "Counts.", "steps": [
+                {"goto": "/users"}, {"extract": {"users_range": "span.total"}}]}}}),
+        "api": Connection.model_validate({"type": "http_api", "base_url": "https://api.example.com"}),
+    })
+    server._write_tests("site", {"count_users": {
+        "ok": True, "ts": 1, "params": {},
+        "result": {"action": "count_users", "values": {"users_range": "1–14 of 14" + "x" * 200}}}})
+    _, text = call(draft, "view_catalog")
+    site = json.loads(text)["configured_connections"]["site"]
+    assert site["direct_requests"] is False and len(site["last_test_values"]["count_users"]["users_range"]) == 80
+    # an action node: no prompt file, no tools
+    ok, _ = call(draft, "set_agent", name="counter", description="Counts the users.",
+                 prompt="ignored", tools=["artifacts.read_artifact"],
+                 action={"connector": "site", "name": "count_users",
+                         "outputs": {"count": {"from": "users_range", "match": r"(\d+)\D*$"}}},
+                 outputs={"count": {"type": "integer"}})
+    a = draft.spec["agents"]["counter"]
+    assert ok and a["action"]["name"] == "count_users" and "prompt_file" not in a
+    assert "tools" not in a and "prompts/counter.md" not in draft.prompts
+    # connectors: http_get only for one used with direct requests
+    call(draft, "set_agent", name="triage", connections=["site"])
+    assert "connections.http_get" not in draft.spec["agents"]["triage"].get("tools", [])
+    call(draft, "set_agent", name="triage", connections=["site", "api"])
+    assert "connections.http_get" in draft.spec["agents"]["triage"]["tools"]

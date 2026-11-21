@@ -159,6 +159,9 @@ function sources(spec: FlowRaw, agent: string) {
     flowIn,
     earlier: outs.filter((o) => !before || before.has(o.agent)),
     later: before ? outs.filter((o) => !before.has(o.agent)) : [],
+    // the outputs of the last finished run of the flow (this agent's own included)
+    previous: Object.entries(spec.agents).flatMap(([an, a]) => Object.entries(a.outputs ?? {})
+      .map(([n, t]) => ({ ref: `previous.${an}.${n}`, t }))),
   };
 }
 
@@ -168,7 +171,7 @@ export function AgentInputsEditor({ id, doc, update, focus }: { id: string; doc:
   const spec = doc.spec;
   const items = spec.agents[id]?.inputs ?? {};
   const src = sources(spec, id);
-  const known = new Set([...src.flowIn, ...src.earlier, ...src.later].map((s) => s.ref));
+  const known = new Set([...src.flowIn, ...src.earlier, ...src.later, ...src.previous].map((s) => s.ref));
   const pick = (d: Doc) => { const a = d.spec.agents[id]; return (a.inputs = a.inputs ?? {}); };
   const patch = (name: string, fn: (x: AgentInputRaw) => void) => update((d) => fn(pick(d)[name]));
   const label = (ref: string, x: IOTypeRaw) => `${ref} · ${typeTag(x.type ?? "text", x.multiple)}`;
@@ -200,6 +203,9 @@ export function AgentInputsEditor({ id, doc, update, focus }: { id: string; doc:
                 </optgroup>}
                 {src.later.length > 0 && <optgroup label={t("io.notBefore")}>
                   {src.later.map((s) => <option key={s.ref} value={s.ref}>{label(s.ref, s.t)}</option>)}
+                </optgroup>}
+                {src.previous.length > 0 && <optgroup label={t("io.previousRun")}>
+                  {src.previous.map((s) => <option key={s.ref} value={s.ref}>{label(s.ref, s.t)}</option>)}
                 </optgroup>}
               </select>
               <button className="icon" title={t("insp.remove")} onClick={() => update((d) => { delete pick(d)[name]; })}>×</button>
@@ -234,6 +240,7 @@ export function exprRefs(spec: FlowRaw, from: string): string[] {
     ...agents.flatMap(([an, a]) => Object.keys(a.outputs ?? {}).map((o) => `${an}.${o}`)),
     ...Object.keys(flowInputs(spec)).map((n) => `input.${n}`),
     ...Object.keys(spec.gates ?? {}).flatMap((g) => (spec.gates![g].kind === "human" ? [`${g}.decision`, `${g}.comment`] : [])),
+    ...agents.flatMap(([an, a]) => Object.keys(a.outputs ?? {}).map((o) => `previous.${an}.${o}`)),
   ];
 }
 

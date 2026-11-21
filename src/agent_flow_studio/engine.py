@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -46,10 +47,15 @@ from claude_agent_sdk import (
 )
 
 from .builder import expr
-from .builder.compile import DISALLOWED, CompiledGraph
+from .builder.compile import DISALLOWED, CompiledGraph, decide_branch, gate_message
 from .builder.graph import back_edges, forward_reach
+from .config import settings
+from .connections import actions as conn_actions
+from .connections.client import ConnectorError
+from .connections.web import pick
 from .hooks import DELEGATION_TOOLS, make_guard, make_hooks
 from .tools import io as io_tool
+from .trace import error_text, tool_detail
 
 QueryFn = Callable[..., AsyncIterator[Any]]
 # route_fn(node, data, conditions) -> (one bool per condition, cost in USD)
@@ -163,6 +169,15 @@ class _Result:
     ok: bool
     message: str = ""
     evals: list[tuple[int, bool, str, str | None]] | None = None  # (edge, fired, by, error)
+
+
+def _audit_action(agent: str, connector: str, action: str, params: list[str]) -> None:
+    """An action node in runs/audit.jsonl, like a tool call (names only, never the values)."""
+    settings.runs_dir.mkdir(parents=True, exist_ok=True)
+    with (settings.runs_dir / "audit.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": time.time(), "tool": "action_node", "agent": agent,
+                            "input": {"connection": connector, "action": action,
+                                      "params": params}}, ensure_ascii=False) + "\n")
 
 
 class GraphEngine:
@@ -280,16 +295,31 @@ class GraphEngine:
             self.tasks[asyncio.create_task(self._agent(node))] = node
 
     def _make_ready(self, node: str) -> None:
-        if node in self.spec.gates:
+        if node in self.spec.gates and self.spec.gates[node].kind == "decision":
+            self._decide(node)
+        elif node in self.spec.gates:
             self._reach_gate(node)
         elif self.state[node] == "waiting":
             self.state[node] = "ready"
             self.ready.append(node)
 
+    def _decide(self, node: str) -> None:
+        """A decision: no session; the first branch whose `if` holds (or "otherwise") fires."""
+        self.state[node] = "done"
+        chosen, errors = decide_branch(self.spec, node, io_tool.scope(self.spec, self.run_id))
+        evals = [(i, i == chosen, "if" if e.if_ else "else", errors.get(i))
+                 for i, e in enumerate(self.spec.edges) if e.from_ == node]
+        self.emit({"type": "decided", "node": node,
+                   "to": self.spec.edges[chosen].to if chosen is not None else None})
+        self._apply(node, evals)
+
     def _reach_gate(self, gate: str) -> None:
         g = self.spec.gates[gate]
         info = {"gate": gate, "kind": g.kind, "label": g.label,
                 "reason": "; ".join(self.reasons.get(gate, []))[:500]}
+        message = gate_message(self.spec, gate, self.run_id)
+        if message:
+            info["message"] = message
         self.emit({"type": "gate", **info})
         if g.kind == "stop":
             self.state[gate] = "done"
@@ -401,6 +431,8 @@ class GraphEngine:
     async def _agent(self, name: str) -> _Result:
         a = self.spec.agents[name]
         self.emit({"type": "delegate", "agent": name, "task": a.description[:120]})
+        if a.action is not None:
+            return await self._action_node(name)
         try:
             values, missing = io_tool.resolve_inputs(self.spec, self.run_id, name)
             if missing:
@@ -423,6 +455,56 @@ class GraphEngine:
                 lacking = self._missing_outputs(name)
             if lacking:
                 return self._failed(name, "required outputs not saved: " + ", ".join(lacking))
+            if a.outputs:
+                self.emit({"type": "outputs", "agent": name,
+                           "names": sorted(io_tool.outputs(self.run_id, name))})
+            self.emit({"type": "agent_done", "agent": name, "error": False})
+            evals = [] if self.mode == "agent" else await self._evaluate(name)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — the node fails, the run reports it
+            return self._failed(name, f"{type(e).__name__}: {e}")
+        return _Result(True, evals=evals)
+
+    async def _action_node(self, name: str) -> _Result:
+        """An action node: the studio runs the connector action itself (no model, no session)
+        and saves the values of its result as the node's typed outputs."""
+        a = self.spec.agents[name]
+        call = a.action
+        assert call is not None
+        try:
+            scope = io_tool.scope(self.spec, self.run_id)
+            params = {k: expr.render(v, scope) for k, v in call.params.items()}
+            data = {"connection": call.connector, "action": call.name, "params": params}
+            self.emit({"type": "tool", "agent": name, "tool": "run_action",
+                       "detail": tool_detail("run_action", data)})
+            _audit_action(name, call.connector, call.name, list(params))
+            io_tool.clear_outputs(self.run_id, name)
+            try:
+                r = await conn_actions.run(call.connector, call.name, params)
+            except (conn_actions.ActionError, ConnectorError) as e:
+                self.emit({"type": "tool_error", "agent": name, "tool": "run_action",
+                           "error": error_text(str(e))})
+                return self._failed(name, str(e))
+            result = r.get("values") if "values" in r else r.get("body")
+            for out in a.outputs:
+                m = call.outputs.get(out)
+                raw = pick(result, (m.from_ if m and m.from_ else out)) \
+                    if isinstance(result, dict | list) else None
+                if m and m.match and raw is not None:
+                    found = re.search(m.match, str(raw))
+                    raw = (found.group(1) if found and found.groups() else
+                           found.group(0) if found else None)
+                if raw is None or raw == "":
+                    continue
+                try:
+                    io_tool.store_output(self.spec, self.run_id, name, out, raw)
+                except ValueError as e:
+                    return self._failed(name, f"output {out}: {e} (value: {str(raw)[:80]!r})")
+            lacking = self._missing_outputs(name)
+            if lacking:
+                return self._failed(name, "the action result has no value for: "
+                                    + ", ".join(lacking))
             if a.outputs:
                 self.emit({"type": "outputs", "agent": name,
                            "names": sorted(io_tool.outputs(self.run_id, name))})
@@ -479,6 +561,7 @@ class GraphEngine:
         """One SDK session (or a resumed one). Returns (session_id, error)."""
         sid: str | None = None
         error: str | None = None
+        tools: dict[str, str] = {}  # tool_use_id → tool (to name the one that failed)
         async for msg in self._query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
                 for b in msg.content:
@@ -490,11 +573,17 @@ class GraphEngine:
                                               "tool": _short_tool(b.name)}
                         if _short_tool(b.name) in ("save_artifact", "read_artifact"):
                             ev["artifact"] = str(b.input.get("name", ""))[:80]
+                        detail = tool_detail(b.name, b.input)
+                        if detail:
+                            ev["detail"] = detail
+                        tools[b.id] = _short_tool(b.name)
                         self.emit(ev)
             elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                 for b in msg.content:
                     if isinstance(b, ToolResultBlock) and b.is_error:
-                        self.emit({"type": "tool_error", "agent": name})
+                        self.emit({"type": "tool_error", "agent": name,
+                                   "tool": tools.get(b.tool_use_id),
+                                   "error": error_text(b.content)})
             elif isinstance(msg, ResultMessage):
                 sid = msg.session_id
                 self.sessions[name] = sid

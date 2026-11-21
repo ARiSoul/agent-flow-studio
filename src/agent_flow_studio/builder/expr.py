@@ -11,6 +11,7 @@ Anything else (calls, attributes outside a reference, dunders, lambdas, comprehe
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -234,6 +235,54 @@ def _call(name: str, args: list[Any]) -> Any:
     except TypeError:
         return MISSING
     raise ExprError(msg("expr.arity", "{name}() got the wrong number of arguments", name=name))
+
+
+_TEMPLATE = re.compile(r"\{\{|\}\}|\{([^{}]*)\}|[{}]")
+
+
+def template_parts(text: str) -> list[str]:
+    """The {expression} parts of a message ("{{" and "}}" are literal braces)."""
+    parts = []
+    for m in _TEMPLATE.finditer(text):
+        if m.group(0) in ("{{", "}}"):
+            continue
+        if m.group(1) is None:
+            raise ExprError(msg("expr.template_brace",
+                                "a lone brace: write {{ or }} for a brace in the text"))
+        parts.append(m.group(1))
+    return parts
+
+
+def _show_value(v: Any) -> str:
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    if isinstance(v, list):
+        return ", ".join(_show_value(x) for x in v)
+    return str(v)
+
+
+def render(text: str, scope: Mapping[str, Any]) -> str:
+    """A message with its {expression} parts filled in; a part that fails stays as written."""
+    def rep(m: re.Match[str]) -> str:
+        if m.group(0) in ("{{", "}}"):
+            return m.group(0)[0]
+        if m.group(1) is None:
+            return m.group(0)
+        try:
+            return _show_value(value(m.group(1), scope))
+        except ExprError:
+            return m.group(0)
+    return _TEMPLATE.sub(rep, text)
+
+
+def value(text: str, scope: Mapping[str, Any]) -> Any:
+    """The value of an expression (None when a reference is missing), e.g. for a message."""
+    v = _eval(parse(text).body, scope)
+    return None if v is MISSING else v
 
 
 def evaluate(text: str, scope: Mapping[str, Any]) -> bool:

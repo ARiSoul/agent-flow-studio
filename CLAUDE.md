@@ -79,7 +79,17 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   inputs before them, applied by `runner.prepare_inputs` and `/api/inputs/visible`), `builder/expr.py` (safe `if`
   expressions: `ast` with a whitelist, never `eval`), `tools/io.py` (MCP `io`: `get_inputs`,
   `set_output`, `read_file`; values in `runs/<id>/io/`; the hook checks that `agent` is the caller).
-  Agents get the `io` tools implicitly from their inputs/outputs.
+  Agents get the `io` tools implicitly from their inputs/outputs. `previous.<agent>.<output>`
+  (in `from` and in expressions) = the outputs of the last finished run of the flow, saved by the
+  runner in `runs/.previous/<flow>.json` (not after agent-test runs); `input` and `previous` are
+  reserved node names. Gates: `human`, `stop` (optional `message` with `{expression}` parts,
+  `expr.render`) and `decision` (no pause; `compile.decide_branch`: first outgoing edge whose
+  `if` holds, else the one without `if`; `next_steps` gives `go_to` in orchestrator mode).
+  Edges may have a `label`. `trace.py`: the short tool detail and error text in the run log.
+  Action nodes: `AgentSpec.action` (`connector`, `name`, `params` with `{expression}` parts,
+  `outputs` with `from`/`match`); graph mode only, read actions only (`compile.action_*`); the
+  engine runs them with `connections.actions.run` (no session, no prompt; audited with names
+  only) and saves the outputs with `io.store_output` (type checks).
 - Execution per flow (`execution`): `orchestrator` (LLM, `compile_flow`) or `graph` (`engine.py`:
   one session per agent from `compile_agent`, guard with `fixed_agent`, parallel branches, joins,
   `if`/`when`, loops with `max_runs`). Legacy flows (no `inputs`) keep the one `input` that is also
@@ -99,7 +109,9 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   block non-GET requests, navigation stays on the site; the model never clicks freely; `get_json`
   opens the site's JSON in the browser (system certificates) and keeps only the listed fields;
   `redact` masks phones/emails; session cookies are saved from the sign-in window
-  (`session-state.json` in the profile) and restored before each action. Also
+  (`session-state.json` in the profile) and restored before each action; `recorder.py` records
+  a draft action while the person clicks in a visible window (typed values become `{params}`,
+  passwords are skipped; the editor shows the draft and the person saves it). Also
   `keyring`/`${VAR}` secrets,
   `http_get` (read) and `http_write` (write, only with `access: write`); `oauth.py` = sign-in on
   a page (authorization code + PKCE, single-use `state`, callback `/api/oauth/callback`, tokens

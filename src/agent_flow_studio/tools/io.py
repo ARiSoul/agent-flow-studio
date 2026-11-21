@@ -32,6 +32,7 @@ IO_DIR = "io"
 INPUTS_FILE = "_inputs.json"
 GATES_FILE = "_gates.json"
 GIVEN_SUFFIX = ".given.json"  # free inputs given to an agent (agent test mode)
+PREVIOUS_DIR = ".previous"  # runs/.previous/<flow>.json: outputs of the last finished run
 MAX_READ = 200_000
 _FILE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
@@ -109,9 +110,41 @@ def clear_outputs(run_id: str, agent: str) -> None:
         p.unlink()
 
 
+def _previous_file(flow: str) -> Path:
+    d = settings.runs_dir / PREVIOUS_DIR
+    p = (d / f"{flow}.json").resolve()
+    if d.resolve() not in p.parents:
+        raise ValueError("Path outside the runs folder.")
+    return p
+
+
+def previous_outputs(flow: str) -> dict[str, dict[str, Any]]:
+    """The outputs of the last finished run of a flow ({} before the first one)."""
+    try:
+        data = _read_json(_previous_file(flow))
+    except ValueError:
+        return {}
+    outs = data.get("outputs")
+    return outs if isinstance(outs, dict) else {}
+
+
+def save_previous(flow: str, run_id: str) -> None:
+    """At the end of a finished run: its outputs become `previous.*` for the next run."""
+    io = run_dir(run_id) / IO_DIR
+    outs = {}
+    if io.is_dir():
+        for f in sorted(io.glob("*.json")):
+            if f.name.startswith("_") or f.name.endswith(GIVEN_SUFFIX):
+                continue
+            outs[f.stem] = _read_json(f)
+    import time
+    _write_json(_previous_file(flow), {"run_id": run_id, "ts": time.time(), "outputs": outs})
+
+
 def scope(spec: FlowSpec, run_id: str) -> dict[str, Any]:
-    """Everything an `if` expression can see: input.*, <agent>.*, <gate>.decision/comment."""
-    out: dict[str, Any] = {"input": flow_inputs(run_id)}
+    """Everything an `if` expression can see: input.*, <agent>.*, <gate>.decision/comment and
+    previous.<agent>.* (the last finished run)."""
+    out: dict[str, Any] = {"input": flow_inputs(run_id), "previous": previous_outputs(spec.name)}
     for a in spec.agents:
         out[a] = outputs(run_id, a)
     gates = _read_json(_io_path(run_id, GATES_FILE))
@@ -134,7 +167,12 @@ def resolve_inputs(spec: FlowSpec, run_id: str, agent: str) -> tuple[dict[str, A
             v = given[name]
         elif i.from_:
             root, src = i.from_.split(".", 1)
-            if root == "input":
+            if root == "previous":  # empty on the first run: never "missing"
+                pa, _, po = src.partition(".")
+                v = previous_outputs(spec.name).get(pa, {}).get(po)
+                if v is None:
+                    continue
+            elif root == "input":
                 v = flow_in.get(src)
             else:
                 cache.setdefault(root, outputs(run_id, root))

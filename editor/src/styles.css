@@ -257,6 +257,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .ev.ok { color: var(--ok); } .ev.err { color: var(--stop); } .ev.info { color: var(--muted); font-size: 11px; }
 .ev.say { background: var(--panel-2); padding: 6px 8px; border-radius: 8px; margin: 4px 0; }
 .ev.gate { color: var(--human); font-weight: 600; }
+.ev.ev-md { white-space: normal; }
+.ev.ev-md > b { float: left; margin-right: 4px; }
 .gate-card { border: 1px solid var(--human); background: var(--human-soft); border-radius: 8px; padding: 10px; margin: 8px 0; }
 .gate-card textarea { margin: 6px 0; }
 .gate-card.step { border-color: var(--ok); background: var(--panel-2); }
@@ -446,6 +448,10 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 
 .conn-actions { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .conn-actions li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.conn-gives { flex-basis: 100%; padding-left: 22px; }
+.check:has(.conn-gives) { flex-wrap: wrap; }
+.rec-steps { margin: 0; padding-left: 22px; max-height: 180px; overflow: auto; font-size: 12px; }
+.rec-steps code { word-break: break-all; }
 .conn-instructions { width: 100%; resize: vertical; min-height: 120px; font: 12px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; }
 
 /* ---- Markdown in the chat (Markdown.tsx) */
@@ -540,3 +546,41 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 @media (prefers-reduced-motion: reduce) {
   .react-flow__edge.animated .react-flow__edge-path { animation: none; }
 }
+
+/* decision node: a diamond; its branches leave from the bottom, checked in order */
+.node.gate.decision { position: relative; width: 180px; height: 104px; padding: 0; border: none; background: transparent;
+  box-shadow: none; display: flex; align-items: center; justify-content: center; }
+.node.gate.decision.style-compact { width: 140px; height: 76px; }
+.node.gate.decision.style-avatar { width: 96px; height: 72px; }
+.node.gate.decision .diamond { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.node.gate.decision .diamond polygon { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.node.gate.decision.sel .diamond polygon { stroke-width: 3; }
+.node.gate.decision.err .diamond polygon { stroke: var(--bad); }
+.node.gate.decision.run-done .diamond polygon { stroke: var(--ok); }
+.node.gate.decision .diamond-text { position: relative; display: flex; flex-direction: column; align-items: center;
+  text-align: center; max-width: 62%; line-height: 1.2; gap: 1px; }
+.node.gate.decision .diamond-text .node-desc { font-size: 11px; color: var(--muted); overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.react-flow__edge.branch.else path { stroke-dasharray: 5 4; }
+.branches { margin: 4px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.branches li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.branches .branch-move { margin-left: auto; display: inline-flex; gap: 2px; }
+.ev.result-msg { background: var(--panel-2); border-left: 3px solid var(--accent); padding: 8px 10px; border-radius: 6px;
+  margin: 6px 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.run-log > .ev { flex-shrink: 0; }  /* a line with overflow: hidden must not shrink to nothing */
+.node.gate.decision.sel { outline: none; }  /* the diamond itself shows the selection */
+.node.gate.decision > .run-dot { position: absolute; right: 24%; top: 20%; }  /* not next to the text */
+.node.gate.decision .diamond-text > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.node.gate.decision .diamond-text .node-kind { flex: none; }
+.rec-typed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rec-typed li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.rec-typed .check { margin-left: auto; }
+.conn-test-out { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin: 0 0 8px; }
+.conn-test-out.bad { border-color: var(--bad); }
+.conn-test-out.bad b { color: var(--bad); }
+.conn-test-out pre { margin: 4px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.branch-rows { margin: 4px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+.branch-row { display: flex; flex-direction: column; gap: 4px; }
+.branch-row .row { display: flex; align-items: center; gap: 6px; }
+.branch-row .branch-label { width: 90px; }
+.branch-row select { flex: 1; min-width: 0; }

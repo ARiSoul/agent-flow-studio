@@ -56,6 +56,9 @@ export interface AgentRaw {
   max_runs?: number;
   icon?: string | null;  // a built-in icon id (icons.tsx) or an emoji
   origin?: { agent: string; hash: string } | null;  // copied from the agent library
+  // an action node (graph mode): the studio runs this connector action, no model
+  action?: { connector: string; name: string; params?: Record<string, string>;
+    outputs?: Record<string, { from?: string; match?: string }> } | null;
 }
 
 /** An agent of the library (GET /api/agents): copied into flows, then tuned there. */
@@ -105,8 +108,9 @@ export interface OriginState {
 }
 
 export interface GateRaw {
-  kind: "human" | "stop";
+  kind: "human" | "stop" | "decision";  // decision: no pause, the first branch whose `if` holds
   label: string;
+  message?: string;  // stop: the result shown at the end, with {expression} parts
 }
 
 export interface EdgeRaw {
@@ -114,6 +118,7 @@ export interface EdgeRaw {
   to: string;
   when?: string;
   if?: string;
+  label?: string;  // shown on the canvas (e.g. "yes" / "no" on a decision branch)
 }
 
 export interface McpRaw {
@@ -197,7 +202,8 @@ export interface Catalog {
   contracts: Record<string, unknown>;
   models: string[];
   mock: boolean;
-  connections: Record<string, { type: string; environment: string; description: string; access: string }>;
+  connections: Record<string, { type: string; environment: string; description: string; access: string;
+    actions_only?: boolean; actions?: Record<string, { access: string; description: string; params?: string[] }> }>;
   locations?: string[];  // where things can be kept: "local" and the loaded extensions
 }
 

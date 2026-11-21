@@ -56,6 +56,12 @@ _IOTYPE = {"type": "object", "properties": {
     "accept": _STRS, "contract": _STR, "draft": {"type": "boolean"},
     "show_if": _STR}}  # flow inputs: shown only when this expression on earlier inputs holds
 _IOMAP = {"type": "object", "additionalProperties": _IOTYPE}
+_ACTION = {"type": "object", "properties": {
+    "connector": {"type": "string"}, "name": {"type": "string"},
+    "params": {"type": "object", "additionalProperties": {"type": "string"}},
+    "outputs": {"type": "object", "additionalProperties": {
+        "type": "object", "properties": {"from": {"type": "string"}, "match": {"type": "string"}}}},
+}, "required": ["connector", "name"]}
 _AGENT_INPUTS = {"type": "object", "additionalProperties": {"type": "object", "properties": {
     "from": _STR, "type": {"type": "string", "enum": _KINDS}, "description": _STR,
     "required": {"type": "boolean"}}}}
@@ -79,6 +85,20 @@ def _contract_fields(name: str) -> dict[str, Any]:
     return {"fields": sorted(s.get("properties", {}))}
 
 
+def _last_tests(name: str) -> dict[str, Any]:
+    """The values each action of a connector returned in its last Test (Connectors window),
+    cut short: enough to choose an output's `from` and `match`."""
+    from .server import _read_json_file, _tests_file
+
+    out: dict[str, Any] = {}
+    for action, t in _read_json_file(_tests_file(name)).items():
+        result = t.get("result") if isinstance(t, dict) and t.get("ok") else None
+        values = result.get("values") if isinstance(result, dict) else None
+        if isinstance(values, dict):
+            out[action] = {k: str(v)[:80] for k, v in list(values.items())[:20]}
+    return out
+
+
 def _connections_info() -> dict[str, Any]:
     from ..connections import store
 
@@ -93,6 +113,10 @@ def _connections_info() -> dict[str, Any]:
                 out[n]["actions"] = {k: f"{x.access}: {x.description} (params: "
                                         f"{', '.join(x.params) or '—'})" for k, x in c.actions.items()}
                 out[n]["actions_only"] = c.actions_only
+                seen = _last_tests(n)
+                if seen:  # what each action returned in its last Test (to map outputs)
+                    out[n]["last_test_values"] = seen
+            out[n]["direct_requests"] = c.type != "website" and not c.actions_only
         return out
     except store.ConnectorConfigError as e:
         return {"error": str(e)}
@@ -196,13 +220,18 @@ class Draft:
               "{from: 'input.<x>' or '<agent>.<output>', type?, required?, description?}}; "
               "outputs: {name: {type, required?, options?, contract?, draft?, multiple?…}} — the "
               "agent gets them with io.get_inputs and saves them with io.set_output (implicit). "
-              "join ('all'|'any') and max_runs only matter in graph execution.",
+              "join ('all'|'any') and max_runs only matter in graph execution. "
+              "action: makes it an ACTION NODE (graph execution only): no prompt, no model — the "
+              "studio runs one read action {connector, name, params: {param: text with "
+              "{expression} parts}, outputs: {output: {from: value name in the result, match: "
+              "regex whose first group is the value}}}; declare the typed outputs too. Use "
+              "'previous.<agent>.<output>' in 'from' or expressions for the last finished run.",
               _schema({"name": _STR, "description": _STR, "prompt": _STR, "tools": _STRS,
                        "model": _STR, "max_turns": {"type": "integer"}, "skills": _STRS,
                        "reads": _STRS, "writes": _WRITES, "connections": _STRS,
                        "write_connections": _STRS, "inputs": _AGENT_INPUTS, "outputs": _IOMAP,
                        "join": {"type": "string", "enum": ["all", "any"]},
-                       "max_runs": {"type": "integer"}, "icon": _STR,
+                       "max_runs": {"type": "integer"}, "icon": _STR, "action": _ACTION,
                        "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}},
                       ["name"]))
         async def set_agent(a: dict) -> dict:
@@ -216,15 +245,24 @@ class Draft:
             if new and not a.get("description"):
                 return err("a new agent needs a description")
             ag = agents.setdefault(name, {})
-            if new:
+            if a.get("action"):  # an action node: the studio runs the action, no prompt or tools
+                ag.pop("prompt", None)
+                d.prompts.pop(ag.pop("prompt_file", "") or "", None)
+                for k in ("tools", "model", "max_turns", "skills", "connections"):
+                    ag.pop(k, None)
+                a = {k: v for k, v in a.items() if k not in ("prompt", "tools", "connections")}
+            elif new:
                 ag["prompt_file"] = f"prompts/{name}.md"
                 d.prompts.setdefault(ag["prompt_file"], a.get("prompt") or "")
-            if "connections" in a:  # connectors imply the read tool
-                tools = list(a.get("tools", ag.get("tools", [])))
-                if a["connections"] and "connections.http_get" not in tools:
+            if "connections" in a:  # direct-request connectors imply the read tool (websites and
+                # "only these actions" are used through run_action, given with the connector)
+                info = _connections_info()
+                direct = [c for c in a["connections"]
+                          if isinstance(info.get(c), dict) and info[c].get("direct_requests")]
+                tools = [t for t in a.get("tools", ag.get("tools", []))
+                         if t != "connections.http_get"]
+                if direct:
                     tools.append("connections.http_get")
-                if not a["connections"]:
-                    tools = [t for t in tools if t != "connections.http_get"]
                 a = {**a, "tools": tools}
             if "write_connections" in a:  # write access implies the http_write tool
                 tools = list(a.get("tools", ag.get("tools", [])))
@@ -235,7 +273,7 @@ class Draft:
                 a = {**a, "tools": tools}
             for k in ("description", "tools", "model", "max_turns", "skills", "reads", "writes",
                       "connections", "write_connections", "autonomy", "inputs", "outputs", "join",
-                      "max_runs", "icon"):
+                      "max_runs", "icon", "action"):
                 if k in a:
                     ag[k] = a[k]
             if "prompt" in a:
@@ -245,24 +283,36 @@ class Draft:
                     ag["prompt"] = a["prompt"]
             return d._summary(f"Agent {name} {'created' if new else 'updated'}")
 
-        @tool("set_gate", "Creates or updates a gate: kind 'human' (human approval, resumable) "
-              "or 'stop' (halt); label is the text shown.",
-              _schema({"name": _STR, "kind": {"type": "string", "enum": ["human", "stop"]},
-                       "label": _STR}, ["name", "kind", "label"]))
+        @tool("set_gate", "Creates or updates a gate: kind 'human' (human approval, resumable), "
+              "'stop' (halt) or 'decision' (no pause: the first outgoing edge whose 'if' holds is "
+              "followed, in edge order; an edge without 'if' is 'otherwise'). label is the text "
+              "shown (for a decision, its question). A stop can have a 'message': the result "
+              "shown at the end, with {expression} parts filled in from the values, e.g. "
+              "\"{counter.count - previous.counter.count} new users\" (previous.<agent>.<output> "
+              "= the last finished run).",
+              _schema({"name": _STR, "kind": {"type": "string",
+                                                "enum": ["human", "stop", "decision"]},
+                       "label": _STR, "message": _STR}, ["name", "kind", "label"]))
         async def set_gate(a: dict) -> dict:
             if not SLUG.fullmatch(a["name"]):
                 return err("invalid name: lowercase letters, digits and _, starting with a letter")
             if a["name"] in (d.spec.get("agents") or {}):
                 return err(f"an agent {a['name']!r} already exists")
-            d.spec.setdefault("gates", {})[a["name"]] = {"kind": a["kind"], "label": a["label"]}
+            gate = {"kind": a["kind"], "label": a["label"]}
+            if a.get("message") and a["kind"] == "stop":
+                gate["message"] = a["message"]
+            d.spec.setdefault("gates", {})[a["name"]] = gate
             return d._summary(f"Gate {a['name']} defined")
 
         @tool("add_edge", "Connects two nodes (agent or gate). 'if' is an expression on the "
               "inputs/outputs, checked by the studio (e.g. triage.severity == \"high\", "
               "tests.failed > 0, approve_pr.decision == \"approve\"); 'when' is a condition in "
-              "natural language. Prefer 'if' when the data is in an output. If the edge already "
+              "natural language. Prefer 'if' when the data is in an output. 'label' is the "
+              "name shown on the canvas (e.g. yes / no on the branches of a decision; decision "
+              "branches use only 'if', and one without 'if' is 'otherwise'). If the edge already "
               "exists, it updates the conditions.",
-              _schema({"from": _STR, "to": _STR, "when": _STR, "if": _STR}, ["from", "to"]))
+              _schema({"from": _STR, "to": _STR, "when": _STR, "if": _STR, "label": _STR},
+                      ["from", "to"]))
         async def add_edge(a: dict) -> dict:
             missing = [n for n in (a["from"], a["to"]) if n not in d._nodes()]
             if missing:
@@ -272,10 +322,14 @@ class Draft:
                     e["when"] = a.get("when", e.get("when", ""))
                     if "if" in a:
                         e["if"] = a["if"]
+                    if "label" in a:
+                        e["label"] = a["label"]
                     return d._summary("Conditions updated")
             edge = {"from": a["from"], "to": a["to"], "when": a.get("when", "")}
             if a.get("if"):
                 edge["if"] = a["if"]
+            if a.get("label"):
+                edge["label"] = a["label"]
             d._edges().append(edge)
             return d._summary(f"Edge {a['from']} → {a['to']} created")
 

@@ -1,3 +1,4 @@
+import { Markdown } from "./Markdown";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useDialog } from "./Dialog";
@@ -51,6 +52,7 @@ export function traceOf(events: Ev[]): Record<string, NodeRun> {
     if (e.type === "skipped" && e.node) s[e.node as string] = "skipped";
     if (e.type === "gate") s[e.gate as string] = "gate";
     if (e.type === "decision") s[e.gate as string] = "done";
+    if (e.type === "decided" && e.node) s[e.node as string] = "done";  // a decision node
     // the run ended (stopped, error, gate…) while an agent was still marked as running: a stop
     // cancels it without an agent_done event, so it would look "running" forever
     if (e.type === "end") for (const k of Object.keys(s)) if (s[k] === "active") s[k] = "stopped";
@@ -107,11 +109,17 @@ function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
   switch (e.type) {
     case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${e.execution === "graph" ? t("run.ev.graph") : ""}` };
     case "delegate": return { cls: "deleg", text: `→ ${e.agent}${e.task ? ` — ${e.task}` : ""}` };
-    case "tool": return { cls: "tool", text: `${who}${e.tool}${e.artifact ? ` (${e.artifact})` : ""}` };
-    case "tool_error": return { cls: "err", text: t("run.ev.toolError", { who }) };
+    case "tool": return { cls: "tool", text: `${who}${e.tool}${e.detail ? ` — ${e.detail}` : e.artifact ? ` (${e.artifact})` : ""}` };
+    // the tool and its error text (older runs have neither)
+    case "tool_error": return { cls: "err", text: e.error
+      ? t("run.ev.toolErrorDetail", { who, tool: String(e.tool ?? "?"), error: String(e.error) })
+      : t("run.ev.toolError", { who }) };
     case "agent_done": return { cls: e.error ? "err" : "ok", text: t(e.error ? "run.ev.agentDoneError" : "run.ev.agentDone", { agent: String(e.agent) }) };
     case "text": return { cls: e.agent ? "sub" : "say", text: `${who}${e.text}` };
-    case "gate": return { cls: "gate", text: `⏸ ${e.label} — ${e.reason}` };
+    // a stop with a message: the message is the result of the run
+    case "gate": return e.message ? { cls: "result-msg", text: `■ ${e.label}: ${e.message}` }
+      : { cls: "gate", text: `⏸ ${e.label} — ${e.reason}` };
+    case "decided": return { cls: "edge", text: t(e.to ? "run.ev.decided" : "run.ev.decidedNone", { node: String(e.node), to: String(e.to ?? "") }) };
     case "approval": return { cls: "gate", text: t("run.ev.approval", { agent: String(e.agent), summary: String(e.summary) }) };
     case "approval_result": return { cls: e.approved ? "ok" : "err", text: `${t(e.approved ? "run.ev.approved" : "run.ev.rejected")}: ${e.summary}${e.comment ? ` — ${e.comment}` : ""}` };
     case "agent_blocked": return null;
@@ -201,6 +209,9 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const dialog = useDialog();
   const spec = doc.spec;
   const typed = isTyped(spec);
+  // a flow without inputs (no legacy `input` or `task` of its own): only a run id, prefilled
+  const plain = !typed && !spec.input && !spec.task;
+  const idOnly = typed || plain;
   const [mode, setMode] = useState<RunMode>("full");
   const [target, setTarget] = useState("");
   const [instruction, setInstruction] = useState("");
@@ -226,7 +237,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const evRef = useRef<Ev[]>([]);
   const end = useRef<HTMLDivElement>(null);
   const label = spec.input?.label ?? t("insp.inputDefault");
-  const rid = typed ? runId.trim() : input.trim();  // the run folder in runs/
+  const rid = idOnly ? runId.trim() : input.trim();  // the run folder in runs/
 
   const links = doc.spec.edges ?? [];
   useEffect(() => {
@@ -343,7 +354,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     if (Object.keys(errs).length) return null;
     const base = { flow, mode, target: target || null, instruction: mode === "agent" ? instruction : "",
       ...(Object.keys(g).length ? { given: g } : {}) };
-    return { body: typed ? { ...base, run_id: runId.trim() || null, inputs: out } : { ...base, input: input.trim() } };
+    return { body: typed ? { ...base, run_id: runId.trim() || null, inputs: out } : { ...base, input: rid } };
   };
 
   const start = async () => {
@@ -420,13 +431,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
 
   const runButton = running
     ? <button className="danger" onClick={() => run && post(`/api/runs/${run.id}/stop`)}>{t("run.stop")}</button>
-    : <button className="primary" disabled={dirty || (typed ? !RUN_ID.test(rid) : !rid)} onClick={start}
+    : <button className="primary" disabled={dirty || (idOnly ? !RUN_ID.test(rid) : !rid)} onClick={start}
       title={dirty ? t("run.saveFirstTitle") : t("run.run")}>{t("run.run")}</button>;
   return (
     <div className="runp">
       <div className="run-head">
         {running && <div className="kit-bar global" aria-hidden="true" />}
-        {typed ? <>
+        {idOnly ? <>
           <div className="row">
             <input className={`mono${runIdErr || (rid && !RUN_ID.test(rid)) ? " bad" : ""}`} value={runId} disabled={running}
               title={t("run.runIdTitle")} aria-label={t("run.runId")} placeholder={t("run.runId")}
@@ -517,7 +528,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             <details><summary className="small">{t("run.auth.detail")}</summary>
               <pre className="mono art-view">{String(authErr.message ?? authErr.text ?? "")}</pre></details>
           </div>)}
-        {events.map((e) => { const l = line(e, i18n); return l && <div key={e.i} className={`ev ${l.cls}`}>{l.text}</div>; })}
+        {events.map((e) => {
+          const l = line(e, i18n);
+          if (!l) return null;
+          // what the model writes is Markdown (lists, bold, code)
+          if (e.type === "text") return <div key={e.i} className={`ev ${l.cls} ev-md`}>{e.agent ? <b>{String(e.agent)}: </b> : null}<Markdown text={String(e.text)} /></div>;
+          return <div key={e.i} className={`ev ${l.cls}`}>{l.text}</div>;
+        })}
         {pending.map((p) => (
           <div key={p.id as string} className="gate-card write">
             <b>{t("run.writeBy", { agent: String(p.agent), env: String(p.environment) })}</b>

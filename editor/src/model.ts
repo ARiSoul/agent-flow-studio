@@ -112,6 +112,7 @@ export const isTyped = (spec: FlowRaw) => Object.keys(spec.inputs ?? {}).length 
 /** The value type behind a `from` reference (null when it does not exist). */
 export function sourceIO(spec: FlowRaw, ref: string | null | undefined): IOTypeRaw | null {
   if (!ref || !ref.includes(".")) return null;
+  ref = ref.replace(/^previous\./, "");  // the same output, in the last finished run
   const [root, name] = [ref.slice(0, ref.indexOf(".")), ref.slice(ref.indexOf(".") + 1)];
   if (root === "input") return flowInputs(spec)[name] ?? null;
   return spec.agents[root]?.outputs?.[name] ?? null;

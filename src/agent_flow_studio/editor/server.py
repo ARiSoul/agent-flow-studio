@@ -36,8 +36,10 @@ from ..builder.templates import TemplateError, templates_dict
 from ..builder.templates import render as render_template
 from ..builder.types import IOType
 from ..config import settings
+from ..connections import actions as conn_actions
 from ..connections import client as conn_client
 from ..connections import oauth as conn_oauth
+from ..connections import recorder as conn_rec
 from ..connections import store as conn_store
 from ..connections import web as conn_web
 from ..connections.model import SLUG as CONN_SLUG
@@ -100,6 +102,18 @@ class ContinueBody(BaseModel):
     how: Literal["step", "full"] = "step"
 
 
+class AllowPostBody(BaseModel):
+    allow: bool = True
+
+
+class ActionTestBody(BaseModel):
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecordBody(BaseModel):
+    banner: str = Field(default="", max_length=300)  # the hint shown in the window (UI language)
+
+
 class DecisionBody(BaseModel):
     decision: Literal["approve", "reject", "answer"]
     comment: str = Field(default="", max_length=20_000)
@@ -149,11 +163,12 @@ class NewFlow(BaseModel):
 
 def _blank(name: str, title: str) -> dict[str, Any]:
     return {
-        "version": 1, "name": name, "title": title, "task": "Run the flow for {input}.",
+        # no inputs and no legacy task: a run only needs its id (add typed inputs when needed)
+        "version": 1, "name": name, "title": title,
         "start": "first",
         "agents": {"first": {"description": "First step of the flow.",
                              "prompt": "Describe here what this agent does.",
-                             "tools": ["artifacts.read_artifact"]}},
+                             "tools": []}},
         "gates": {"end": {"kind": "human", "label": "Human review"}},
         "edges": [{"from": "first", "to": "end", "when": "finished"}],
         "layout": {"first": {"x": 0, "y": 0}, "end": {"x": 0, "y": 160}},
@@ -226,6 +241,19 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _tests_file(name: str) -> Path:
+    """runs/.connector-tests/<connector>.json: the last test of each action (local only)."""
+    return settings.runs_dir / ".connector-tests" / f"{name}.json"
+
+
+def _write_tests(name: str, tests: dict[str, Any]) -> None:
+    f = _tests_file(name)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(tests, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(f)
+
+
 def _actions_yaml(c: Connection) -> str:
     data = {k: a.model_dump(mode="json", exclude_defaults=True) for k, a in c.actions.items()}
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=100) if data else ""
@@ -296,7 +324,10 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         except conn_store.ConnectorConfigError:
             return {}
         return {n: {"type": c.type, "environment": c.environment, "description": c.description,
-                    "access": c.access, "has_instructions": bool(c.instructions.strip())}
+                    "access": c.access, "has_instructions": bool(c.instructions.strip()),
+                    "actions_only": c.actions_only,  # what an agent with it gets (agent panel)
+                    "actions": {k: {"access": x.access, "description": x.description,
+                                    "params": list(x.params)} for k, x in c.actions.items()}}
                 for n, c in conns.items()}
 
     def _conn_name(name: str) -> str:
@@ -360,6 +391,102 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         _website(name)
         conn_web.forget_session(name)
         return {"profile": False}
+
+    # --- test one action from the Connectors window (read actions only) ----------------------
+    @app.post("/api/connections/{name}/actions/{action}/test", dependencies=[Depends(csrf)])
+    async def test_action(name: str, action: str, body: ActionTestBody) -> dict[str, Any]:
+        """Runs a read action now (a website one in a visible window) and returns what an agent
+        would get. Write actions only run in a flow, with the autonomy and approvals."""
+        c = _conns().get(_conn_name(name))
+        if c is None:
+            raise HTTPException(404, "connector does not exist")
+        a = c.actions.get(action)
+        if a is None:
+            raise HTTPException(404, "the connector has no such action")
+        if a.access != "read":
+            raise HTTPException(400, "write actions run only in a flow (with approval)")
+        if c.type == "website" and name in signing_in:
+            raise HTTPException(409, "the sign-in window is still open")
+        _audit_event("connector_action_tested", connector=name, action=action)  # names only
+        try:
+            out: dict[str, Any] = {"ok": True, "result": await conn_actions.run(
+                name, action, body.params, visible=c.type == "website")}
+        except (conn_actions.ActionError, conn_client.ConnectorError) as e:  # no secrets in them
+            out = {"ok": False, "error": str(e), "blocked": getattr(e, "blocked", [])}
+        # the last test of each action stays on this machine (runs/, outside git), so the person
+        # can look at what it returned when tuning the agent that uses it
+        tests = _read_json_file(_tests_file(name))
+        tests[action] = {**out, "ts": time.time(), "params": body.params}
+        _write_tests(name, tests)
+        return out
+
+    @app.get("/api/connections/{name}/tests")
+    def action_tests(name: str) -> dict[str, Any]:
+        """The last test of each action of a connector (what it returned, or its error)."""
+        return {"tests": _read_json_file(_tests_file(_conn_name(name)))}
+
+    @app.post("/api/connections/{name}/actions/{action}/allow-post", dependencies=[Depends(csrf)])
+    def action_allow_post(name: str, action: str, body: AllowPostBody) -> dict[str, Any]:
+        """The person allows (or not) POST requests in one read action of a website: some sites
+        connect to their server or load data that way. Steps still never write by themselves."""
+        conns = _conns()
+        c = conns.get(_conn_name(name))
+        if c is None or action not in c.actions:
+            raise HTTPException(404, "the connector has no such action")
+        if c.type != "website":
+            raise HTTPException(400, "allow_post is only for website connectors")
+        c.actions[action].allow_post = body.allow
+        conn_store.save(conns)
+        _audit_event("connector_action_allow_post", connector=name, action=action,
+                     allow=body.allow)
+        return {"allow_post": body.allow}
+
+    # --- website connectors: record an action while the person clicks on the site ---------------
+    recordings: dict[str, conn_rec.Recording] = {}
+
+    @app.post("/api/connections/{name}/browser/record", dependencies=[Depends(csrf)])
+    async def browser_record(name: str, body: RecordBody) -> dict[str, Any]:
+        """Opens a visible window on the site and records the steps; returns at once. The editor
+        reads them with GET while the person works; the result is a draft, never saved here."""
+        c = _website(name)
+        if name in signing_in:
+            raise HTTPException(409, "the sign-in window is still open")
+        old = recordings.get(name)
+        if old and not old.done:
+            return old.summary()
+        try:
+            conn_web._playwright()
+        except conn_web.WebError as e:
+            raise HTTPException(400, str(e)) from e
+        rec = recordings[name] = conn_rec.Recording(c)
+        asyncio.create_task(conn_rec.record(name, c, rec, body.banner))
+        return rec.summary()
+
+    @app.get("/api/connections/{name}/browser/record")
+    def browser_recording(name: str, action: str = "recorded", fixed: str = "",
+                          allow_post: bool = False) -> dict[str, Any]:
+        """`fixed`: params (comma separated) that keep the text typed while recording;
+        `allow_post`: the draft lets the page send POST requests."""
+        _website(name)
+        rec = recordings.get(name)
+        if rec is None:
+            raise HTTPException(404, "no recording for this connector")
+        keep = {f for f in fixed.split(",") if f}
+        return {**rec.summary(),
+                "yaml": rec.yaml(action, keep, allow_post) if rec.done and rec.steps else ""}
+
+    @app.delete("/api/connections/{name}/browser/record", dependencies=[Depends(csrf)])
+    def browser_record_stop(name: str) -> dict[str, Any]:
+        """Stops a recording (closes its window) or, when it has ended, forgets it."""
+        _website(name)
+        rec = recordings.get(name)
+        if rec is None:
+            return {"recording": False}
+        if rec.done:
+            recordings.pop(name, None)
+        else:
+            rec.stop.set()
+        return {"recording": not rec.done}
 
     # --- sign-in on a page (OAuth 2 + PKCE) ------------------------------------------------------
     @app.post("/api/connections/{name}/oauth/start", dependencies=[Depends(csrf)])
@@ -469,6 +596,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             raise HTTPException(404, "connector does not exist")
         conn_store.delete_secrets(name, c)
         conn_store.save(conns)
+        _tests_file(name).unlink(missing_ok=True)  # its saved test results go with it
         return {"deleted": name}
 
     @app.post("/api/connections/{name}/test", dependencies=[Depends(csrf)])
