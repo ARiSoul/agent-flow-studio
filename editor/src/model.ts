@@ -147,6 +147,42 @@ export function nodeHeight(spec: FlowRaw, id: string, style: NodeStyle = "card")
 
 /** Width and height of a node in a style (used by the automatic layout). */
 export function nodeSize(spec: FlowRaw, id: string, style: NodeStyle = "card"): { w: number; h: number } {
+  const S = savedSize(spec, id, style);
+  if (S) {  // a size the person set (an agent: tall enough for its ports)
+    const a = spec.agents[id];
+    const min = a ? agentMinHeight(Math.max(Object.keys(a.inputs ?? {}).length + 1, Object.keys(a.outputs ?? {}).length), style) : 0;
+    return { w: S.w, h: Math.max(S.h, min) };
+  }
+  return autoNodeSize(spec, id, style);
+}
+
+/** The size the person gave a node in a style (cards: w/h; compact and avatar: their own). */
+export function savedSize(spec: FlowRaw, id: string, style: NodeStyle): { w: number; h: number } | null {
+  const L = spec.layout?.[id];
+  if (!L) return null;
+  if (style === "card") return L.w && L.h ? { w: L.w, h: L.h } : null;
+  return L[style] ?? null;
+}
+
+/** Sets (or, with null, removes) the size of a node in a style. */
+export function setSavedSize(spec: FlowRaw, id: string, style: NodeStyle, size: { w: number; h: number } | null): void {
+  spec.layout = spec.layout ?? {};
+  const L = (spec.layout[id] = { ...(spec.layout[id] ?? { x: 0, y: 0 }) });
+  if (style === "card") {
+    if (size) { L.w = size.w; L.h = size.h; } else { delete L.w; delete L.h; }
+  } else if (size) L[style] = size;
+  else delete L[style];
+}
+
+/** The smallest height of a resized agent node: its title and its ports (the description is the
+ * part that shrinks). `rows`: port rows. */
+export function agentMinHeight(rows: number, style: NodeStyle): number {
+  if (style === "avatar") return 90;  // the circle and the name (the ports are on the ring)
+  return (style === "compact" ? 46 : 70) + rows * PORT_H;
+}
+
+/** The size a node takes by itself in a style (its ports included). */
+export function autoNodeSize(spec: FlowRaw, id: string, style: NodeStyle = "card"): { w: number; h: number } {
   const a = spec.agents[id];
   if (style === "avatar") return a ? { w: 140, h: 130 } : { w: 120, h: 120 };
   const rows = a ? Math.max(Object.keys(a.inputs ?? {}).length + 1, Object.keys(a.outputs ?? {}).length) : 0;

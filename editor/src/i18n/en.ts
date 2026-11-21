@@ -537,6 +537,7 @@ export const en = {
   "menu.rename": "Rename…",
   "menu.renameTitle": "Rename {name}",
   "menu.setStart": "Set as start",
+  "menu.autoSize": "Automatic size",
   "menu.addInput": "Add input",
   "menu.addOutput": "Add output",
   "menu.toStop": "Change to stop",

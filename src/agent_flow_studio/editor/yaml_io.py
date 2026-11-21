@@ -58,9 +58,19 @@ def spec_to_data(spec: FlowSpec) -> dict[str, Any]:
     data = spec.model_dump(mode="json", by_alias=True, exclude_defaults=True)
     data = {"version": spec.version, **data}
     if "layout" in data:
-        data["layout"] = {k: {"x": round(p["x"]), "y": round(p["y"])}
-                          for k, p in data["layout"].items()}
+        data["layout"] = {k: _round_pos(p) for k, p in data["layout"].items()}
     return data
+
+
+def _round_pos(p: dict[str, Any]) -> dict[str, Any]:
+    """Whole numbers in a layout entry (its sizes per style included); no empty values."""
+    out: dict[str, Any] = {}
+    for c, v in p.items():
+        if isinstance(v, dict):
+            out[c] = {k: round(x) for k, x in v.items() if isinstance(x, (int, float))}
+        elif isinstance(v, (int, float)):
+            out[c] = round(v)
+    return out
 
 
 def dump_flow(spec: FlowSpec) -> str:
@@ -75,7 +85,7 @@ def dump_raw(raw: dict[str, Any], name: str) -> str:
 
     def _pos(p: Any) -> Any:
         ok = isinstance(p, dict) and all(isinstance(p.get(c), (int, float)) for c in ("x", "y"))
-        return {"x": round(p["x"]), "y": round(p["y"])} if ok else p
+        return _round_pos(p) if ok else p
 
     if isinstance(layout, dict):
         data["layout"] = {k: _pos(p) for k, p in layout.items()}

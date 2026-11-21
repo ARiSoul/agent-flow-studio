@@ -236,9 +236,20 @@ class OrchestratorSpec(_Strict):
     prompt_file: str | None = None
 
 
+class Size(_Strict):
+    w: float = Field(ge=40, le=4000)
+    h: float = Field(ge=30, le=4000)
+
+
 class Position(_Strict):
+    """Where a node is in the editor, and the size the person gave it in each node style (w/h for
+    cards; `compact` and `avatar` keep their own, since the shapes differ)."""
     x: float
     y: float
+    w: float | None = Field(default=None, ge=40, le=4000)
+    h: float | None = Field(default=None, ge=30, le=4000)
+    compact: Size | None = None
+    avatar: Size | None = None
 
 
 class FlowSpec(_Strict):

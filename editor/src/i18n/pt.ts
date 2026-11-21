@@ -537,6 +537,7 @@ export const pt: Messages = {
   "menu.rename": "Mudar o nome…",
   "menu.renameTitle": "Mudar o nome de {name}",
   "menu.setStart": "Definir como início",
+  "menu.autoSize": "Tamanho automático",
   "menu.addInput": "Adicionar entrada",
   "menu.addOutput": "Adicionar saída",
   "menu.toStop": "Mudar para paragem",

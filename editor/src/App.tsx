@@ -20,7 +20,7 @@ import { Inspector } from "./Inspector";
 import { LANGS, useI18n, type Lang } from "./i18n";
 import { THEMES, useTheme, type Theme } from "./theme";
 import {
-  autoLayout, clone, ensureLayout, NODE_STYLES, type NodeStyle, inputKind, newAgent, newGate, nodeNames, removeNode,
+  autoLayout, clone, ensureLayout, NODE_STYLES, type NodeStyle, inputKind, newAgent, newGate, nodeNames, nodeSize, removeNode, savedSize, setSavedSize,
   renameNode, SLUG, sourceIO, tidy, uniqueKey, uniqueName,
 } from "./model";
 import { nodeTypes, type Port } from "./nodes";
@@ -261,7 +261,13 @@ function Editor() {
   const errNodes = useMemo(() => new Set((val?.errors ?? []).flatMap((e) => e.nodes)), [val]);
   const nodes: Node[] = useMemo(() => {
     if (!doc) return [];
-    const s = doc.spec, pos = (id: string) => s.layout?.[id] ?? { x: 0, y: 0 };
+    const s = doc.spec, pos = (id: string) => { const p = s.layout?.[id]; return { x: p?.x ?? 0, y: p?.y ?? 0 }; };
+    // a size the person set (resize handles of the selected node); not for avatars
+    const size = (id: string) => {
+      const S = savedSize(s, id, nodeStyle);
+      if (!S) return {};
+      return { width: S.w, height: nodeSize(s, id, nodeStyle).h, className: "sized" };  // never hides the ports
+    };
     return [
       ...Object.entries(s.agents).map(([id, a]) => {
         const ins: Port[] = Object.entries(a.inputs ?? {}).map(([n, i]) => ({
@@ -271,14 +277,14 @@ function Editor() {
           name: n, type: o.type ?? "text", multiple: !!o.multiple,
         }));
         return {
-          id, type: "agent", position: pos(id), measured: dims[id],
+          id, type: "agent", position: pos(id), measured: dims[id], ...size(id),
           selected: sel?.kind === "node" && sel.id === id,
           data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace.nodes[id], ins, outs,
             style: nodeStyle, lib: a.origin ? val?.origins?.[id] : undefined },
         };
       }),
       ...Object.entries(s.gates ?? {}).map(([id, g]) => ({
-        id, type: "gate", position: pos(id), measured: dims[id],
+        id, type: "gate", position: pos(id), measured: dims[id], ...size(id),
         selected: sel?.kind === "node" && sel.id === id,
         data: { name: id, gate: g, error: errNodes.has(id), run: trace.nodes[id], style: nodeStyle },
       })),
@@ -295,7 +301,7 @@ function Editor() {
       const fromDecision = s.gates?.[e.from]?.kind === "decision";
       const mark = run === "followed" ? "✓" : run === "not" ? "✗" : run === "error" ? "!" : "";
       return {
-        id: `e${i}`, source: e.from, target: e.to,
+        id: `e${i}`, source: e.from, target: e.to, sourceHandle: "c", targetHandle: "c",  // the control points (not a data port)
         label: [mark, cond].filter(Boolean).join(" ") || undefined,
         selected: sel?.kind === "edge" && sel.index === i, type: "smoothstep",
         markerEnd: { type: MarkerType.ArrowClosed },
@@ -326,7 +332,21 @@ function Editor() {
     const moves = changes.filter((c) => c.type === "position" && c.position);
     if (moves.length) update((d) => {
       d.spec.layout = d.spec.layout ?? {};
-      for (const c of moves) if (c.type === "position" && c.position) d.spec.layout[c.id] = { x: Math.round(c.position.x), y: Math.round(c.position.y) };
+      for (const c of moves) if (c.type === "position" && c.position) {
+        d.spec.layout[c.id] = { ...d.spec.layout[c.id], x: Math.round(c.position.x), y: Math.round(c.position.y) };
+      }
+    }, false);
+    // the resize handles: the new size goes into the layout (with the position, which moves when
+    // a node is resized from its top or left side)
+    const sized = changes.filter((c) => c.type === "dimensions" && c.dimensions && c.resizing !== undefined);
+    if (sized.length) update((d) => {
+      d.spec.layout = d.spec.layout ?? {};
+      for (const c of sized) if (c.type === "dimensions" && c.dimensions) {
+        const w = Math.round(c.dimensions.width), h = Math.round(c.dimensions.height);
+        // only a size the flow format accepts (40–4000 × 30–4000); anything else keeps the old one;
+        // each node style keeps its own size
+        if (w >= 40 && w <= 4000 && h >= 30 && h <= 4000) setSavedSize(d.spec, c.id, nodeStyle, { w, h });
+      }
     }, false);
     const dimsCh = changes.filter((c) => c.type === "dimensions" && c.dimensions);
     if (dimsCh.length) setDims((p) => {
@@ -337,7 +357,7 @@ function Editor() {
     for (const c of changes) {
       if (c.type === "select" && c.selected) setSel({ kind: "node", id: c.id });
     }
-  }, [update]);
+  }, [update, nodeStyle]);
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     for (const c of changes) {
       if (c.type !== "select" || !c.selected) continue;
@@ -602,6 +622,8 @@ function Editor() {
       ...(g.kind !== "decision" ? [{ label: t(g.kind === "human" ? "menu.toStop" : "menu.toHuman"),
         onSelect: () => update((d) => { d.spec.gates![id].kind = g.kind === "human" ? "stop" : "human"; }) }] : []),
     );
+    if (savedSize(doc.spec, id, nodeStyle)) items.push({ label: t("menu.autoSize"),
+      onSelect: () => update((d) => setSavedSize(d.spec, id, nodeStyle, null)) });
     items.push(
       { kind: "sep" },
       { label: t("menu.copy"), hint: "Ctrl+C", onSelect: () => copyNode(id) },

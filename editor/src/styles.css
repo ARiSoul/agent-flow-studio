@@ -584,3 +584,48 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 .branch-row .row { display: flex; align-items: center; gap: 6px; }
 .branch-row .branch-label { width: 90px; }
 .branch-row select { flex: 1; min-width: 0; }
+/* a node with a size set by the person: the card fills it; a bigger card shows the whole text */
+.react-flow__node.sized > .node { width: 100%; height: 100%; display: flex; flex-direction: column; }
+/* (no overflow: hidden on the card: its rows give way themselves, and the resize handles and
+   their grab margin sit on and outside its edge) */
+/* the description takes the free space and is the part that is cut; the ports stay at the bottom */
+.react-flow__node.sized .node-desc { -webkit-line-clamp: unset; display: block; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.react-flow__node.sized > .node > .ports { flex: none; margin-top: auto; }
+.react-flow__node.sized > .node > :not(.ports) { flex-shrink: 1; min-height: 0; overflow: hidden; }  /* rows give way */
+.react-flow__node.sized > .node > .ports { flex-shrink: 0; }
+.react-flow__node.sized > .node.gate.decision .diamond-text .node-desc { white-space: normal; }
+.resize-line { border-color: var(--accent) !important; }
+.resize-handle { width: 8px !important; height: 8px !important; background: var(--accent) !important;
+  border: 1px solid var(--on-accent) !important; border-radius: 2px; }
+
+/* ---- a resized node adapts to its size (container queries on the node's own box): the card
+   loses its description, then its details, until it looks like the compact style */
+.react-flow__node.sized { container-type: size; container-name: node; }
+@container node (max-height: 130px) {
+  .node.style-card .node-desc, .node.style-card .node-foot { display: none; }
+}
+@container node (max-height: 105px) {
+  .node.style-card .node-kind, .node.style-card .badge, .node.style-card .port-tag { display: none; }
+  .node.style-card .node-name { margin: 0; }
+}
+@container node (max-width: 190px) {
+  .node .node-kind, .node .port-tag { display: none; }
+  .node .badge:not(.start) { display: none; }
+}
+@container node (max-height: 70px) {  /* compact: the row of badges goes first */
+  .node.style-compact > .node-head + .node-head { display: none; }
+}
+/* avatars: the circle follows the size (the ports sit on its ring); the name stays below */
+.react-flow__node.sized > .node.style-avatar { justify-content: flex-start; }
+.react-flow__node.sized > .node.style-avatar > * { overflow: visible; flex-shrink: 0; }
+.react-flow__node.sized .node.style-avatar .avatar {
+  width: min(calc(100cqw - 16px), calc(100cqh - 36px)); height: auto; aspect-ratio: 1;
+}
+.react-flow__node.sized .node.style-avatar .avatar > svg { width: 45%; height: 45%; }
+.react-flow__node.sized .node.style-avatar .avatar-name { max-width: 100cqw; }
+@container node (max-height: 110px) { .node.style-avatar .avatar-badges { display: none; } }
+
+/* resize handles: an invisible margin around each edge and corner, easier to catch */
+.resize-line::after { content: ""; position: absolute; inset: -10px; }
+.resize-handle::after { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
+.resize-handle { width: 10px !important; height: 10px !important; }

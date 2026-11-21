@@ -56,7 +56,9 @@ approvals, connectors and writes with controlled autonomy.
 - **Node style**: Cards, Compact or Avatars (selector in the toolbar; saved in the browser); each
   agent can have an icon (built-in set or an emoji). While a run goes, running agents show a
   green dot, a "running" badge and a moving bar; stopped ones show a hollow dot.
-- **Canvas**: drag agents and gates, link nodes, arrange, undo/redo; live validation with the same
+- **Canvas**: drag agents and gates, resize the selected node in any style (each style keeps its
+  own size in the flow's layout; a small card shows less, like the compact style; right-click →
+  Automatic size), link nodes, arrange, undo/redo; live validation with the same
   rules as the runtime; only valid flows are saved (copy in `flow.yaml.bak`; delete →
   `flows/.trash/`).
 - **Properties**: prompts (inline or file), tools, artifacts and contracts, model, connectors,

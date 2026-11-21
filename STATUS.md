@@ -62,7 +62,7 @@ record it again after "Sign in" and rebuild the flow with a decision.
 **Next suggested task**: item 1 of the backlog.
 
 ## Current state
-Works and is tested (`pytest`: core 433 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 437 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -302,3 +302,18 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-21 · second machine (account B) · First real flow working end to end (local, not in
   git): a website action node → decision with the previous run → stop messages, built
   with the assistant. Backlog item 8 added: make building flows much easier.
+- 2026-11-21 · second machine (account B) · Resize nodes on the canvas: handles on the selected
+  node (cards, compact, decisions; not avatars), the size kept as `w`/`h` in the layout
+  (also used by Arrange), right-click → Automatic size.
+- 2026-11-21 · second machine (account B) · Control links now attach to the control points (top
+  and bottom, handle id `c`): before, a link from a node with output ports left from its
+  first port (it looked like a data link, and got lost when the node was resized or
+  compact). A resized agent node is never shorter than its ports.
+  The minimum is the title and the ports (card 70 / compact 46 + 18 per port row): the
+  description and badge rows give way, the ports stay at the bottom; only valid sizes are
+  stored. After pulling: restart the editor server (the flow format now has w/h).
+- 2026-11-21 · second machine (account B) · Resizing, round 3: each node style keeps its own
+  size (`w`/`h` for cards, `compact: {w, h}`, `avatar: {w, h}` in the layout); a resized card
+  adapts with container queries (no description below 130 px, compact-like below 105 px);
+  avatars resize too (the circle follows the size, ports stay on the ring); the handles
+  have a bigger invisible grab margin (10–12 px).

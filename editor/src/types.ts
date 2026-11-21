@@ -163,7 +163,9 @@ export interface FlowRaw {
   mcp_servers?: Record<string, McpRaw>;
   autonomy?: Autonomy;
   workspace?: WorkspaceRaw | null;
-  layout?: Record<string, { x: number; y: number }>;
+  // w, h: the size the person gave the node in cards; compact and avatar keep their own
+  layout?: Record<string, { x: number; y: number; w?: number; h?: number;
+    compact?: { w: number; h: number }; avatar?: { w: number; h: number } }>;
 }
 
 export interface Doc {

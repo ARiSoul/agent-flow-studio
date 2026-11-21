@@ -1,7 +1,7 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
 import { useI18n } from "./i18n";
 import { AgentIcon, Icon } from "./icons";
-import type { NodeStyle } from "./model";
+import { agentMinHeight, type NodeStyle } from "./model";
 import type { NodeRun } from "./RunPanel";
 import type { AgentRaw, GateRaw, IOKind, OriginState } from "./types";
 
@@ -118,22 +118,31 @@ function Ports({ ins, outs, compact }: { ins: Port[]; outs: Port[]; compact?: bo
   );
 }
 
+
+/** The resize handles of the selected node; the size goes into the flow's layout. */
+function Resizer({ selected, minWidth = 160, minHeight = 56 }: { selected: boolean; style: NodeStyle;
+  minWidth?: number; minHeight?: number }) {
+  return <NodeResizer isVisible={selected} minWidth={minWidth} minHeight={minHeight} lineClassName="resize-line" handleClassName="resize-handle" />;
+}
+
 export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
   const { t } = useI18n();
   const a = data.agent;
   const servers = [...new Set((a.tools ?? []).map((t) => t.split(".")[0]))];
   const writes = a.writes ?? [];
   const style = data.style ?? "card";
+  const rows = Math.max(data.ins.length + 1, data.outs.length);  // port rows: the minimum height
   const cls = `node agent style-${style}${selected ? " sel" : ""}${data.error ? " err" : ""}${data.run ? ` run-${data.run}` : ""}`;
   if (style === "avatar") {
     return (
       <div className={cls} title={a.description}>
+        <Resizer selected={!!selected} style={style} minWidth={70} minHeight={agentMinHeight(rows, style)} />
         <div className="avatar">
-          <Handle type="target" position={Position.Top} />
+          <Handle type="target" id="c" position={Position.Top} />
           <AgentIcon icon={a.icon} size={34} />
           <RunDot run={data.run} />
           <RingPorts ins={data.ins} outs={data.outs} />
-          <Handle type="source" position={Position.Bottom} />
+          <Handle type="source" id="c" position={Position.Bottom} />
         </div>
         <div className="avatar-name">{data.name}</div>
         <div className="avatar-badges">
@@ -148,7 +157,8 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
   if (style === "compact") {
     return (
       <div className={cls} title={a.description}>
-        <Handle type="target" position={Position.Top} />
+        <Resizer selected={!!selected} style={style} minWidth={140} minHeight={agentMinHeight(rows, style)} />
+        <Handle type="target" id="c" position={Position.Top} />
         <div className="node-head">
           <span className="node-icon"><AgentIcon icon={a.icon} size={18} /></span>
           <span className="node-name">{data.name}</span>
@@ -161,13 +171,15 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
         </div>}
         <Ports ins={data.ins} outs={data.outs} compact />
         <KitBar run={data.run} />
-        <Handle type="source" position={Position.Bottom} />
+        <Handle type="source" id="c" position={Position.Bottom} />
       </div>
     );
   }
   return (
     <div className={cls}>
-      <Handle type="target" position={Position.Top} />
+      {/* never smaller than its ports need: a hidden port would leave its data links loose */}
+      <Resizer selected={!!selected} style={style} minHeight={agentMinHeight(rows, style)} />
+      <Handle type="target" id="c" position={Position.Top} />
       <div className="node-head">
         <span className="node-icon"><AgentIcon icon={a.icon} size={16} /></span>
         <span className="node-kind">{t(a.action ? "node.action" : "node.agent")}</span>
@@ -194,7 +206,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
       </div>
       <Ports ins={data.ins} outs={data.outs} />
       <KitBar run={data.run} />
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" id="c" position={Position.Bottom} />
     </div>
   );
 }
@@ -207,7 +219,8 @@ export function GateNode({ data, selected }: NodeProps<GateNodeT>) {
     const cls = `node gate decision style-${style}${selected ? " sel" : ""}${data.error ? " err" : ""}${data.run ? ` run-${data.run}` : ""}`;
     return (
       <div className={cls} title={g.label}>
-        <Handle type="target" position={Position.Top} />
+        <Resizer selected={!!selected} style={style} minWidth={120} minHeight={70} />
+        <Handle type="target" id="c" position={Position.Top} />
         <svg className="diamond" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <polygon points="50,2 98,50 50,98 2,50" />
         </svg>
@@ -217,7 +230,7 @@ export function GateNode({ data, selected }: NodeProps<GateNodeT>) {
           {style === "card" && <span className="node-desc">{g.label}</span>}
         </div>
         <RunDot run={data.run} />
-        <Handle type="source" position={Position.Bottom} />
+        <Handle type="source" id="c" position={Position.Bottom} />
       </div>
     );
   }
@@ -226,11 +239,12 @@ export function GateNode({ data, selected }: NodeProps<GateNodeT>) {
   if (style === "avatar") {
     return (
       <div className={cls} title={g.label}>
+        <Resizer selected={!!selected} style={style} minWidth={70} minHeight={80} />
         <div className="avatar">
-          <Handle type="target" position={Position.Top} />
+          <Handle type="target" id="c" position={Position.Top} />
           <Icon id={icon} size={30} />
           <RunDot run={data.run} />
-          <Handle type="source" position={Position.Bottom} />
+          <Handle type="source" id="c" position={Position.Bottom} />
         </div>
         <div className="avatar-name">{data.name}</div>
       </div>
@@ -238,7 +252,8 @@ export function GateNode({ data, selected }: NodeProps<GateNodeT>) {
   }
   return (
     <div className={cls} title={style === "compact" ? g.label : undefined}>
-      <Handle type="target" position={Position.Top} />
+      <Resizer selected={!!selected} style={style} />
+      <Handle type="target" id="c" position={Position.Top} />
       <div className="node-head">
         <span className="node-icon"><Icon id={icon} size={16} /></span>
         {style === "compact"
@@ -250,7 +265,7 @@ export function GateNode({ data, selected }: NodeProps<GateNodeT>) {
         <div className="node-name">{data.name}</div>
         <div className="node-desc">{g.label}</div>
       </>}
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" id="c" position={Position.Bottom} />
     </div>
   );
 }
