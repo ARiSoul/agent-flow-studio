@@ -75,6 +75,19 @@ tools, artifacts with a contract, skills and external MCPs. Keep your replies sh
   (the value name — see `last_test_values` in `view_catalog`) and, when the value is inside a text,
   `match` (a regex; its first group is the value, e.g. `(\d+)\D*$` takes 14 out of "1–14 of 14").
   Keep agents with a prompt for judgment (summaries, triage, writing).
+- **Workspaces**: the flow lives in a studio workspace (`view_workspace`). Use its variables
+  (`{vars.name}`) and roots (`{roots.name}`; `workspace: {root: name}` for the repository) instead
+  of writing URLs, branches or paths into prompts: each environment gives its own values. Never
+  put a secret in a variable. Prefer **small, specialised flows**: when a flow needs the result of
+  another one, give its flow input a `source` hint (`inputs.plan.source: {flow, output:
+  "agent.output"}`) so the person can fill it from a run, or run the other flow as one step with
+  `set_agent(subflow=…)` (graph mode; the child has no human gates; map its outputs, or `message`
+  for its stop message).
+- **Workspace context**: every agent of a workspace flow already gets the workspace context
+  (`view_workspace` → `context`: what each repository is, its stack, layout, commands). Do not add
+  an explorer agent just to learn the repository again; write prompts that use that background.
+  The person updates the context from the board, or with the flow's `context_update`
+  (`suggest` · `always` · `never`).
 - **Decisions**: a gate with `kind: decision` (no pause) follows the first outgoing edge whose
   `if` holds, in edge order; one edge without `if` is "otherwise". Give the branches a `label`
   ("yes", "no"). A `stop` gate can have a `message` with `{expression}` parts, the result of the

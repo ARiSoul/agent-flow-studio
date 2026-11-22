@@ -8,15 +8,17 @@ import {
   Background, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow, MarkerType,
   type Connection, type Edge, type EdgeChange, type IsValidConnection, type Node, type NodeChange,
 } from "@xyflow/react";
-import { api, errorText } from "./api";
+import { api, currentWorkspaceName, errorText } from "./api";
 import { Chat } from "./Chat";
 import { Connections } from "./Connections";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
 import { AgentIcon, Icon, ICON_IDS } from "./icons";
 import { LibraryManager, locLabel } from "./LibraryManager";
-import { edgeKey, RunPanel, type RunRequest, type Trace } from "./RunPanel";
+import { CONTEXT_NODE, edgeKey, RunPanel, type RunRequest, type Trace } from "./RunPanel";
 import { Inspector } from "./Inspector";
+import { Board } from "./Board";
+import { useWorkspaceActions, WorkspaceBar } from "./Workspaces";
 import { LANGS, useI18n, type Lang } from "./i18n";
 import { THEMES, useTheme, type Theme } from "./theme";
 import {
@@ -37,11 +39,15 @@ const PALETTE = [
   { kind: "stop", label: "palette.stop", hint: "palette.stopHint", base: "stop" },
   { kind: "decision", label: "palette.decision", hint: "palette.decisionHint", base: "decision" },
   { kind: "action", label: "palette.action", hint: "palette.actionHint", base: "action" },
+  { kind: "subflow", label: "palette.subflow", hint: "palette.subflowHint", base: "subflow" },
 ] as const;
 type PaletteKind = (typeof PALETTE)[number]["kind"];
 const FLOW_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;  // same rule as the server
 const DATA_LINKS_KEY = "afs.dataLinks";
-const LAST_FLOW_KEY = "afs.flow";
+// the open studio workspace (cookie afs_ws): the last open flow is kept per workspace
+const WS_NOW = currentWorkspaceName();
+const LAST_FLOW_KEY = WS_NOW === "studio" ? "afs.flow" : `afs.flow.${WS_NOW}`;
+const VIEW_KEY = "afs.view";
 const HIDDEN_KEY = "afs.hiddenPanels";
 type Panel = "pal" | "insp" | "bottom";
 
@@ -53,6 +59,7 @@ const parseDataEdge = (id: string) => { const [, agent, input] = id.split(":"); 
 function LocationBadge({ loc, isPublic }: { loc?: string; isPublic?: boolean }) {
   const { t } = useI18n();
   if (isPublic) return <span className="badge warn loc" title={t("loc.publicTitle")}>{t("loc.public")}</span>;
+  if (loc === "workspace") return <span className="badge loc" title={t("loc.workspaceTitle")}>{t("loc.workspace")}</span>;
   if (loc && loc !== "local") return <span className="badge loc" title={t("loc.extensionTitle", { name: loc })}>{t("loc.extension", { name: loc })}</span>;
   return <span className="badge loc" title={t("loc.localTitle")}>{t("loc.local")}</span>;
 }
@@ -92,6 +99,13 @@ function Editor() {
   const [tab, setTab] = useState<"problems" | "flow">("problems");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [right, setRightTab] = useState<"props" | "chat" | "run">("props");
+  // the flow editor, or the board of the workspace's flows (a preference of this browser)
+  const [view, setViewState] = useState<"flow" | "board">(() => (localStorage.getItem(VIEW_KEY) === "board" ? "board" : "flow"));
+  const setView = (v: "flow" | "board") => {
+    setViewState(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* storage not available */ }
+    if (v === "flow") setTimeout(() => rf.fitView({ padding: 0.15 }), 80);
+  };
   // panels hidden by the user (this browser): palette, right panel, bottom panel
   const [hidden, setHidden] = useState<Record<Panel, boolean>>(() => {
     try { return { pal: false, insp: false, bottom: false, ...JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "{}") }; }
@@ -135,7 +149,42 @@ function Editor() {
   const kbMenu = useRef(0);  // time of the last keyboard-opened menu (ignore the browser's own event)
 
   const dirty = doc !== null && JSON.stringify(doc) !== saved;
-  const flash = (text: string, bad = false) => { setMsg({ text, bad }); setTimeout(() => setMsg(null), 4000); };
+  const flash = useCallback((text: string, bad = false) => {
+    setMsg({ text, bad }); setTimeout(() => setMsg(null), bad ? 8000 : 5000);
+  }, []);
+  const wsActs = useWorkspaceActions(catalog?.workspace, flash);
+  /** Another environment: the variables and approvals change, the flows stay. */
+  const refreshEnv = () => {
+    api.catalog().then(setCatalog).catch(() => undefined);
+    if (doc && current) api.validate(current, tidy(doc)).then(setVal).catch(() => undefined);
+  };
+  /** "Copy to workspace…" works on the saved files: unsaved changes would not go with it. */
+  const copyFlow = (how: "copy" | "move" = "copy") => {
+    if (!current) return;
+    if (dirty) return flash(t("copy.saveFirst"), true);
+    wsActs.copyTo({ kind: "flow", name: current }, current, how).then(async (r) => {
+      if (!r) return;
+      await refreshFlows();  // first: the flow that left must not be opened again
+      if (how === "move") { setCurrent(null); setDoc(null); }
+    });
+  };
+  const flowCopyMenu = (x: number, y: number) => setMenu({ x, y, title: current ?? "", items: [
+    { label: t("copy.button"), title: t("copy.flowTitle"), onSelect: () => copyFlow("copy") },
+    { label: t("copy.moveButton"), title: t("copy.moveFlowTitle"), onSelect: () => copyFlow("move") },
+  ] });
+  const copyAgent = (id: string, how: "copy" | "move" = "copy") => {
+    if (!current) return;
+    if (dirty) return flash(t("copy.saveFirst"), true);
+    wsActs.copyTo({ kind: "flow_agent", name: current, agent: id }, id, how).then(async (r) => {
+      if (!r) return;
+      api.library().then(setLibrary);
+      if (how === "move") {  // the agent left this flow: load the flow as it is now
+        const f = await api.load(current);
+        const d = ensureLayout({ spec: f.spec, prompts: f.prompts }, nodeStyle);
+        setDoc(d); setSaved(JSON.stringify(d)); setVal(f);
+      }
+    });
+  };
 
   // ---- load
   const refreshFlows = useCallback(() => api.flows().then(setFlows), []);
@@ -288,8 +337,17 @@ function Editor() {
         selected: sel?.kind === "node" && sel.id === id,
         data: { name: id, gate: g, error: errNodes.has(id), run: trace.nodes[id], style: nodeStyle },
       })),
+      // "always" in a workspace: the context update is the last (system) step of every run
+      ...(catalog?.workspace && catalog.workspace.name !== "studio" && s.context_update === "always" ? [(() => {
+        const ps = Object.values(s.layout ?? {});
+        const x = ps.length ? Math.min(...ps.map((p) => p.x)) : 0;
+        const y = ps.length ? Math.max(...ps.map((p) => p.y)) + 220 : 0;
+        return { id: CONTEXT_NODE, type: "context", position: { x, y }, draggable: false, selectable: false,
+          deletable: false, connectable: false,
+          data: { run: trace.nodes[CONTEXT_NODE], label: t("ctx.nodeLabel"), hint: t("ctx.nodeHint"), badge: t("ctx.nodeBadge") } };
+      })()] : []),
     ];
-  }, [doc, sel, errNodes, dims, trace, nodeStyle, val]);
+  }, [doc, sel, errNodes, dims, trace, nodeStyle, val, catalog, t]);
   const edges: Edge[] = useMemo(() => {
     if (!doc) return [];
     const s = doc.spec;
@@ -420,6 +478,12 @@ function Editor() {
       // an action node: a connector action run by the studio (no prompt, no model)
       else if (kind === "action") d.spec.agents[id] = { description: t("default.actionDescription"),
         action: { connector: Object.keys(catalog?.connections ?? {})[0] ?? "", name: "" }, outputs: {} };
+      // a subflow node: another flow of this workspace as one step (graph mode)
+      else if (kind === "subflow") {
+        d.spec.agents[id] = { description: t("default.subflowDescription"),
+          subflow: { flow: flows.find((f) => f.name !== current)?.name ?? "", inputs: {}, outputs: {} }, outputs: {} };
+        if (d.spec.execution !== "graph") flash(t("app.subflowNeedsGraph"));
+      }
       else d.spec.gates = { ...d.spec.gates, [id]: newGate(kind, t(`node.${kind}`)) };
       d.spec.layout = { ...d.spec.layout, [id]: { x: Math.round(p.x), y: Math.round(p.y) } };
     });
@@ -615,6 +679,9 @@ function Editor() {
         { label: t("lib.detach"), onSelect: () => detachFromLibrary(id) },
       ] : []),
       { label: t("lib.save"), onSelect: () => saveToLibrary(id) },
+      { label: t("copy.button"), title: t("copy.agentTitle"), onSelect: () => copyAgent(id) },
+      { label: t("copy.moveButton"), title: t("copy.moveAgentTitle"), disabled: isStart,
+        onSelect: () => copyAgent(id, "move") },
     );
     if (g) items.push(
       { kind: "sep" },
@@ -777,59 +844,82 @@ function Editor() {
   if (!catalog) return <div className="loading">{t("app.loading")}</div>;
   const currentFlow = flows.find((f) => f.name === current);
   const errors = val?.errors ?? [];
+  const header = (
+    <header className="topbar">
+      <WorkspaceBar current={catalog.workspace} beforeSwitch={confirmDiscard} onEnv={refreshEnv} flash={flash} />
+      <button className={view === "board" ? "on" : ""} aria-pressed={view === "board"} title={t("board.toggleTitle")}
+        onClick={() => setView(view === "board" ? "flow" : "board")}>{view === "board" ? t("board.toFlow") : t("board.toBoard")}</button>
+      <span className="sep" />
+      {view !== "board" && <label className="bar-label" htmlFor="flow-select">{t("app.flowLabel")}</label>}
+      <select id="flow-select" value={current ?? ""} onChange={(e) => switchFlow(e.target.value)} hidden={view === "board"}>
+        {flows.map((f) => <option key={f.name} value={f.name}>{f.title} ({f.name}){f.valid ? "" : " ⚠"}
+          {f.public ? ` · ${t("loc.public")}` : f.location && f.location !== "local" && f.location !== "workspace" ? ` · ${f.location}` : ""}</option>)}
+      </select>
+      {currentFlow && <button className="link-btn" title={t("loc.moveTitle")} onClick={moveFlow}>
+        <LocationBadge loc={currentFlow.location} isPublic={currentFlow.public} /></button>}
+      <button onClick={() => createFlow()}>{t("app.new")}</button>
+      <button onClick={() => current && createFlow(current)} disabled={!current}>{t("app.duplicate")}</button>
+      <button disabled={!current} title={t("copy.flowTitle")} aria-haspopup="menu"
+        onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); flowCopyMenu(r.left, r.bottom + 2); }}>
+        {t("copy.short")} ▾</button>
+      <button className="danger" onClick={deleteFlow} disabled={!current}>{t("app.delete")}</button>
+      <span className="sep" />
+      <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">{t("app.undo")}</button>
+      <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">{t("app.redo")}</button>
+      <button onClick={arrange}>{t("app.arrange")}</button>
+      <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
+        title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
+      <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
+      <span className="grow" />
+      {msg && <span className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</span>}
+      <span className={`status ${val?.ok ? "ok" : "bad"}`} onClick={() => setTab("problems")}>
+        {val?.ok ? t("app.valid") : tn("app.problems", errors.length)}
+      </span>
+      <span className="panel-toggles" role="group" aria-label={t("app.panels")}>
+        {([["pal", "panelLeft", "Ctrl+B"], ["bottom", "panelBottom", "Ctrl+J"], ["insp", "panelRight", "Ctrl+Alt+B"]] as const)
+          .map(([p, icon, keys]) => (
+            <button key={p} className={`icon-btn${hidden[p] ? "" : " on"}`} aria-pressed={!hidden[p]}
+              title={`${t(`app.panel.${p}`)} (${keys})`} aria-label={t(`app.panel.${p}`)} onClick={() => togglePanel(p)}>
+              <Icon id={icon} size={16} />
+            </button>))}
+      </span>
+      <select className="lang" value={lang} title={t("app.language")} aria-label={t("app.language")}
+        onChange={(e) => setLang(e.target.value as Lang)}>
+        {Object.entries(LANGS).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
+      </select>
+      <select className="node-style" value={nodeStyle} title={t("app.nodeStyle")} aria-label={t("app.nodeStyle")}
+        onChange={(e) => setNodeStyle(e.target.value as NodeStyle)}>
+        {NODE_STYLES.map((k) => <option key={k} value={k}>{t(`app.nodeStyle.${k}`)}</option>)}
+      </select>
+      <select className="theme" value={theme} title={t("app.theme")} aria-label={t("app.theme")}
+        onChange={(e) => setTheme(e.target.value as Theme)}>
+        {(Object.keys(THEMES) as Theme[]).map((k) => <option key={k} value={k}>{t(`theme.${k}`)}</option>)}
+      </select>
+      <button className="primary" onClick={save} disabled={!dirty} title="Ctrl+S">
+        {dirty ? t("app.save") : t("app.saved")}
+      </button>
+    </header>
+  );
+  if (view === "board" && catalog.workspace) return (
+    <div className="app board-mode">
+      {header}
+      <Board ws={catalog.workspace} flash={flash} onSaved={refreshEnv}
+        side={sizes.insp ?? DEFAULT_SIZES.insp} onSide={resize("insp")}
+        flowsKey={flows.map((f) => f.name).join(",")} onFlowsChanged={refreshFlows} onNewFlow={() => createFlow()}
+        onOpen={async (name) => { if (name === current || (await confirmDiscard())) { setCurrent(name); setView("flow"); } }}
+        onRun={async (name) => {
+          if (name !== current && !(await confirmDiscard())) return;
+          setCurrent(name); setView("flow"); setRight("run");
+        }} />
+    </div>
+  );
   return (
     <div className={`app${hidden.pal ? " hide-pal" : ""}${hidden.insp ? " hide-insp" : ""}${hidden.bottom ? " hide-bottom" : ""}`} style={{
       ...(sizes.pal ? { "--pal-w": `${sizes.pal}px` } : {}),
       ...(sizes.insp ? { "--insp-w": `${sizes.insp}px` } : {}),
       ...(sizes.bottom ? { "--bottom-h": `${sizes.bottom}px` } : {}),
     } as CSSProperties}>
-      <header className="topbar">
-        <span className="brand">{t("app.brand")}</span>
-        <select value={current ?? ""} onChange={(e) => switchFlow(e.target.value)}>
-          {flows.map((f) => <option key={f.name} value={f.name}>{f.title} ({f.name}){f.valid ? "" : " ⚠"}
-            {f.public ? ` · ${t("loc.public")}` : f.location && f.location !== "local" ? ` · ${f.location}` : ""}</option>)}
-        </select>
-        {currentFlow && <button className="link-btn" title={t("loc.moveTitle")} onClick={moveFlow}>
-          <LocationBadge loc={currentFlow.location} isPublic={currentFlow.public} /></button>}
-        <button onClick={() => createFlow()}>{t("app.new")}</button>
-        <button onClick={() => current && createFlow(current)} disabled={!current}>{t("app.duplicate")}</button>
-        <button className="danger" onClick={deleteFlow} disabled={!current}>{t("app.delete")}</button>
-        <span className="sep" />
-        <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">{t("app.undo")}</button>
-        <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">{t("app.redo")}</button>
-        <button onClick={arrange}>{t("app.arrange")}</button>
-        <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
-          title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
-        <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
-        <span className="grow" />
-        {msg && <span className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</span>}
-        <span className={`status ${val?.ok ? "ok" : "bad"}`} onClick={() => setTab("problems")}>
-          {val?.ok ? t("app.valid") : tn("app.problems", errors.length)}
-        </span>
-        <span className="panel-toggles" role="group" aria-label={t("app.panels")}>
-          {([["pal", "panelLeft", "Ctrl+B"], ["bottom", "panelBottom", "Ctrl+J"], ["insp", "panelRight", "Ctrl+Alt+B"]] as const)
-            .map(([p, icon, keys]) => (
-              <button key={p} className={`icon-btn${hidden[p] ? "" : " on"}`} aria-pressed={!hidden[p]}
-                title={`${t(`app.panel.${p}`)} (${keys})`} aria-label={t(`app.panel.${p}`)} onClick={() => togglePanel(p)}>
-                <Icon id={icon} size={16} />
-              </button>))}
-        </span>
-        <select className="lang" value={lang} title={t("app.language")} aria-label={t("app.language")}
-          onChange={(e) => setLang(e.target.value as Lang)}>
-          {Object.entries(LANGS).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
-        </select>
-        <select className="node-style" value={nodeStyle} title={t("app.nodeStyle")} aria-label={t("app.nodeStyle")}
-          onChange={(e) => setNodeStyle(e.target.value as NodeStyle)}>
-          {NODE_STYLES.map((k) => <option key={k} value={k}>{t(`app.nodeStyle.${k}`)}</option>)}
-        </select>
-        <select className="theme" value={theme} title={t("app.theme")} aria-label={t("app.theme")}
-          onChange={(e) => setTheme(e.target.value as Theme)}>
-          {(Object.keys(THEMES) as Theme[]).map((k) => <option key={k} value={k}>{t(`theme.${k}`)}</option>)}
-        </select>
-        <button className="primary" onClick={save} disabled={!dirty} title="Ctrl+S">
-          {dirty ? t("app.save") : t("app.saved")}
-        </button>
-      </header>
+      {header}
 
       <aside className="palette">
         <h2>{t("palette.add")}</h2>
@@ -871,7 +961,7 @@ function Editor() {
             isValidConnection={isValidConnection}
             onNodeContextMenu={(e, n) => {
               e.preventDefault();
-              if (fromKeyboard()) return;
+              if (fromKeyboard() || n.id === CONTEXT_NODE) return;
               const p = menuAt(e, e.currentTarget as Element); nodeMenu(n.id, p.x, p.y);
             }}
             onEdgeContextMenu={(e, ed) => {
@@ -905,6 +995,7 @@ function Editor() {
         </div>
         {doc && <div className="right-body" hidden={right !== "props"}>
           <Inspector doc={doc} sel={sel} catalog={catalog} val={val} update={update} select={setSel} remove={remove}
+            flows={flows.map((f) => f.name)}
             library={{ state: libState, update: updateFromLibrary, detach: detachFromLibrary, save: saveToLibrary,
               has: (lib) => library.some((l) => l.id === lib) }}
             testAgent={(id) => {

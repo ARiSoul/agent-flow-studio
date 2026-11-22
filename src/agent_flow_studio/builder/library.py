@@ -57,7 +57,10 @@ def local_dir() -> Path:
 
 
 def agent_dirs() -> list[tuple[str, Path]]:
-    return [("core", CORE_DIR), *extension_agent_dirs(), ("local", local_dir())]
+    from .. import workspaces
+    ws = workspaces.current()
+    own = [] if ws.studio else [("workspace", ws.agents_dir)]  # the workspace's own first
+    return [*own, ("core", CORE_DIR), *extension_agent_dirs(), ("local", local_dir())]
 
 
 def _source(location: str) -> str:
@@ -70,6 +73,12 @@ def save_dir(location: str) -> Path:
     built-in library in the package (public: git publishes it)."""
     if location == "local":
         return local_dir()
+    if location == "workspace":
+        from .. import workspaces
+        ws = workspaces.current()
+        if ws.studio:
+            raise LibraryError("no workspace is open")
+        return ws.agents_dir
     if location == PUBLIC:
         return CORE_DIR
     if location not in LOADED.names:
@@ -152,6 +161,8 @@ def list_agents() -> dict[str, LibraryAgent]:
             continue
         for d in sorted(p for p in base.iterdir() if (p / "agent.yaml").is_file()):
             a = _load_one(source, d)
+            if a.id in out and out[a.id].source == "workspace":
+                continue  # a workspace's agent wins over a studio one with the same id
             if a.id in out:
                 raise LibraryError(f"library agent {a.id!r} exists twice ({out[a.id].source}, "
                                    f"{source})")
@@ -254,6 +265,8 @@ def check(agent_id: str, title: str, raw: dict[str, Any], prompt: str,
         raise LibraryError("prompt too long")
     existing = list_agents().get(agent_id)
     save_dir(location)  # a known location
+    if existing and existing.source != _source(location) and location == "workspace":
+        existing = None  # a workspace's own agent may take the id of a studio one (it wins there)
     if existing and existing.source != _source(location):
         where = "public (built-in)" if existing.source == "core" else existing.source
         raise LibraryError(f"{agent_id!r} is a {where} library agent; choose another id")

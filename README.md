@@ -120,6 +120,57 @@ recorded as its address (`goto`), and pages passed through on the way are droppe
 does not depend on the language of the texts or on menus that change with the window size; the
 draft also keeps the window size and the browser language.
 
+## Workspaces, variables and environments
+A **workspace** groups the flows, agents and connectors of one project (usually one repository,
+sometimes several folders), like a Postman workspace. Choose it in the top bar (**⋯** → New / Open
+/ Duplicate / Forget); without one you work in the studio's own space, as before.
+- **Where it lives** (chosen when you create it): *in a repository* — `<repo>/.agent-flow/`, so it
+  travels with the repository — or *in the studio* — `workspaces/<name>/` (ignored by git). Both hold
+  `workspace.yaml`, `flows/`, `agents/` and `connections.yaml` (definitions only). This machine
+  remembers the open workspaces in `~/.agent-flow-studio/workspaces.json`.
+- **Variables and environments**: `workspace.yaml` has `roots` (folders), `vars` and
+  `environments` (`dev`, `staging`, `prod`… each with a `kind` and its own `vars`, which replace the
+  workspace's). Flows use `{vars.name}` and `{roots.name}` in the task, prompts, parameters and
+  messages, `vars.name` in conditions, and `workspace: {root: app}` for the folder the agents work
+  in. The environment chosen in the top bar decides the values and the approvals (`approve_prod`
+  asks a person in a `prod` environment). Variables are never secrets.
+- **What a flow sees**: the workspace's own flows, library agents and connectors first, then the
+  studio-wide ones. A workspace connector keeps its secret in the keyring under its workspace, so
+  two workspaces can use different credentials under the same name. Runs, chats and `previous.*`
+  are kept per workspace (`runs/@<workspace>/`).
+- **Board**: the **Board** button shows the workspace's flows as cards (inputs, outputs, last run),
+  linked by where an input usually comes from, by subflows and by the values passed in runs; the
+  side panel edits roots, variables and environments.
+- **Flows that feed each other**: a flow input can say where its value usually comes from
+  (`inputs.plan.source: {flow: feature-analysis, output: planner.plan}`); in the Run panel,
+  **Fill from a run…** takes the value from a finished run of that flow (typing it stays possible),
+  and the run records where it came from (`io/_handoff.json`).
+- **Subflows**: a node with `subflow: {flow, inputs, outputs}` runs another flow of the workspace
+  as one step (graph mode, no human gates inside, at most 3 levels, no cycles); its events appear
+  indented in the log and its mapped outputs (or its stop `message`) become the node's outputs.
+- **Workspace context**: `context.md` in the workspace folder says what each root is (stack,
+  layout, commands, conventions, key files) plus your own notes; every agent of the workspace's
+  flows gets it in its prompt (`use_context`), so flows do not explore the same repository again.
+  The **context keeper** (a system agent with read-only tools on one root) writes it: **Explore**
+  per root on the board (offered when you add a root; **Browse…** picks the folder), **Update
+  workspace context** (what changed since the last commit, plus what a run did), and after each
+  run per flow `context_update`: `suggest` (a button in the Run panel, the default), `always` (a
+  last system step, drawn on the canvas) or `never`. The studio stores the sections; the model
+  never writes a file. `context.json` keeps the commit of each update.
+- **Copy and duplicate**: **Copy to…** on a flow, an agent of a flow, a library agent, a connector
+  or selected variables/environments copies it to another workspace (or duplicates it in the same
+  one), after a check of what it uses that the target lacks (variables, roots, connectors, library
+  agents, flows) — copy it too, use the target's, or leave it. Secrets are never copied in files:
+  *Use the same secrets on this machine* copies the keyring entry without showing it.
+  **Move to workspace…** does the same copy, then takes the original out (a flow or library
+  agent to `.trash`, a connector with its keyring secret, variables/environments, an agent out
+  of its flow with its links); shared items (built-in or extension agents) and the start agent
+  are only copied.
+- CLI: `agent-flow-studio … --workspace <name|folder> --env <env>`;
+  `agent-flow-studio-flows --workspace <name> list | validate <flow>` and
+  `agent-flow-studio-flows workspaces`, `agent-flow-studio-flows --workspace <name> context
+  [--explore | --update] [--root x]`.
+
 ## Flow templates
 **New** in the editor (or `agent-flow-studio-flows new`) can start from a template; you fill in its
 parameters (repository folder, base branch, connector…):

@@ -7,7 +7,11 @@ _RUN_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 
 
 def safe_artifact_path(runs_dir: Path, run_id: str, name: str) -> Path:
-    """Path of an artifact in runs/<id>/, never outside that folder."""
+    """Path of an artifact in runs/<id>/, never outside that folder. The runs of a studio
+    workspace live in runs/@<workspace>/<id>/ (a run id never has "@")."""
+    from .. import workspaces
+
+    runs_dir = workspaces.scoped(runs_dir)
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError("Invalid run id.")
     if not _NAME_RE.fullmatch(name) or ".." in name:

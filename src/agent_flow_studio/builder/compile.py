@@ -26,7 +26,7 @@ from ..connections import store as connection_store
 from ..connections.actions import describe_action
 from ..extensions import extension_flow_dirs
 from ..hooks import DELEGATION_TOOL, DELEGATION_TOOLS, make_guard, make_hooks
-from ..messages import MsgError, msg
+from ..messages import MsgError, msg, reason
 from ..policy import RUN_ACTION_TOOL, WritePolicy
 from ..tools import artifacts
 from ..tools import git as git_tool
@@ -111,6 +111,10 @@ def flow_locations(base: Path | None = None) -> list[tuple[str, Path]]:
     """Where flows live: "local" (flows/, the base) and each loaded extension's `flows/` folder
     (extensions/<name>/flows/, outside the public repo; an extension can be its own private repo).
     Flow names are unique across all of them."""
+    from .. import workspaces
+    ws = workspaces.current()
+    if not ws.studio:  # a workspace: only its own flows
+        return [("workspace", ws.flows_dir)]
     return [("local", base or flows_dir()), *extension_flow_dirs()]
 
 
@@ -135,10 +139,16 @@ def load_spec(name_or_path: str | Path, base: Path | None = None) -> tuple[FlowS
         path = (found[1] if found else (base or flows_dir()) / str(name_or_path)) / "flow.yaml"
     if not path.exists():
         raise FlowError(f"flow not found: {path}")
+    from .. import workspaces
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data, unknown = workspaces.substitute(data)  # {vars.x} / {roots.x} of the workspace
+        if unknown:
+            raise FlowError(workspaces.unknown_error(unknown).msgs[0])
         spec = FlowSpec.model_validate(data)
     except (yaml.YAMLError, ValueError) as e:
+        if isinstance(e, FlowError):
+            raise
         raise FlowError(f"{path}: {e}") from e
     return spec, path.parent
 
@@ -154,7 +164,11 @@ def _read_prompt(flow_dir: Path, inline: str | None, file: str | None, what: str
     if not p.exists():
         raise FlowError(msg("compile.prompt_missing", "{what}: prompt_file does not exist ({file})",
                             what=what, file=file))
-    return p.read_text(encoding="utf-8")
+    from .. import workspaces
+    text, unknown = workspaces.substitute_text(p.read_text(encoding="utf-8"))
+    if unknown:
+        raise FlowError(workspaces.unknown_error(unknown).msgs[0])
+    return text
 
 
 def _sdk_tool(spec: FlowSpec, tool_id: str) -> str:
@@ -446,6 +460,25 @@ def action_tools(a: AgentSpec, conns: dict[str, Any]) -> list[str]:
     return [RUN_ACTION_TOOL] if any(conns[c].actions for c in names if c in conns) else []
 
 
+def _context_section(spec: FlowSpec) -> str:
+    """The workspace context (context.md of the studio workspace) as read-only background."""
+    if not spec.use_context:
+        return ""
+    from .. import context, workspaces
+    ws = workspaces.current()
+    if ws.studio:
+        return ""
+    try:
+        text = context.context_text(ws)
+    except (OSError, ValueError):
+        return ""
+    if not text:
+        return ""
+    return ("\n\n## Workspace context\nBackground about the folders and repositories of this "
+            "workspace, kept by the studio. Use it to find your way; check the files before you "
+            "rely on a detail, and do not explore the whole repository again.\n\n" + text)
+
+
 def _connections_section(a: AgentSpec, conns: dict[str, Any]) -> str:
     out = ""
     if a.connections:
@@ -493,7 +526,16 @@ def _instructions_section(a: AgentSpec, conns: dict[str, Any]) -> str:
 def _workspace_dir(spec: FlowSpec, check: bool) -> Path | None:
     if spec.workspace is None:
         return None
-    p = Path(spec.workspace.path).expanduser().resolve()
+    from .. import workspaces
+    if spec.workspace.root is not None:  # a root (folder) of the studio workspace
+        roots = workspaces.resolved()[1]
+        if spec.workspace.root not in roots:
+            raise FlowError(msg("compile.workspace_root", "workspace root {root} is not a root of "
+                                "the workspace {workspace}", root=repr(spec.workspace.root),
+                                workspace=workspaces.current().name))
+        p = Path(roots[spec.workspace.root])
+    else:
+        p = Path(spec.workspace.path or ".").expanduser().resolve()
     if check and not p.is_dir():
         raise FlowError(msg("compile.workspace_missing", "workspace does not exist: {path}", path=p))
     return p
@@ -621,8 +663,10 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
     agent_tools: dict[str, list[str]] = {}
     conns = _connections(spec)
     ws = _workspace_dir(spec, check=configure_artifacts)
+    _check_subflows(spec, flow_dir)
+    ctx = _context_section(spec)
     for name, a in spec.agents.items():
-        if a.action is not None:  # an action node: the graph engine runs it (no subagent)
+        if a.runs_itself:  # an action or subflow node: the graph engine runs it (no subagent)
             continue
         body = _read_prompt(flow_dir, a.prompt, a.prompt_file, f"agent {name}")
         tools = [_sdk_tool(spec, t) for t in a.tools]
@@ -631,7 +675,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
         agents[name] = AgentDefinition(
             description=a.description,
             prompt=(body + _io_section(spec, name) + _artifacts_section(a)
-                    + _connections_section(a, conns)
+                    + _connections_section(a, conns) + ctx
                     + _write_section(spec, a, ws) + SUBAGENT_RULES),
             tools=tools,
             model=a.model,
@@ -665,7 +709,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
         _configure_run(spec, ws)
     policy = _write_policy(spec, ws, conns)
     options = ClaudeAgentOptions(
-        system_prompt=orch.rstrip() + "\n\n" + flow_section(spec),
+        system_prompt=orch.rstrip() + ctx + "\n\n" + flow_section(spec),
         tools=[DELEGATION_TOOL, *natives],
         cwd=str(ws) if ws and natives else None,
         mcp_servers=servers,
@@ -689,14 +733,93 @@ def load_flow(name: str, *, resume: str | None = None, base: Path | None = None)
 
 
 # --- shared per-run state ----------------------------------------------------------------------
-def _configure_run(spec: FlowSpec, ws: Path | None) -> None:
-    """Global state of the in-process tools for the active flow (one run at a time)."""
+def _artifact_names(spec: FlowSpec) -> tuple[set[str], dict[str, Any]]:
     names = {w.name for a in spec.agents.values() for w in a.writes}
     contracts = {w.name: CONTRACTS[w.contract] for a in spec.agents.values()
                  for w in a.writes if w.contract}
+    return names, contracts
+
+
+MAX_SUBFLOW_DEPTH = 3
+
+
+def _check_subflows(spec: FlowSpec, flow_dir: Path, chain: tuple[str, ...] = ()) -> None:
+    """Subflow nodes: the child flow exists in the same studio workspace, runs in graph mode, has
+    no human gates, gets only inputs it declares (and all it requires), and has the mapped
+    outputs; no cycles (A runs B runs A) and at most 3 levels."""
+    subs = {n: a.subflow for n, a in spec.agents.items() if a.subflow is not None}
+    if not subs:
+        return
+    chain = (*chain, spec.name)
+    errors: list[str] = []
+    for n, sub in subs.items():
+        if sub.flow in chain:
+            errors.append(msg("compile.subflow_cycle", "agent {agent}: subflow cycle {path}",
+                              agent=repr(n), path=" → ".join([*chain, sub.flow])))
+            continue
+        if len(chain) >= MAX_SUBFLOW_DEPTH:
+            errors.append(msg("compile.subflow_depth", "agent {agent}: more than {n} levels of "
+                              "subflows ({path})", agent=repr(n), n=MAX_SUBFLOW_DEPTH,
+                              path=" → ".join([*chain, sub.flow])))
+            continue
+        found = find_flow(sub.flow, flow_dir.parent) or find_flow(sub.flow)
+        if found is None:
+            errors.append(msg("compile.subflow_missing", "agent {agent}: flow {flow} does not "
+                              "exist in this workspace", agent=repr(n), flow=repr(sub.flow)))
+            continue
+        try:
+            child, child_dir = load_spec(found[1] / "flow.yaml")
+        except FlowError as e:
+            errors.append(msg("compile.subflow_invalid", "agent {agent}: flow {flow} is not "
+                              "valid: {reason}", agent=repr(n), flow=repr(sub.flow),
+                              reason=reason(e)))
+            continue
+        if child.execution != "graph":
+            errors.append(msg("compile.subflow_graph", "agent {agent}: flow {flow} must run with "
+                              "execution: graph to be a subflow", agent=repr(n),
+                              flow=repr(sub.flow)))
+        human = sorted(g for g, x in child.gates.items() if x.kind == "human")
+        if human:
+            errors.append(msg("compile.subflow_human", "agent {agent}: flow {flow} has human "
+                              "gates ({gates}); a subflow cannot pause (approve in this flow)",
+                              agent=repr(n), flow=repr(sub.flow), gates=", ".join(human)))
+        unknown = sorted(set(sub.inputs) - set(child.inputs))
+        lacking = sorted(k for k, t in child.inputs.items()
+                         if t.required and t.default is None and not t.show_if
+                         and k not in sub.inputs)
+        if unknown or lacking:
+            errors.append(msg("compile.subflow_inputs", "agent {agent}: inputs of flow {flow}: "
+                              "unknown {unknown}; missing {lacking}", agent=repr(n),
+                              flow=repr(sub.flow), unknown=", ".join(unknown) or "—",
+                              lacking=", ".join(lacking) or "—"))
+        for o, m in sub.outputs.items():
+            if m.from_ == "message":
+                continue
+            ca, co = m.from_.split(".", 1)
+            if ca not in child.agents or co not in child.agents[ca].outputs:
+                errors.append(msg("compile.subflow_output", "agent {agent}: output {output}: "
+                                  "flow {flow} has no output {source}", agent=repr(n),
+                                  output=repr(o), flow=repr(sub.flow), source=m.from_))
+        if not errors:
+            try:
+                _check_subflows(child, child_dir, chain)
+            except FlowError as e:
+                errors += e.msgs
+    if errors:
+        raise FlowError(*errors)
+
+
+def _configure_run(spec: FlowSpec, ws: Path | None) -> None:
+    """Global state of the in-process tools for the active flow (one run at a time)."""
+    names, contracts = _artifact_names(spec)
     artifacts.configure(names, contracts)
     git_tool.configure(ws)
     io_tool.configure(spec, ws)
+
+
+def _env_kind() -> str | None:
+    from .. import workspaces
+    return workspaces.env_kind()
 
 
 def _write_policy(spec: FlowSpec, ws: Path | None, conns: dict[str, Any]) -> WritePolicy:
@@ -704,7 +827,8 @@ def _write_policy(spec: FlowSpec, ws: Path | None, conns: dict[str, Any]) -> Wri
         flow_autonomy=spec.autonomy,
         agent_autonomy={n: a.autonomy for n, a in spec.agents.items() if a.autonomy},
         workspace=ws,
-        workspace_env=spec.workspace.environment if spec.workspace else "dev",
+        # the studio workspace's environment decides (dev/staging/prod), else the flow's
+        workspace_env=_env_kind() or (spec.workspace.environment if spec.workspace else "dev"),
         protected_branches=list(spec.workspace.protected_branches) if spec.workspace else [],
         write_connections={n: set(a.write_connections) for n, a in spec.agents.items()},
         read_connections={n: set(a.connections) for n, a in spec.agents.items()},
@@ -748,7 +872,8 @@ def compile_agent(spec: FlowSpec, flow_dir: Path, agent: str, *,
 
     model = a.model if a.model and a.model != "inherit" else (spec.model or settings.model)
     prompt = (body.rstrip() + _io_section(spec, agent) + _artifacts_section(a)
-              + _connections_section(a, conns) + _write_section(spec, a, ws) + AGENT_RULES)
+              + _connections_section(a, conns) + _context_section(spec)
+              + _write_section(spec, a, ws) + AGENT_RULES)
     return ClaudeAgentOptions(
         system_prompt=prompt,
         tools=natives,  # [] = no built-in tools at all
@@ -789,14 +914,26 @@ class CompiledGraph:
         have used them while this one was paused)."""
         _configure_run(self.spec, self.workspace)
 
+    def register(self, run_id: str) -> None:
+        """A nested run (subflow): the io and artifact tools know this flow for `run_id` only,
+        while the parent flow stays the active one."""
+        artifacts.configure_run(run_id, *_artifact_names(self.spec))
+        io_tool.configure_run(run_id, self.spec, self.workspace)
+
+    @staticmethod
+    def release(run_id: str) -> None:
+        artifacts.release_run(run_id)
+        io_tool.release_run(run_id)
+
 
 def compile_graph(spec: FlowSpec, flow_dir: Path, *, resolve_secrets: bool = True,
                   configure_artifacts: bool = True) -> CompiledGraph:
     conns = _connections(spec)
+    _check_subflows(spec, flow_dir)
     ws = _workspace_dir(spec, check=configure_artifacts)
     policy = _write_policy(spec, ws, conns)
     compiled = CompiledGraph(spec, flow_dir, policy, ws)
-    for name in (n for n, a in spec.agents.items() if a.action is None):  # action nodes: no session
+    for name in (n for n, a in spec.agents.items() if not a.runs_itself):  # no session
         compiled.agents[name] = compile_agent(spec, flow_dir, name, policy=policy, conns=conns,
                                               workspace=ws, resolve_secrets=resolve_secrets)
     if configure_artifacts:

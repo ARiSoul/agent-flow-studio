@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 IO_DIR = "io"
 INPUTS_FILE = "_inputs.json"
 GATES_FILE = "_gates.json"
+HANDOFF_FILE = "_handoff.json"  # where flow inputs came from: input -> {flow, run, agent, output}
 GIVEN_SUFFIX = ".given.json"  # free inputs given to an agent (agent test mode)
 OUTPUTS_DIR = "outputs"  # runs/<id>/outputs/: text and markdown outputs as files
 PREVIOUS_DIR = ".previous"  # runs/.previous/<flow>.json: outputs of the last finished run
@@ -41,9 +42,26 @@ _spec: FlowSpec | None = None
 _workspace: Path | None = None
 
 
+# nested runs (subflows): their flow by run id, while the parent flow stays the active one
+_by_run: dict[str, tuple[FlowSpec, Path | None]] = {}
+
+
 def configure(spec: FlowSpec | None, workspace: Path | None) -> None:
     global _spec, _workspace
     _spec, _workspace = spec, workspace
+
+
+def configure_run(run_id: str, spec: FlowSpec, workspace: Path | None) -> None:
+    _by_run[run_id] = (spec, workspace)
+
+
+def release_run(run_id: str) -> None:
+    _by_run.pop(run_id, None)
+
+
+def spec_for(run_id: str | None) -> FlowSpec | None:
+    """The flow of a run: a nested run's own, else the active flow."""
+    return _by_run[run_id][0] if run_id in _by_run else _spec
 
 
 def run_dir(run_id: str) -> Path:
@@ -80,6 +98,18 @@ def save_flow_inputs(run_id: str, values: dict[str, Any]) -> None:
 
 def flow_inputs(run_id: str) -> dict[str, Any]:
     return _read_json(_io_path(run_id, INPUTS_FILE))
+
+
+def save_handoff(run_id: str, data: dict[str, dict[str, str]]) -> None:
+    p = _io_path(run_id, HANDOFF_FILE)
+    if data:
+        _write_json(p, data)
+    elif p.exists():
+        p.unlink()  # a new run with the same id, typed by hand
+
+
+def handoff(run_id: str) -> dict[str, Any]:
+    return _read_json(_io_path(run_id, HANDOFF_FILE))
 
 
 def outputs(run_id: str, agent: str) -> dict[str, Any]:
@@ -132,7 +162,11 @@ def output_file(run_id: str, agent: str, name: str, t: Any, value: Any) -> str |
 
 
 def _previous_file(flow: str) -> Path:
-    d = settings.runs_dir / PREVIOUS_DIR
+    from .. import workspaces
+    ws = workspaces.current()
+    # the studio keeps runs/.previous/<flow>.json; a workspace has its own folder
+    d = workspaces.scoped(settings.runs_dir / PREVIOUS_DIR)
+    del ws
     p = (d / f"{flow}.json").resolve()
     if d.resolve() not in p.parents:
         raise ValueError("Path outside the runs folder.")
@@ -165,7 +199,10 @@ def save_previous(flow: str, run_id: str) -> None:
 def scope(spec: FlowSpec, run_id: str) -> dict[str, Any]:
     """Everything an `if` expression can see: input.*, <agent>.*, <gate>.decision/comment and
     previous.<agent>.* (the last finished run)."""
-    out: dict[str, Any] = {"input": flow_inputs(run_id), "previous": previous_outputs(spec.name)}
+    from .. import workspaces
+    values, roots, _ = workspaces.resolved()
+    out: dict[str, Any] = {"input": flow_inputs(run_id), "previous": previous_outputs(spec.name),
+                           "vars": values, "roots": roots}
     for a in spec.agents:
         out[a] = outputs(run_id, a)
     gates = _read_json(_io_path(run_id, GATES_FILE))
@@ -275,17 +312,18 @@ def read_run_file(run_id: str, rel: str) -> str:
 
 
 # --- MCP tools ---------------------------------------------------------------------------------
-def _need_spec() -> FlowSpec:
-    if _spec is None:
+def _need_spec(run_id: str | None = None) -> FlowSpec:
+    spec = spec_for(run_id)
+    if spec is None:
         raise ValueError("no active flow")
-    return _spec
+    return spec
 
 
 @tool("get_inputs", "Returns your inputs for this run (values resolved from the flow inputs and "
       "from the outputs of earlier agents). Call it first.", {"run_id": str, "agent": str})
 async def get_inputs(args):
     try:
-        spec = _need_spec()
+        spec = _need_spec(args.get("run_id"))
         if args["agent"] not in spec.agents:
             return err(f"agent {args['agent']!r} is not in this flow")
         values, missing = resolve_inputs(spec, args["run_id"], args["agent"])
@@ -304,8 +342,9 @@ async def get_inputs(args):
           "value": {}}, "required": ["run_id", "agent", "name", "value"]})
 async def set_output(args):
     try:
-        clean = store_output(_need_spec(), args["run_id"], args["agent"], args["name"],
-                             args.get("value"), _workspace)
+        rid = args["run_id"]
+        clean = store_output(_need_spec(rid), rid, args["agent"], args["name"],
+                             args.get("value"), _by_run[rid][1] if rid in _by_run else _workspace)
     except ValueError as e:
         return err(f"output {args.get('name')!r} not saved: {e}. Fix the value and try again.")
     shown = clean if len(json.dumps(clean, ensure_ascii=False)) < 300 else "(saved)"

@@ -42,3 +42,6 @@ assistant_commands.yaml
 
 # Words that must not go to the public repo (one per line; checked when a public flow is saved)
 private_terms.txt
+
+# workspaces kept in the studio (machine-local, may name private systems)
+/workspaces/

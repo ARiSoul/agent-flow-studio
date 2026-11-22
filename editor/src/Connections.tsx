@@ -4,6 +4,7 @@ import { useDialog } from "./Dialog";
 import { LANGS, useI18n } from "./i18n";
 import { localizeServer, type ServerMsg } from "./i18n/server";
 import { locLabel } from "./LibraryManager";
+import { useWorkspaceActions } from "./Workspaces";
 
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
 const SLUG = /^[a-z][a-z0-9_]{0,39}$/;
@@ -128,6 +129,7 @@ export function Connections({ onClose }: { onClose: () => void }) {
   const [secret, setSecret] = useState("");
   const [envVar, setEnvVar] = useState("");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const acts = useWorkspaceActions(undefined, (text, bad) => setMsg({ text, bad }));
   const [busy, setBusy] = useState(false);
   const [rec, setRec] = useState<Recorded | null>(null);
   const [fixed, setFixed] = useState<Set<string>>(new Set());  // typed fields kept as fixed values
@@ -683,6 +685,10 @@ export function Connections({ onClose }: { onClose: () => void }) {
               <div className="row actions">
                 <button className="primary" disabled={busy} onClick={save}>{t("conn.save")}</button>
                 <button disabled={busy || isNew} onClick={test}>{t("conn.test")}</button>
+                {!isNew && sel && <button disabled={busy} title={t("copy.connectorTitle")}
+                  onClick={() => acts.copyTo({ kind: "connector", name: sel }, sel)}>{t("copy.button")}</button>}
+                {!isNew && sel && <button disabled={busy} title={t("copy.moveConnectorTitle")}
+                  onClick={() => acts.copyTo({ kind: "connector", name: sel }, sel, "move").then((r) => r && reload())}>{t("copy.moveButton")}</button>}
                 {!isNew && <button className="danger" disabled={busy} onClick={remove}>{t("conn.delete")}</button>}
                 {msg && <span className={`msg${msg.bad ? " bad" : ""}`} title={msg.text}>{msg.text}</span>}
               </div>

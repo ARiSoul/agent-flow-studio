@@ -182,7 +182,8 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
       <Handle type="target" id="c" position={Position.Top} />
       <div className="node-head">
         <span className="node-icon"><AgentIcon icon={a.icon} size={16} /></span>
-        <span className="node-kind">{t(a.action ? "node.action" : "node.agent")}</span>
+        <span className="node-kind">{t(a.action ? "node.action" : a.subflow ? "node.subflow" : "node.agent")}</span>
+        {a.subflow && <span className="badge sub" title={t("node.subflowTitle")}>↳ {a.subflow.flow || "—"}</span>}
         <RunningBadge run={data.run} />
         <RunDot run={data.run} />
         {data.start && <span className="badge start">{t("node.start")}</span>}
@@ -270,4 +271,18 @@ export function GateNode({ data, selected }: NodeProps<GateNodeT>) {
   );
 }
 
-export const nodeTypes = { agent: AgentNode, gate: GateNode };
+/** The system step after a run that updates the workspace context (not part of the flow). */
+export function ContextNode({ data }: NodeProps<Node<{ run?: string; label: string; hint: string; badge: string }>>) {
+  return (
+    <div className={`node system${data.run ? ` run-${data.run}` : ""}`} title={data.hint}>
+      <Handle type="target" id="c" position={Position.Top} />
+      <div className="node-head">
+        <span className="node-kind">⟳ {data.label}</span>
+        <span className="badge">{data.badge}</span>
+      </div>
+      <div className="node-desc">{data.hint}</div>
+    </div>
+  );
+}
+
+export const nodeTypes = { agent: AgentNode, gate: GateNode, context: ContextNode };

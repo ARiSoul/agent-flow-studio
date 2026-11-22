@@ -22,12 +22,14 @@ from typing import Any
 
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock, query
 
+from . import workspaces
 from .builder import FlowError, load_flow, load_spec
 from .builder.compile import load_graph
 from .builder.spec import LEGACY_INPUT, FlowSpec
 from .engine import EngineMode, GraphEngine, Outcome, QueryFn, RouteFn
 from .extensions import LOADED
 from .hooks import DELEGATION_TOOLS
+from .messages import MsgError
 from .orchestrator import run_flow
 from .tools import io as io_tool
 
@@ -53,6 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a flow input (repeat for lists; @path sends a file)")
     p.add_argument("--run-id", help="run id (folder runs/<id>/); default <flow>-<date>-<time>")
     p.add_argument("--resume", help="orchestrator flows: session_id to resume a run")
+    p.add_argument("--workspace", help="studio workspace: a registered name, or the folder of a "
+                                       "workspace or of its repository (default: the studio)")
+    p.add_argument("--env", help="environment of the workspace (default: its default one)")
     return p
 
 
@@ -252,7 +257,12 @@ def main(argv: Sequence[str] | None = None, *, query_fn: QueryFn = query,
          route_fn: RouteFn | None = None, out: Out = print) -> None:
     args = build_parser().parse_args(argv)
     try:
-        code = asyncio.run(_main(args, query_fn, route_fn, out))
+        ws = workspaces.from_cli(args.workspace, args.env)
+    except MsgError as e:
+        raise SystemExit(str(e)) from e
+    try:
+        with workspaces.using(ws, args.env):  # flows, agents, connectors, vars of the workspace
+            code = asyncio.run(_main(args, query_fn, route_fn, out))
     except FlowError as e:
         raise SystemExit(f"Invalid flow: {e}") from e
     if code:

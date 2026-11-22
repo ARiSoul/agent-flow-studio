@@ -32,7 +32,7 @@ import re
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from claude_agent_sdk import (
@@ -47,8 +47,17 @@ from claude_agent_sdk import (
 )
 
 from .builder import expr
-from .builder.compile import DISALLOWED, CompiledGraph, decide_branch, gate_message
+from .builder.compile import (
+    DISALLOWED,
+    CompiledGraph,
+    compile_graph,
+    decide_branch,
+    gate_message,
+    load_spec,
+)
 from .builder.graph import back_edges, forward_reach
+from .builder.spec import LEGACY_INPUT
+from .builder.types import check_value
 from .config import settings
 from .connections import actions as conn_actions
 from .connections.client import ConnectorError
@@ -171,6 +180,19 @@ def _show(v: Any) -> tuple[str, bool]:
 
 
 @dataclass
+class _SubHost:
+    """The host of a nested run (subflow): its cost goes to the parent when it ends."""
+    cost: float = 0.0
+    session_id: str | None = None
+    done_agents: set[str] = field(default_factory=set)
+
+
+def _sub_run_id(parent: str, node: str) -> str:
+    """runs/<parent>--<node>: the child run's own folder (run ids are at most 40 characters)."""
+    return f"{parent[:24]}--{node[:14]}"
+
+
+@dataclass
 class _Result:
     ok: bool
     message: str = ""
@@ -192,7 +214,8 @@ class GraphEngine:
 
     def __init__(self, compiled: CompiledGraph, run_id: str, *, host: Host, emit: Emit,
                  query_fn: QueryFn = query, route_fn: RouteFn | None = None,
-                 mode: EngineMode = "full", target: str | None = None, instruction: str = ""):
+                 mode: EngineMode = "full", target: str | None = None, instruction: str = "",
+                 nested: bool = False):
         spec = compiled.spec
         if mode in ("until", "agent") and target not in spec.agents:
             raise ValueError(f"agent {target!r} does not exist in the flow")
@@ -222,6 +245,7 @@ class GraphEngine:
         self.step_budget: int | None = None
         self.until_set = self._leads_to(target) if mode == "until" and target else set()
         self.started = False
+        self.nested = nested  # a subflow: its flow is registered by run id, not made active
 
     # --- public
     def set_mode(self, mode: EngineMode) -> None:
@@ -229,7 +253,8 @@ class GraphEngine:
         self.mode = mode
 
     async def run(self) -> Outcome:
-        self.compiled.activate()
+        if not self.nested:
+            self.compiled.activate()
         self.step_budget = 1 if self.mode == "step" else None
         if not self.started:
             self.started = True
@@ -465,6 +490,8 @@ class GraphEngine:
         self.emit({"type": "delegate", "agent": name, "task": a.description[:120]})
         if a.action is not None:
             return await self._action_node(name)
+        if a.subflow is not None:
+            return await self._subflow_node(name)
         try:
             values, missing = io_tool.resolve_inputs(self.spec, self.run_id, name)
             if missing:
@@ -546,6 +573,86 @@ class GraphEngine:
             raise
         except Exception as e:  # noqa: BLE001 — the node fails, the run reports it
             return self._failed(name, f"{type(e).__name__}: {e}")
+        return _Result(True, evals=evals)
+
+    async def _subflow_node(self, name: str) -> _Result:
+        """A subflow node: the child flow runs as one step, in its own run folder
+        (runs/<parent>--<node>), with the same approvals as this run; its events come tagged with
+        `sub`, and the mapped outputs of the child become the node's outputs."""
+        a = self.spec.agents[name]
+        call = a.subflow
+        assert call is not None
+        rid = _sub_run_id(self.run_id, name)
+        child: CompiledGraph | None = None
+        try:
+            spec, flow_dir = load_spec(call.flow, base=self.compiled.flow_dir.parent)
+            child = compile_graph(spec, flow_dir, configure_artifacts=False)
+            if child.workspace is not None and child.workspace != self.compiled.workspace:
+                return self._failed(name, f"flow {call.flow} works in another folder "
+                                    f"({child.workspace}); a subflow uses the parent's")
+            child.policy.approver = self.compiled.policy.approver  # one person approves
+            scope = io_tool.scope(self.spec, self.run_id)
+            values: dict[str, Any] = {}
+            for k, text in call.inputs.items():
+                parts = expr.template_parts(text)
+                whole = len(parts) == 1 and text.strip() == "{" + parts[0] + "}"
+                values[k] = expr.value(parts[0], scope) if whole else expr.render(text, scope)
+            clean: dict[str, Any] = {}
+            for k, t in spec.inputs.items():
+                v = values.get(k, t.default)
+                if v is None or v == "":
+                    continue
+                try:
+                    clean[k] = check_value(t, v, run_dir=io_tool.run_dir(rid))
+                except ValueError as e:
+                    return self._failed(name, f"subflow input {k}: {e}")
+            if not spec.inputs:  # a legacy flow: its one input is the run id
+                clean = {LEGACY_INPUT: rid}
+            io_tool.clear_outputs(self.run_id, name)
+            io_tool.save_flow_inputs(rid, clean)
+            child.register(rid)
+            self.emit({"type": "subflow", "agent": name, "flow": call.flow, "run": rid})
+            host = _SubHost()
+            sub = GraphEngine(child, rid, host=host, query_fn=self._query, route_fn=self._route,
+                              emit=lambda ev: self.emit({**ev, "sub": (
+                                  f"{name}/{ev['sub']}" if ev.get("sub") else name)}),
+                              nested=True)
+            try:
+                outcome = await sub.run()
+            finally:
+                self.host.cost += host.cost
+            if outcome.status == "error":
+                return self._failed(name, f"subflow {call.flow}: {outcome.message}")
+            if outcome.status != "done":
+                return self._failed(name, f"subflow {call.flow} stopped at {outcome.status}")
+            for out, m in call.outputs.items():
+                if m.from_ == "message":
+                    raw = (outcome.gate or {}).get("message")
+                else:
+                    ca, co = m.from_.split(".", 1)
+                    raw = io_tool.outputs(rid, ca).get(co)
+                if raw is None or raw == "" or raw == []:
+                    continue
+                try:
+                    io_tool.store_output(self.spec, self.run_id, name, out, raw)
+                except ValueError as e:
+                    return self._failed(name, f"output {out}: {e}")
+            lacking = self._missing_outputs(name)
+            if lacking:
+                return self._failed(name, f"subflow {call.flow} gave no value for: "
+                                    + ", ".join(lacking))
+            if a.outputs:
+                self.emit({"type": "outputs", "agent": name,
+                           "names": sorted(io_tool.outputs(self.run_id, name))})
+            self.emit({"type": "agent_done", "agent": name, "error": False})
+            evals = [] if self.mode == "agent" else await self._evaluate(name)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — the node fails, the run reports it
+            return self._failed(name, f"{type(e).__name__}: {e}")
+        finally:
+            if child is not None:
+                child.release(rid)
         return _Result(True, evals=evals)
 
     def _failed(self, name: str, message: str) -> _Result:

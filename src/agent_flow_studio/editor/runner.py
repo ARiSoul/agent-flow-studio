@@ -33,11 +33,13 @@ from claude_agent_sdk import (
     query,
 )
 
-from ..builder import expr, load_flow
+from .. import context, workspaces
+from ..builder import FlowError, expr, load_flow, load_spec
 from ..builder.catalog import CONTRACTS
-from ..builder.compile import GATE_TOOL, CompiledFlow, gate_message, load_graph
+from ..builder.compile import GATE_TOOL, CompiledFlow, compile_graph, gate_message, load_graph
 from ..builder.spec import LEGACY_INPUT, FlowSpec
 from ..builder.types import IOType, check_value
+from ..builder.types import compatible as types_compatible
 from ..config import settings
 from ..engine import GraphEngine, RouteFn
 from ..hooks import DELEGATION_TOOLS
@@ -97,9 +99,15 @@ class Run:
     pending: dict[str, tuple[ApprovalRequest, asyncio.Future[tuple[bool, str]]]] = field(
         default_factory=dict)
     engine: GraphEngine | None = None  # graph mode: the engine state (continue/decide resume it)
+    workspace: str = "studio"  # the studio workspace and environment of the run (all its life)
+    environment: str | None = None
+    # the workspace context after a finished run: "suggest" | "always" | "never" (None: studio)
+    context_update: str | None = None
+    context_done: bool = False  # the "always" step ran (once per run)
 
     def summary(self) -> dict[str, Any]:
         out = {"id": self.id, "flow": self.flow, "input": self.input, "status": self.status,
+               "workspace": self.workspace, "environment": self.environment,
                "session_id": self.session_id, "gate": self.gate, "cost": round(self.cost, 4),
                "started": self.started, "events": len(self.events),
                "pending_approvals": list(self.pending), "mode": self.mode,
@@ -283,7 +291,8 @@ class Runner:
     # --- start and resume
     def start(self, flow: str, run_input: str | None = None, mode: Mode = "full",
               target: str | None = None, instruction: str = "", *, run_id: str | None = None,
-              inputs: dict[str, Any] | None = None, given: dict[str, Any] | None = None) -> Run:
+              inputs: dict[str, Any] | None = None, given: dict[str, Any] | None = None,
+              handoff: dict[str, dict[str, str]] | None = None) -> Run:
         """full: the whole flow · step: one agent at a time · until: runs step by step until
         `target` finishes · agent: only the `target` agent, isolated (with the saved outputs).
 
@@ -292,7 +301,9 @@ class Runner:
         free inputs of the target agent in agent mode."""
         if self.active():
             raise RunError(409, "a run is already in progress; wait or stop it")
-        compiled = load_flow(flow, base=self.base)  # validates flow and input before starting
+        ws, env = workspaces.current(), workspaces.current_env()
+        base = self.flows_base()
+        compiled = load_flow(flow, base=base)  # validates flow and input before starting
         spec = compiled.spec
         if mode in ("until", "agent") and target not in spec.agents:
             raise RunError(400, f"agent {target!r} does not exist in the flow")
@@ -315,10 +326,14 @@ class Runner:
         else:
             io_tool.clear_given(rid, list(spec.agents))  # a full run uses the real outputs
         io_tool.save_flow_inputs(rid, values)
-        run = Run(uuid.uuid4().hex[:12], flow, rid, self.base, mode=mode,
-                  target=target if mode in ("until", "agent") else None)
+        handoff = {k: v for k, v in (handoff or {}).items() if k in values}
+        io_tool.save_handoff(rid, handoff)  # provenance: input -> flow, run, agent, output
+        run = Run(uuid.uuid4().hex[:12], flow, rid, base, mode=mode,
+                  target=target if mode in ("until", "agent") else None,
+                  workspace=ws.name, environment=env,
+                  context_update=None if ws.studio else spec.context_update)
         if spec.execution == "graph":
-            graph = load_graph(flow, base=self.base)
+            graph = load_graph(flow, base=base)
             graph.policy.approver = self._approver(run)
             run.engine = GraphEngine(graph, rid, host=run, emit=lambda ev: self._emit(run, ev),
                                      query_fn=self._query, route_fn=self._route, mode=mode,
@@ -326,14 +341,18 @@ class Runner:
             self.runs[run.id] = run
             self._emit(run, {"type": "start", "flow": flow, "input": rid, "mode": mode,
                              "target": run.target, "mock": settings.mock,
-                             "model": graph.model, "execution": spec.execution})
+                             "model": graph.model, "execution": spec.execution,
+                             "workspace": ws.name, "environment": env,
+                             **({"handoff": handoff} if handoff else {})})
             self._spawn(run, self._drive_graph(run))
             return run
         prompt = self.first_prompt(compiled, rid, values, mode, instruction)
         self.runs[run.id] = run
         self._emit(run, {"type": "start", "flow": flow, "input": rid, "mode": mode,
                          "target": run.target, "mock": settings.mock,
-                         "model": compiled.options.model, "execution": spec.execution})
+                         "model": compiled.options.model, "execution": spec.execution,
+                         "workspace": ws.name, "environment": env,
+                         **({"handoff": handoff} if handoff else {})})
         self._launch(run, prompt, None)
         return run
 
@@ -383,7 +402,8 @@ class Runner:
             run.status, run.gate = "running", None
             self._spawn(run, self._drive_graph(run, gate=gate["gate"]))
             return run
-        compiled = load_flow(run.flow, resume=run.session_id, base=run.base)
+        with self._in(run):
+            compiled = load_flow(run.flow, resume=run.session_id, base=run.base)
         if not compiled.spec.outgoing(gate["gate"]):
             run.status, run.gate = "done", None
             self._emit(run, {"type": "end", "status": "done",
@@ -399,17 +419,63 @@ class Runner:
         return run
 
     # --- past runs: the log in runs/<id>/events.jsonl is enough to open one again ---------------
+    def flow_outputs(self, flow: str, kind: str | None = None,
+                     limit: int = 20) -> list[dict[str, Any]]:
+        """Finished runs of a flow (this workspace) with their outputs, newest first, for "Fill
+        from a run": only outputs whose type can feed an input of type `kind` (files stay in
+        their run). Each output has a short preview; `output_value` gives the whole value."""
+        try:
+            spec, _ = load_spec(flow, base=self.flows_base())
+        except FlowError:
+            return []
+        out = []
+        for r in self.past_runs(flow, limit=100):
+            if r["status"] not in ("done", "stopped") or any(
+                    x.input == r["input"] and x.status == "running" for x in self.runs.values()):
+                continue  # a failed run, or one still going
+            items = []
+            for agent, a in spec.agents.items():
+                values = io_tool.outputs(r["input"], agent)
+                for name, t in a.outputs.items():
+                    if name not in values or t.type == "file":
+                        continue
+                    if kind and not types_compatible(t.type, kind):
+                        continue
+                    text = values[name] if isinstance(values[name], str) else json.dumps(
+                        values[name], ensure_ascii=False)
+                    items.append({"agent": agent, "name": name, "type": t.type,
+                                  "label": t.label or name, "preview": text[:200]})
+            if items:
+                out.append({**{k: r[k] for k in ("input", "started", "status")},
+                            "outputs": items})
+            if len(out) >= limit:
+                break
+        return out
+
+    def output_value(self, flow: str, run_input: str, agent: str, name: str) -> Any:
+        """One output of a finished run of a flow of this workspace (for a hand-off)."""
+        events = _last_run_events(safe_artifact_path(settings.runs_dir, run_input,
+                                                     "events.jsonl"))
+        if not events or events[0].get("flow") != flow:
+            raise RunError(404, f"no run {run_input!r} of the flow {flow!r} here")
+        values = io_tool.outputs(run_input, agent)
+        if name not in values:
+            raise RunError(404, f"the run {run_input!r} has no output {agent}.{name}")
+        return values[name]
+
     def past_runs(self, flow: str, limit: int = 30) -> list[dict[str, Any]]:
         """The runs of a flow saved in runs/ (the last run in each folder), newest first."""
         out = []
-        root = settings.runs_dir
+        root = workspaces.scoped(settings.runs_dir)  # the runs of this workspace
         if not root.is_dir():
             return []
         for d in root.iterdir():
-            if not d.is_dir() or d.name.startswith(".") or d.name == "chats":
+            if not d.is_dir() or d.name.startswith((".", "@")) or d.name == "chats":
                 continue
             events = _last_run_events(d / "events.jsonl")
             if not events or events[0].get("flow") != flow:
+                continue
+            if (events[0].get("workspace") or workspaces.STUDIO) != workspaces.current().name:
                 continue
             start = events[0]
             end = next((e for e in reversed(events) if e.get("type") == "end"), None)
@@ -438,9 +504,15 @@ class Runner:
         if rid in self.runs:  # still in memory: that one
             return self.runs[rid]
         flow = str(start.get("flow"))
-        compiled = load_flow(flow, base=self.base)  # the flow must still exist and be valid
-        run = Run(rid, flow, run_input, self.base, mode=start.get("mode") or "full",
-                  target=start.get("target"), started=float(start.get("ts") or time.time()))
+        ws = workspaces.get_or_none(start.get("workspace") or workspaces.STUDIO) \
+            or workspaces.STUDIO_WS
+        env = start.get("environment")
+        base = self.base if ws.studio else ws.flows_dir
+        with workspaces.using(ws, env):
+            compiled = load_flow(flow, base=base)  # the flow must still exist and be valid
+        run = Run(rid, flow, run_input, base, mode=start.get("mode") or "full",
+                  target=start.get("target"), started=float(start.get("ts") or time.time()),
+                  workspace=ws.name, environment=env)
         run.events = [{k: v for k, v in e.items() if k != "run"} | {"i": i}
                       for i, e in enumerate(events)]
         end = next((e for e in reversed(events) if e.get("type") == "end"), None)
@@ -455,7 +527,8 @@ class Runner:
         run.done_agents = {str(e["agent"]) for e in events
                            if e.get("type") == "agent_done" and not e.get("error") and e.get("agent")}
         if start.get("execution") == "graph" and compiled.spec.execution == "graph":
-            graph = load_graph(flow, base=self.base)
+            with workspaces.using(ws, env):
+                graph = load_graph(flow, base=base)
             graph.policy.approver = self._approver(run)
             run.engine = GraphEngine(graph, run_input, host=run,
                                      emit=lambda ev: self._emit(run, ev), query_fn=self._query,
@@ -529,6 +602,140 @@ class Runner:
     def _launch(self, run: Run, prompt: str, resume: str | None) -> None:
         self._spawn(run, self._drive(run, prompt, resume))
 
+    def flows_base(self) -> Path:
+        """The flows folder of the open workspace (the studio's: the runner's base)."""
+        ws = workspaces.current()
+        return self.base if ws.studio else ws.flows_dir
+
+    @staticmethod
+    def _in(run: Run) -> Any:
+        """The run's workspace and environment (a run keeps them for all its life)."""
+        ws = workspaces.get_or_none(run.workspace) or workspaces.STUDIO_WS
+        return workspaces.using(ws, run.environment)
+
+    # --- the workspace context ----------------------------------------------------------------
+    async def _after_run(self, run: Run, ev: dict[str, Any]) -> None:
+        """A full run of a workspace flow that ended done: "always" updates the workspace
+        context as a last system step of the run; "suggest" marks the end (a button)."""
+        how = run.context_update
+        if ev.get("status") != "done" or run.mode != "full" or how in (None, "never"):
+            return
+        if how == "suggest" or run.context_done:
+            ev["context"] = "suggest" if how == "suggest" else "updated"
+            return
+        run.context_done = True
+        ok = await self._context_steps(run, "update", None, self._changes(run))
+        ev["context"] = "updated" if ok else "failed"
+
+    def _changes(self, run: Run) -> str:
+        """What a run did (its end, stop message and outputs), for the context update."""
+        outs: dict[str, dict[str, Any]] = {}
+        names = {e.get("agent") for e in run.events if e.get("type") == "outputs"}
+        for a in sorted(n for n in names if isinstance(n, str)):
+            try:
+                outs[a] = io_tool.outputs(run.input, a)
+            except ValueError:
+                continue
+        events = [*run.events, {"type": "end", "status": "done", "gate": run.gate}]
+        return context.run_changes(events, outs)
+
+    def update_context(self, mode: Literal["explore", "update"], roots: list[str] | None = None,
+                       after: str | None = None) -> Run:
+        """A run of the context keeper on roots of the open workspace (all by default): explore
+        writes their sections from scratch, update brings them up to date (`after`: the run
+        whose changes it should know about)."""
+        if self.active():
+            raise RunError(409, "a run is already in progress; wait or stop it")
+        ws, env = workspaces.current(), workspaces.current_env()
+        if ws.studio or ws.spec is None:
+            raise RunError(400, "the studio's own workspace has no context: open a workspace")
+        names = roots or list(ws.spec.roots)
+        unknown = [r for r in names if r not in ws.spec.roots]
+        if unknown or not names:
+            raise RunError(400, f"unknown roots: {', '.join(unknown)}" if unknown else
+                           "this workspace has no roots yet: add a folder first")
+        changes = ""
+        if after:
+            prev = next((r for r in self.runs.values() if r.input == after), None)
+            if prev is not None:
+                changes = self._changes(prev)
+        rid = new_run_id("context")
+        run = Run(uuid.uuid4().hex[:12], context.KEEPER_FLOW, rid, self.flows_base(),
+                  workspace=ws.name, environment=env)
+        self._emit(run, {"type": "start", "flow": context.KEEPER_FLOW, "input": rid,
+                         "mode": "full", "target": None, "mock": settings.mock,
+                         "model": settings.model, "execution": "graph", "context": mode,
+                         "roots": names, "workspace": ws.name, "environment": env})
+        self._spawn(run, self._drive_context(run, mode, names, changes))
+        self.runs[run.id] = run  # only a run that started counts as active
+        return run
+
+    async def _drive_context(self, run: Run, mode: str, roots: list[str], changes: str) -> None:
+        try:
+            ok = await self._context_steps(run, mode, roots, changes)
+            run.status = "done" if ok else "error"
+            self._emit(run, {"type": "end", "status": run.status, "gate": None})
+        except asyncio.CancelledError:
+            run.status = "stopped"
+            self._emit(run, {"type": "end", "status": "stopped"})
+        except Exception as e:  # noqa: BLE001 — report in the trace instead of losing the run
+            run.status = "error"
+            self._emit(run, {"type": "end", "status": "error",
+                             "message": f"{type(e).__name__}: {e}"})
+
+    async def _context_steps(self, run: Run, mode: str, roots: list[str] | None,
+                             changes: str) -> bool:
+        """One context keeper session per root (in sequence; read-only tools on that root); the
+        studio stores each section. Events are tagged `sub: "context:<root>"`. True when all
+        roots were updated."""
+        ws = workspaces.current()
+        assert ws.spec is not None
+        names = roots or list(ws.spec.roots)
+        folders = ws.resolve(workspaces.current_env())[1]
+        secs, st = context.sections(ws), context.state(ws)
+        all_ok = True
+        for root in names:
+            self._emit(run, {"type": "context", "root": root, "status": "running", "mode": mode})
+            child = f"{run.input[:24]}--{root[:14]}"
+            try:
+                spec = FlowSpec.model_validate(context.keeper_flow(root))
+                compiled = compile_graph(spec, Path(context.__file__).parent)
+                compiled.policy.approver = self._approver(run)
+                values = {"mode": mode, "root": root, "current": secs.get(root, "")
+                          if mode == "update" else "",
+                          "since": (st.get(root) or {}).get("commit") or "", "changes": changes}
+                io_tool.save_flow_inputs(child, {k: v for k, v in values.items() if v})
+                tag = f"context:{root}"
+                engine = GraphEngine(compiled, child, host=run, query_fn=self._query,
+                                     route_fn=self._route,
+                                     emit=lambda e, tag=tag: self._emit(run, {**e, "sub": tag}))
+                out = await engine.run()
+                if out.status != "done":
+                    raise RuntimeError(out.message or f"the context keeper stopped ({out.status})")
+                result = io_tool.outputs(child, context.KEEPER_AGENT)
+                section = str(result.get("section") or "")
+                if not section.strip():
+                    raise RuntimeError("the context keeper returned no section")
+                context.set_section(ws, root, section, commit=context.head(Path(folders[root])),
+                                    by=run.input)
+                self._audit_context(ws.name, root, mode, run.input)
+                self._emit(run, {"type": "context", "root": root, "status": "done", "mode": mode,
+                                 "summary": str(result.get("summary") or "")[:500]})
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — one root fails, the others go on
+                all_ok = False
+                self._emit(run, {"type": "context", "root": root, "status": "error",
+                                 "mode": mode, "message": f"{type(e).__name__}: {e}"[:500]})
+        return all_ok
+
+    @staticmethod
+    def _audit_context(ws: str, root: str, mode: str, run_id: str) -> None:
+        settings.runs_dir.mkdir(parents=True, exist_ok=True)
+        with (settings.runs_dir / "audit.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": time.time(), "event": "workspace_context", "workspace": ws,
+                                "root": root, "mode": mode, "run": run_id}) + "\n")
+
     def _spawn(self, run: Run, coro: Any) -> None:
         def finished(task: asyncio.Task[None]) -> None:
             # cancelled before it started: the driver never handled the CancelledError
@@ -536,7 +743,8 @@ class Runner:
                 run.status = "stopped"
                 self._emit(run, {"type": "end", "status": "stopped"})
 
-        run.task = asyncio.create_task(coro)
+        with self._in(run):  # the task works in the run's workspace, whatever the request
+            run.task = asyncio.create_task(coro)
         run.task.add_done_callback(finished)
 
     def _log_decision(self, run: Run, record: dict[str, Any]) -> None:
@@ -625,7 +833,9 @@ class Runner:
                     run.status = "done"
             if run.gate and run.gate["kind"] == "stop":
                 run.status = "done"
-            self._emit(run, {"type": "end", "status": run.status, "gate": run.gate})
+            ev = {"type": "end", "status": run.status, "gate": run.gate}
+            await self._after_run(run, ev)
+            self._emit(run, ev)
         except asyncio.CancelledError:
             run.status = "stopped"
             self._emit(run, {"type": "end", "status": "stopped"})
@@ -645,6 +855,7 @@ class Runner:
             ev: dict[str, Any] = {"type": "end", "status": out.status, "gate": out.gate}
             if out.message:
                 ev["message"] = out.message
+            await self._after_run(run, ev)
             self._emit(run, ev)
         except asyncio.CancelledError:
             run.status = "stopped"

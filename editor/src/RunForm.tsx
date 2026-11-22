@@ -1,5 +1,5 @@
 // Run form: one field per typed value (flow inputs, or the inputs of the agent under test).
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useI18n } from "./i18n";
 import { typeTag } from "./nodes";
 import type { IOTypeRaw } from "./types";
@@ -66,9 +66,9 @@ function readFiles(list: FileList): Promise<FileVal[]> {
 const kb = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 /** One field of the form, by type. */
-export function ValueField({ name, t, value, onChange, error, disabled, saved }: {
+export function ValueField({ name, t, value, onChange, error, disabled, saved, extra }: {
   name: string; t: IOTypeRaw; value: FormVal; onChange: (v: FormVal) => void; error?: string | null;
-  disabled?: boolean; saved?: unknown;
+  disabled?: boolean; saved?: unknown; extra?: ReactNode;
 }) {
   const { t: tr } = useI18n();
   const [readErr, setReadErr] = useState<string | null>(null);
@@ -136,6 +136,7 @@ export function ValueField({ name, t, value, onChange, error, disabled, saved }:
         <span className="port-tag">{typeTag(k, t.multiple)}</span>
       </span>
       {control}
+      {extra}
       {error ? <span className="field-err">{error}</span>
         : t.description && k !== "boolean" && <span className="field-hint">{t.description}</span>}
     </div>

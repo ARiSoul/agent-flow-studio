@@ -1,6 +1,6 @@
 import { Markdown } from "./Markdown";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api";
+import { api, currentWorkspaceName } from "./api";
 import { useDialog } from "./Dialog";
 import { useI18n, type I18n } from "./i18n";
 import { localizeServer, type ServerMsg } from "./i18n/server";
@@ -20,8 +20,11 @@ export type EdgeRun = "followed" | "not" | "error";
 export type Trace = { nodes: Record<string, NodeRun>; edges: Record<string, EdgeRun> };
 export const edgeKey = (from: string, to: string) => `${from}>${to}`;
 type Ev = { i: number; type: string; [k: string]: unknown };
-type RunInfo = { id: string; status: string; gate: { gate: string; kind: string; label: string; reason: string } | null; cost: number; input: string; mode?: string; target?: string | null };
+type RunInfo = { id: string; status: string; gate: { gate: string; kind: string; label: string; reason: string } | null; cost: number; input: string; mode?: string; target?: string | null;
+  workspace?: string; environment?: string | null };
 export type RunMode = "full" | "step" | "until" | "agent";
+/** The system step after a run that updates the workspace context (drawn on the canvas). */
+export const CONTEXT_NODE = "__workspace_context";
 export type RunRequest = { mode: RunMode; target?: string; nonce: number };
 
 class ApiError extends Error {
@@ -43,7 +46,9 @@ export function traceOf(events: Ev[]): Record<string, NodeRun> {
   const s: Record<string, NodeRun> = {};
   let graph = false;
   for (const e of events) {
+    if (e.sub) continue;  // inside a subflow: not a node of this canvas
     const a = e.agent as string | undefined;
+    if (e.type === "context") s[CONTEXT_NODE] = e.status === "running" ? "active" : e.status === "done" ? "done" : "error";
     if (e.type === "start") graph = e.execution === "graph";
     if (e.type === "delegate" && a) {
       if (!graph) for (const k of Object.keys(s)) if (s[k] === "active") s[k] = "done";
@@ -79,6 +84,7 @@ export function edgeTraceOf(events: Ev[], links: { from: string; to: string }[])
     if (last && exists.has(edgeKey(last, to))) s[edgeKey(last, to)] = "followed";
   };
   for (const e of events) {
+    if (e.sub) continue;  // inside a subflow
     const a = e.agent as string | undefined;
     if (e.type === "start") { graph = e.execution === "graph"; continue; }
     if (graph) {
@@ -105,11 +111,21 @@ export function edgeTraceOf(events: Ev[], links: { from: string; to: string }[])
 const status = (i18n: I18n, s: unknown) => i18n.tOr(`run.status.${String(s)}`, String(s));
 
 function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
+  // an event of a subflow: the same line, indented and tagged with the subflow node
+  if (e.sub) {
+    const l = line({ ...e, sub: undefined }, i18n);
+    return l && { cls: `${l.cls} subev`, text: `↳ ${String(e.sub)} · ${l.text}` };
+  }
   const { t, tOr } = i18n;
   const who = e.agent ? `${e.agent}: ` : "";
   const mode = String(e.mode ?? "full");
   switch (e.type) {
-    case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${e.execution === "graph" ? t("run.ev.graph") : ""}` };
+    case "start": return { cls: "info", text: `${t("run.ev.start", { flow: String(e.flow), input: String(e.input), mode: tOr(`run.mode.${mode}`, mode) })}${e.target ? ` ${e.target}` : ""}${e.execution === "graph" ? t("run.ev.graph") : ""}${e.workspace && e.workspace !== "studio" ? ` · ${t("run.ev.workspace", { ws: String(e.workspace), env: String(e.environment ?? "—") })}` : ""}${e.handoff ? ` · ${t("run.ev.handoff", { list: Object.entries(e.handoff as Record<string, { flow: string; run: string }>).map(([k, v]) => `${k} ← ${v.flow}/${v.run}`).join(", ") })}` : ""}` };
+    case "context": return e.status === "running"
+      ? { cls: "deleg", text: t("run.ev.contextStart", { root: String(e.root), mode: tOr(`ctx.mode.${String(e.mode)}`, String(e.mode)) }) }
+      : { cls: e.status === "done" ? "ok" : "err", text: t(e.status === "done" ? "run.ev.contextDone" : "run.ev.contextError",
+        { root: String(e.root), detail: String(e.summary ?? e.message ?? "") }) };
+    case "subflow": return { cls: "deleg", text: t("run.ev.subflow", { agent: String(e.agent), flow: String(e.flow), run: String(e.run) }) };
     case "delegate": return { cls: "deleg", text: `→ ${e.agent}${e.task ? ` — ${e.task}` : ""}` };
     case "tool": return { cls: "tool", text: `${who}${e.tool}${e.detail ? ` — ${e.detail}` : e.artifact ? ` (${e.artifact})` : ""}` };
     // the tool and its error text (older runs have neither)
@@ -237,6 +253,8 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     () => Object.fromEntries(Object.entries(spec.inputs ?? {}).map(([n, x]) => [n, formValue(x, x.default)])));
   const [given, setGiven] = useState<Record<string, FormVal>>({});
   const [fieldErr, setFieldErr] = useState<Record<string, string>>({});
+  // inputs filled from a run of another flow (provenance, saved with the run)
+  const [handoff, setHandoff] = useState<Record<string, { flow: string; run: string; agent: string; output: string }>>({});
   const [runIdErr, setRunIdErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<RunIO | null>(null);
   const [run, setRun] = useState<RunInfo | null>(null);
@@ -250,6 +268,9 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const end = useRef<HTMLDivElement>(null);
   const label = spec.input?.label ?? t("insp.inputDefault");
   const rid = idOnly ? runId.trim() : input.trim();  // the run folder in runs/
+  // a studio workspace keeps its runs in runs/@<workspace>/
+  const wsName = run?.workspace ?? currentWorkspaceName();
+  const wsDir = wsName && wsName !== "studio" ? `@${wsName}/` : "";
 
   const links = doc.spec.edges ?? [];
   useEffect(() => {
@@ -365,8 +386,43 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     setFieldErr(errs);
     if (Object.keys(errs).length) return null;
     const base = { flow, mode, target: target || null, instruction: mode === "agent" ? instruction : "",
-      ...(Object.keys(g).length ? { given: g } : {}) };
+      ...(Object.keys(g).length ? { given: g } : {}),
+      ...(typed && Object.keys(handoff).length ? { handoff } : {}) };
     return { body: typed ? { ...base, run_id: runId.trim() || null, inputs: out } : { ...base, input: rid } };
+  };
+
+  /** "Fill from a run": the value of an output of a finished run of another flow of this
+   * workspace (the input's `source` flow first); typing a value by hand stays possible. */
+  const fillFromRun = async (n: string, x: IOTypeRaw) => {
+    setError(null);
+    const all = (await api.flows().catch(() => [])).filter((f) => f.name !== flow);
+    let src = x.source?.flow && all.some((f) => f.name === x.source!.flow) ? x.source.flow : null;
+    if (!src) {
+      if (!all.length) return setError(t("run.fill.noFlows"));
+      const r = await dialog.form({ title: t("run.fill.pickFlow", { input: x.label || n }), ok: t("app.next"), fields: [
+        { key: "flow", label: t("run.fill.flow"), value: all[0].name,
+          options: all.map((f) => ({ value: f.name, label: `${f.title} (${f.name})` })) }] });
+      if (!r) return;
+      src = r.flow;
+    }
+    const from = src;
+    let runs;
+    try { runs = await api.handoffRuns(from, x.type ?? "text"); } catch (e) { return setError(String((e as Error).message ?? e)); }
+    if (!runs.length) return setError(t("run.fill.noRuns", { flow: from }));
+    const want = x.source?.flow === from ? x.source.output : null;
+    const first = runs[0].outputs.find((o) => `${o.agent}.${o.name}` === want) ?? runs[0].outputs[0];
+    const r = await dialog.form({ title: t("run.fill.pickOutput", { input: x.label || n, flow: from }), message: t("run.fill.message"),
+      ok: t("run.fill.ok"), fields: [{ key: "pick", label: t("run.fill.output"), value: `${runs[0].input}|${first.agent}|${first.name}`,
+        options: runs.flatMap((ru) => ru.outputs.map((o) => ({ value: `${ru.input}|${o.agent}|${o.name}`,
+          label: `${ru.input} · ${o.agent}.${o.name} — ${o.preview.replace(/\s+/g, " ").slice(0, 60)}` }))) }] });
+    if (!r) return;
+    const [runIn, agent, output] = r.pick.split("|");
+    try {
+      const v = await api.handoffValue(from, runIn, agent, output);
+      setValues((p) => ({ ...p, [n]: formValue(x, v.value) }));
+      setFieldErr(({ [n]: _, ...rest }) => rest);
+      setHandoff((h) => ({ ...h, [n]: { flow: from, run: runIn, agent, output } }));
+    } catch (e) { setError(String((e as Error).message ?? e)); }
   };
 
   const start = async () => {
@@ -483,6 +539,18 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
       await follow(r.id, run.input);
     } catch (e) { setError(String((e as Error).message)); }
   };
+  // the end of the run: a workspace flow may suggest updating the workspace context
+  const lastEnd = useMemo(() => [...events].reverse().find((e) => e.type === "end"), [events]);
+  const updateContext = async () => {
+    if (!run) return;
+    setError(null);
+    try {
+      const r = await api.updateContext("update", null, run.input);
+      setRun(r as unknown as RunInfo);
+      evRef.current = []; setEvents([]);
+      await follow(r.id, r.input);
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+  };
   const gate = run?.status === "gate" ? run.gate : null;
   const paused = run?.status === "paused";
   const agents = Object.keys(spec.agents);
@@ -587,7 +655,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             {Object.entries(spec.inputs ?? {}).filter(([n]) => !hiddenIn.has(n)).map(([n, x]) => (
               <ValueField key={n} name={n} t={x} value={values[n] ?? formValue(x, x.default)} disabled={running}
                 error={fieldErr[n]} saved={saved?.inputs[n]}
-                onChange={(v) => { setValues((p) => ({ ...p, [n]: v })); setFieldErr(({ [n]: _, ...rest }) => rest); }} />
+                onChange={(v) => { setValues((p) => ({ ...p, [n]: v })); setFieldErr(({ [n]: _, ...rest }) => rest);
+                  setHandoff(({ [n]: _h, ...rest }) => rest); }}
+                extra={x.type !== "file" && <span className="fill-row">
+                  <button className="small link" disabled={running} title={t("run.fill.title")} onClick={() => fillFromRun(n, x)}>
+                    {t("run.fill.button")}{x.source ? ` · ${x.source.flow}` : ""}</button>
+                  {handoff[n] && <span className="badge" title={t("run.fill.fromTitle")}>← {handoff[n].flow}/{handoff[n].run} · {handoff[n].agent}.{handoff[n].output}</span>}
+                </span>} />
             ))}
           </details>)}
         {mode === "agent" && <>
@@ -682,6 +756,14 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             <p className="muted small">{t("run.gateHelp")}</p>
           </div>
         )}
+        {!running && run && lastEnd?.context === "suggest" && (
+          <div className="gate-card ctx-card">
+            <b>{t("run.ctxTitle")}</b>
+            <p className="small muted">{t("run.ctxHelp")}</p>
+            <div className="row">
+              <button className="primary small" onClick={updateContext}>{t("run.ctxUpdate")}</button>
+            </div>
+          </div>)}
         {!running && askable.length > 0 && (
           <div className="gate-card ask-card">
             <b>{t("run.askTitle")}</b>
@@ -710,7 +792,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
           {outputs.length > 0 && <>
             <div className="row out-head">
               <h2 className="fold-h"><button className="fold" aria-expanded={outsOpen} onClick={() => setOutsOpen(!outsOpen)}>
-                {outsOpen ? "▾" : "▸"} {t("run.outputs", { input: rid })}</button></h2>
+                {outsOpen ? "▾" : "▸"} {t("run.outputs", { input: `${wsDir}${rid}` })}</button></h2>
               <button className="small" title={t("run.openFolderTitle")} onClick={openFolder}>{t("run.openFolder")}</button>
             </div>
             {outsOpen && <div className="outs">{outputs.map(([agent, o]) => (
@@ -733,7 +815,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
           </>}
           {arts.length > 0 && <>
             <h2 className="fold-h"><button className="fold" aria-expanded={artsOpen} onClick={() => setArtsOpen(!artsOpen)}>
-              {artsOpen ? "▾" : "▸"} {t("run.artifacts", { input: run?.input ?? "" })}</button></h2>
+              {artsOpen ? "▾" : "▸"} {t("run.artifacts", { input: `${wsDir}${run?.input ?? ""}` })}</button></h2>
             {artsOpen && <div className="arts">{arts.map((a) => (
               <button key={a.name} className={`small${view?.name === a.name ? " on" : ""}`} onClick={() => open(a.name)}>{a.name}</button>
             ))}</div>}

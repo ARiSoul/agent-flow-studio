@@ -54,7 +54,9 @@ _IOTYPE = {"type": "object", "properties": {
     "required": {"type": "boolean"}, "default": {}, "multiple": {"type": "boolean"},
     "min": {"type": "number"}, "max": {"type": "number"}, "pattern": _STR, "options": _STRS,
     "accept": _STRS, "contract": _STR, "draft": {"type": "boolean"},
-    "show_if": _STR}}  # flow inputs: shown only when this expression on earlier inputs holds
+    "show_if": _STR,  # flow inputs: shown only when this expression on earlier inputs holds
+    # flow inputs: the output of another flow that usually gives the value ("Fill from a run")
+    "source": {"type": "object", "properties": {"flow": _STR, "output": _STR}}}}
 _IOMAP = {"type": "object", "additionalProperties": _IOTYPE}
 _ACTION = {"type": "object", "properties": {
     "connector": {"type": "string"}, "name": {"type": "string"},
@@ -62,6 +64,12 @@ _ACTION = {"type": "object", "properties": {
     "outputs": {"type": "object", "additionalProperties": {
         "type": "object", "properties": {"from": {"type": "string"}, "match": {"type": "string"}}}},
 }, "required": ["connector", "name"]}
+_SUBFLOW = {"type": "object", "properties": {
+    "flow": {"type": "string"},
+    "inputs": {"type": "object", "additionalProperties": {"type": "string"}},
+    "outputs": {"type": "object", "additionalProperties": {
+        "type": "object", "properties": {"from": {"type": "string"}}, "required": ["from"]}},
+}, "required": ["flow"]}
 _AGENT_INPUTS = {"type": "object", "additionalProperties": {"type": "object", "properties": {
     "from": _STR, "type": {"type": "string", "enum": _KINDS}, "description": _STR,
     "required": {"type": "boolean"}}}}
@@ -198,10 +206,13 @@ class Draft:
                        "input_pattern": _STR, "start": _STR,
                        "execution": {"type": "string", "enum": ["orchestrator", "graph"]},
                        "max_parallel": {"type": "integer"}, "inputs": _IOMAP,
-                       "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}}))
+                       "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]},
+                       "use_context": {"type": "boolean"},
+                       "context_update": {"type": "string",
+                                          "enum": ["suggest", "always", "never"]}}))
         async def update_flow(a: dict) -> dict:
             for k in ("title", "description", "model", "max_turns", "task", "start", "autonomy",
-                      "execution", "max_parallel", "inputs"):
+                      "execution", "max_parallel", "inputs", "use_context", "context_update"):
                 if k in a:
                     d.spec[k] = a[k]
             if "input_label" in a or "input_pattern" in a:
@@ -225,13 +236,19 @@ class Draft:
               "studio runs one read action {connector, name, params: {param: text with "
               "{expression} parts}, outputs: {output: {from: value name in the result, match: "
               "regex whose first group is the value}}}; declare the typed outputs too. Use "
-              "'previous.<agent>.<output>' in 'from' or expressions for the last finished run.",
+              "'previous.<agent>.<output>' in 'from' or expressions for the last finished run. "
+              "subflow: makes it a SUBFLOW NODE (graph execution only): another flow of the "
+              "workspace runs as one step {flow, inputs: {child input: text with {expression} "
+              "parts}, outputs: {output: {from: '<child agent>.<output>' or 'message' (the "
+              "child's stop message)}}}; the child must be graph mode without human gates; "
+              "declare the typed outputs too (see view_workspace for the other flows).",
               _schema({"name": _STR, "description": _STR, "prompt": _STR, "tools": _STRS,
                        "model": _STR, "max_turns": {"type": "integer"}, "skills": _STRS,
                        "reads": _STRS, "writes": _WRITES, "connections": _STRS,
                        "write_connections": _STRS, "inputs": _AGENT_INPUTS, "outputs": _IOMAP,
                        "join": {"type": "string", "enum": ["all", "any"]},
                        "max_runs": {"type": "integer"}, "icon": _STR, "action": _ACTION,
+                       "subflow": _SUBFLOW,
                        "autonomy": {"type": "string", "enum": ["approve", "approve_prod"]}},
                       ["name"]))
         async def set_agent(a: dict) -> dict:
@@ -245,7 +262,7 @@ class Draft:
             if new and not a.get("description"):
                 return err("a new agent needs a description")
             ag = agents.setdefault(name, {})
-            if a.get("action"):  # an action node: the studio runs the action, no prompt or tools
+            if a.get("action") or a.get("subflow"):  # the studio runs it: no prompt or tools
                 ag.pop("prompt", None)
                 d.prompts.pop(ag.pop("prompt_file", "") or "", None)
                 for k in ("tools", "model", "max_turns", "skills", "connections"):
@@ -273,7 +290,7 @@ class Draft:
                 a = {**a, "tools": tools}
             for k in ("description", "tools", "model", "max_turns", "skills", "reads", "writes",
                       "connections", "write_connections", "autonomy", "inputs", "outputs", "join",
-                      "max_runs", "icon", "action"):
+                      "max_runs", "icon", "action", "subflow"):
                 if k in a:
                     ag[k] = a[k]
             if "prompt" in a:
@@ -520,6 +537,14 @@ class Draft:
             return ok(f"Proposal {c.id!r} ready ({what}). The user saves it with the button in "
                       f"the chat; it is not saved yet.{notes}")
 
+        @tool("view_workspace", "The studio workspace this flow is in: its variables "
+              "({vars.x}), roots ({roots.x}, workspace: {root: x}), environments (names and "
+              "kind), and its other flows with their inputs (and where each usually comes from) "
+              "and outputs — to use a flow as a subflow, or to give an input a `source` hint.",
+              _schema({}))
+        async def view_workspace(_: dict) -> dict:
+            return ok(_workspace_info(d.spec.get("name")))
+
         @tool("validate", "Validates the draft with the runtime rules and returns the problems.",
               _schema({}))
         async def validate(_: dict) -> dict:
@@ -529,10 +554,57 @@ class Draft:
         return [view_flow, view_catalog, view_prompt, update_flow, set_agent, set_gate,
                 add_edge, remove_edge, rename_node, remove_node, set_orchestrator_prompt,
                 set_mcp, view_library, add_library_agent, update_from_library,
-                propose_library_agent, validate]
+                propose_library_agent, view_workspace, validate]
 
 
-READ_ONLY_TOOLS = {"view_flow", "view_catalog", "view_prompt", "view_library", "validate"}
+READ_ONLY_TOOLS = {"view_flow", "view_catalog", "view_prompt", "view_library", "view_workspace",
+                   "validate"}
+
+
+def _workspace_info(this_flow: str | None) -> dict[str, Any]:
+    """Variables, roots, environments and the other flows of the open studio workspace."""
+    import yaml
+
+    from .. import workspaces
+    from ..builder.compile import flow_locations
+    from ..builder.spec import FlowSpec
+
+    ws = workspaces.current()
+    out: dict[str, Any] = {"workspace": ws.name, "environment": workspaces.current_env()}
+    if ws.spec is not None:
+        from .. import context
+        # what the agents of the workspace's flows already get in their prompts
+        out["context"] = context.context_text(ws) or "(none yet: the person can explore the roots)"
+        out["vars"] = {"base": ws.spec.vars,
+                       "per_environment": {n: e.vars for n, e in ws.spec.environments.items()}}
+        out["environments"] = {n: e.kind for n, e in ws.spec.environments.items()}
+        out["roots"] = {n: r.path for n, r in ws.spec.roots.items()}
+    else:
+        out["note"] = ("the studio's own workspace: no variables, roots or environments (the "
+                       "person can create a workspace in the editor)")
+    flows: dict[str, Any] = {}
+    for _, base in flow_locations():
+        for f in sorted(base.glob("*/flow.yaml")):
+            name = f.parent.name
+            if name == this_flow or name in flows:
+                continue
+            try:
+                raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+                spec = FlowSpec.model_validate(workspaces.substitute(raw)[0])
+            except (yaml.YAMLError, ValueError):
+                flows[name] = {"valid": False}
+                continue
+            flows[name] = {
+                "title": spec.title, "execution": spec.execution,
+                "human_gates": sorted(g for g, x in spec.gates.items() if x.kind == "human"),
+                "inputs": {k: {"type": t.type, **({"source": t.source.model_dump()}
+                                                  if t.source else {})}
+                           for k, t in spec.inputs.items()},
+                "outputs": {f"{an}.{on}": o.type for an, a in spec.agents.items()
+                            for on, o in a.outputs.items()},
+            }
+    out["flows"] = flows
+    return out
 
 
 def normalize_lang(lang: str | None) -> str:

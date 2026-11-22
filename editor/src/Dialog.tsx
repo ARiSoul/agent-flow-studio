@@ -5,6 +5,7 @@ import {
   type KeyboardEvent, type ReactNode,
 } from "react";
 import { useI18n } from "./i18n";
+import { FolderBrowser } from "./FolderBrowser";
 
 export interface ConfirmOpts { title: string; message?: string; ok?: string; danger?: boolean }
 export interface FieldOpts {
@@ -15,6 +16,10 @@ export interface FieldOpts {
   multiline?: boolean;
   /** A checkbox: the value is "1" when ticked, "" otherwise. */
   checkbox?: boolean;
+  /** A folder of this machine: a "Browse…" button opens the folder browser. */
+  browse?: "folder";
+  /** Shown (and checked) only when this holds for the current values. */
+  when?: (values: Record<string, string>) => boolean;
   /** Returns an error text, or null when the value is valid. */
   validate?: (v: string) => string | null;
 }
@@ -57,6 +62,7 @@ function DialogBox({ open }: { open: Open }) {
   const [values, setValues] = useState<Record<string, string>>(
     () => Object.fromEntries(fields.map((f) => [f.key, f.value ?? ""])));
   const [touched, setTouched] = useState(false);
+  const [browsing, setBrowsing] = useState<string | null>(null);  // the field whose folder browser is open
   const box = useRef<HTMLDivElement>(null);
   const restore = useRef<Element | null>(document.activeElement);
 
@@ -70,7 +76,8 @@ function DialogBox({ open }: { open: Open }) {
     return () => { if (back instanceof HTMLElement) back.focus(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, when the dialog opens
 
-  const errors = Object.fromEntries(fields.map((f) => [f.key, f.validate?.(values[f.key] ?? "") ?? null]));
+  const shown = (f: FieldOpts) => !f.when || f.when(values);
+  const errors = Object.fromEntries(fields.map((f) => [f.key, shown(f) ? f.validate?.(values[f.key] ?? "") ?? null : null]));
   const valid = Object.values(errors).every((e) => !e);
   const cancel = () => (open.kind === "confirm" ? open.done(false) : open.done(null));
   const accept = () => {
@@ -90,14 +97,14 @@ function DialogBox({ open }: { open: Open }) {
           e.stopPropagation();
           if (e.key === "Escape") { e.preventDefault(); cancel(); }
           const inArea = e.target instanceof HTMLTextAreaElement;
-          if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement) && (!inArea || e.ctrlKey || e.metaKey)) {
+          if (e.key === "Enter" && !browsing && !(e.target instanceof HTMLButtonElement) && (!inArea || e.ctrlKey || e.metaKey)) {
             e.preventDefault(); accept();
           }
           if (e.key === "Tab") trapFocus(e, box.current);
         }}>
         <h2 id="dialog-title" className="dialog-title">{title}</h2>
         {message && <p className="dialog-message">{message}</p>}
-        {fields.map((f) => f.checkbox ? (
+        {fields.filter(shown).map((f) => f.checkbox ? (
           <label key={f.key} className="check">
             <input type="checkbox" checked={values[f.key] === "1"}
               onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.checked ? "1" : "" }))} />
@@ -114,12 +121,26 @@ function DialogBox({ open }: { open: Open }) {
               ? <select value={values[f.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}>
                 {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
+              : f.browse
+              ? <span className="row browse-row">
+                <input value={values[f.key] ?? ""} placeholder={f.placeholder}
+                  className={`mono${touched && errors[f.key] ? " bad" : ""}`}
+                  onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} />
+                <button type="button" className="small" aria-expanded={browsing === f.key}
+                  onClick={(e) => { e.preventDefault(); setBrowsing(browsing === f.key ? null : f.key); }}>{t("fb.browse")}</button>
+              </span>
               : <input value={values[f.key] ?? ""} placeholder={f.placeholder}
                 className={touched && errors[f.key] ? "bad" : ""}
                 onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))} />}
             {touched && errors[f.key]
               ? <span className="field-err">{errors[f.key]}</span>
               : f.hint && <span className="field-hint">{f.hint}</span>}
+            {browsing === f.key && (
+              // outside the label's click handling: a click in the list must not focus the input
+              <span onClick={(e) => e.preventDefault()} onMouseDown={(e) => e.stopPropagation()}>
+                <FolderBrowser start={values[f.key] ?? ""} onClose={() => setBrowsing(null)}
+                  onPick={(p) => { setValues((v) => ({ ...v, [f.key]: p })); setBrowsing(null); }} />
+              </span>)}
           </label>
         ))}
         <div className="dialog-actions">

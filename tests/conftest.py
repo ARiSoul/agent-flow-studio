@@ -39,3 +39,12 @@ def _agents_dir(tmp_path, monkeypatch):
 def _commands_file(tmp_path, monkeypatch):
     """Safety net: the saved assistant commands of the tests are a temporary file."""
     monkeypatch.setenv("AFS_COMMANDS_FILE", str(tmp_path / "assistant_commands.yaml"))
+
+
+@pytest.fixture(autouse=True)
+def _workspaces(tmp_path, monkeypatch):
+    """Safety net: the workspace registry, the studio's workspaces/ folder and the browser
+    profiles of the tests are temporary."""
+    monkeypatch.setenv("AFS_WORKSPACES_FILE", str(tmp_path / "workspaces.json"))
+    monkeypatch.setenv("AFS_WORKSPACES_DIR", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("AFS_BROWSER_DIR", str(tmp_path / "browser"))

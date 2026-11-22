@@ -27,7 +27,8 @@ _ENV_REF = re.compile(r"^\$\{[A-Z_][A-Z0-9_]*\}$")
 _ENV_IN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _TASK_VAR = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 LEGACY_INPUT = "input"  # the one implicit input of flows without `inputs`
-RESERVED_NAMES = {"input", "previous"}  # roots of references: not names of agents or gates
+# roots of references: not names of agents or gates
+RESERVED_NAMES = {"input", "previous", "vars", "roots"}
 
 
 class _Strict(BaseModel):
@@ -120,6 +121,22 @@ class ActionCall(_Strict):
     outputs: dict[str, ActionOutput] = Field(default_factory=dict)
 
 
+class SubflowOutput(_Strict):
+    """Where an output of a subflow node comes from: `<agent>.<output>` of the child flow, or
+    `message` (the message of the stop gate that ended the child)."""
+    from_: str = Field(alias="from",
+                       pattern=r"^(message|[a-z][a-z0-9_]{0,39}\.[a-z][a-z0-9_]{0,39})$")
+
+
+class SubflowCall(_Strict):
+    """A subflow node: a whole flow of the same studio workspace runs as one step (graph mode, no
+    human gates inside: a person approves in the parent). `inputs` are texts with {expression}
+    parts for the child's flow inputs; `outputs` map the node's outputs to the child's."""
+    flow: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,39}$")
+    inputs: dict[str, str] = Field(default_factory=dict)
+    outputs: dict[str, SubflowOutput] = Field(default_factory=dict)
+
+
 class AgentSpec(_Strict):
     description: str = Field(min_length=1)
     prompt: str | None = None
@@ -140,6 +157,12 @@ class AgentSpec(_Strict):
     max_runs: int = Field(default=3, ge=1, le=20)  # graph: limit for loops (back edges)
     origin: AgentOrigin | None = None  # copied from the agent library (editor only)
     action: ActionCall | None = None  # an action node (graph mode): no prompt, no model
+    subflow: SubflowCall | None = None  # a subflow node (graph mode): another flow as one step
+
+    @property
+    def runs_itself(self) -> bool:
+        """An action or subflow node: the studio runs it (no session, no prompt, no model)."""
+        return self.action is not None or self.subflow is not None
 
     @field_validator("icon")
     @classmethod
@@ -151,6 +174,13 @@ class AgentSpec(_Strict):
 
     @model_validator(mode="after")
     def _one_prompt(self) -> AgentSpec:
+        if self.subflow is not None:
+            if (self.action is not None or self.prompt is not None
+                    or self.prompt_file is not None or self.tools):
+                raise MsgError(msg("spec.subflow_no_prompt",
+                                   "a subflow node has no prompt, no tools and no action (the "
+                                   "child flow does the work)"))
+            return self
         if self.action is not None:
             if self.prompt is not None or self.prompt_file is not None or self.tools:
                 raise MsgError(msg("spec.action_no_prompt",
@@ -218,12 +248,22 @@ class ExternalMcp(_Strict):
 
 
 class WorkspaceSpec(_Strict):
-    """Repository/folder where agents with workspace.* tools work."""
+    """Repository/folder where agents with workspace.* tools work: a `path` (absolute, or relative
+    to the folder where the studio runs; it may use {roots.x}/{vars.x}) or a `root` of the
+    studio workspace the flow is in. The workspace environment's kind replaces `environment`."""
 
-    path: str = Field(min_length=1)  # absolute, or relative to the folder where the studio runs
+    path: str | None = Field(default=None, min_length=1)
+    root: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,39}$")
     environment: Literal["dev", "staging", "prod"] = "dev"
     description: str = ""
     protected_branches: list[str] = Field(default_factory=lambda: ["main", "master"])
+
+    @model_validator(mode="after")
+    def _one_place(self) -> WorkspaceSpec:
+        if (self.path is None) == (self.root is None):
+            raise MsgError(msg("spec.workspace_place", "workspace: give exactly one of 'path' or "
+                               "'root' (a root of the studio workspace)"))
+        return self
 
 
 class InputSpec(_Strict):
@@ -272,6 +312,10 @@ class FlowSpec(_Strict):
     mcp_servers: dict[str, ExternalMcp] = Field(default_factory=dict)
     autonomy: Autonomy = "approve"
     workspace: WorkspaceSpec | None = None
+    # studio workspaces: the agents read the workspace context; after a finished run, update it
+    # always (a system step), suggest it (a button in the Run panel) or never
+    use_context: bool = True
+    context_update: Literal["suggest", "always", "never"] = "suggest"
     layout: dict[str, Position] = Field(default_factory=dict)  # positions in the editor
 
     @field_validator("name")
@@ -435,6 +479,10 @@ class FlowSpec(_Strict):
                     errors.append(msg("spec.output_show_if",
                                       "agent {agent}, output {name}: show_if is only for flow inputs",
                                       agent=repr(an), name=repr(n)))
+                if t.source:
+                    errors.append(msg("spec.output_source",
+                                      "agent {agent}, output {name}: source is only for flow inputs",
+                                      agent=repr(an), name=repr(n)))
                 try:
                     check_type(t, CONTRACTS)
                 except ValueError as e:
@@ -513,6 +561,42 @@ class FlowSpec(_Strict):
                     errors += [msg("spec.action_param_reason",
                                    "agent {agent}, parameter {name}: {reason}", agent=repr(an),
                                    name=repr(pn), reason=m) for m in self._expr_errors(p)]
+        for an, a in self.agents.items():
+            if a.subflow is None:
+                continue
+            sub = a.subflow
+            if self.execution != "graph":
+                errors.append(msg("spec.subflow_needs_graph",
+                                  "agent {agent}: a subflow node runs only with execution: graph",
+                                  agent=repr(an)))
+            if sub.flow == self.name:
+                errors.append(msg("spec.subflow_self",
+                                  "agent {agent}: a flow cannot run itself as a subflow",
+                                  agent=repr(an)))
+            for o in sub.outputs:
+                if o not in a.outputs:
+                    errors.append(msg("spec.subflow_output_unknown",
+                                      "agent {agent}: the subflow maps {output}, which is not one "
+                                      "of its outputs", agent=repr(an), output=repr(o)))
+            for o in a.outputs:
+                if o not in sub.outputs:
+                    errors.append(msg("spec.subflow_output_unmapped",
+                                      "agent {agent}: output {output} needs `from` (an output of "
+                                      "the child flow, as agent.output)", agent=repr(an),
+                                      output=repr(o)))
+            for pn, pv in sub.inputs.items():
+                try:
+                    parts = expr.template_parts(pv)
+                except expr.ExprError as x:
+                    parts = []
+                    errors.append(msg("spec.subflow_input_reason",
+                                      "agent {agent}, subflow input {name}: {reason}",
+                                      agent=repr(an), name=repr(pn), reason=reason(x)))
+                for p in parts:
+                    errors += [msg("spec.subflow_input_reason",
+                                   "agent {agent}, subflow input {name}: {reason}",
+                                   agent=repr(an), name=repr(pn), reason=m)
+                               for m in self._expr_errors(p)]
         for gn, g in self.gates.items():
             if g.message.strip():
                 if g.kind != "stop":
@@ -552,6 +636,14 @@ class FlowSpec(_Strict):
             if len(r) < 2:
                 out.append(msg("spec.condition_field", "condition: {root} needs a field (e.g. {example})",
                                root=repr(r[0]), example=f"{r[0]}.x"))
+            elif r[0] in ("vars", "roots"):  # the studio workspace's variables / folders
+                from .. import workspaces
+                ws = workspaces.current()
+                names = ws.known_vars() if r[0] == "vars" else set(ws.spec.roots if ws.spec else ())
+                if r[1] not in names:
+                    out.append(msg("spec.condition_var", "condition: {ref} is not defined in "
+                                   "the workspace {workspace}", ref=f"{r[0]}.{r[1]}",
+                                   workspace=ws.name))
             elif r[0] == "previous":
                 if len(r) < 3 or r[1] not in self.agents or r[2] not in self.agents[r[1]].outputs:
                     out.append(msg("spec.condition_previous",

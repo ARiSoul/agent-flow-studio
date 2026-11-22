@@ -6,6 +6,7 @@ import { useDialog } from "./Dialog";
 import { useI18n } from "./i18n";
 import { AgentIcon } from "./icons";
 import type { LibraryAgent } from "./types";
+import { useWorkspaceActions } from "./Workspaces";
 
 const ID = /^[a-z][a-z0-9_]{0,39}$/;
 const NEW_YAML = "description: What this agent does and when to use it.\ntools: []\ninputs: {}\noutputs: {}\n";
@@ -22,6 +23,7 @@ export function LibraryManager({ library, locations, onChange, onClose }: {
   const { t } = useI18n();
   const dialog = useDialog();
   const [sel, setSel] = useState<string | null>(library[0]?.id ?? null);
+  const acts = useWorkspaceActions(undefined, (text, bad) => setMsg({ text, bad }));
   const [form, setForm] = useState<Form | null>(null);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -113,6 +115,10 @@ export function LibraryManager({ library, locations, onChange, onClose }: {
               <div className="row actions">
                 <button className="primary" disabled={busy} onClick={save}>{t("cmd.saveOk")}</button>
                 {!form.isNew && <button disabled={busy} onClick={duplicate}>{t("menu.duplicate")}</button>}
+                {!form.isNew && <button disabled={busy} title={t("copy.agentLibTitle")}
+                  onClick={() => acts.copyTo({ kind: "agent", name: form.id }, form.id)}>{t("copy.button")}</button>}
+                {!form.isNew && <button disabled={busy} title={t("copy.moveAgentLibTitle")}
+                  onClick={() => acts.copyTo({ kind: "agent", name: form.id }, form.id, "move").then((r) => r && onChange())}>{t("copy.moveButton")}</button>}
                 {!form.isNew && <button className="danger" disabled={busy} onClick={remove}>{t("app.delete")}</button>}
                 {msg && <span className={`msg${msg.bad ? " bad" : ""}`} title={msg.text}>{msg.text}</span>}
               </div>

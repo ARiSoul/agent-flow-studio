@@ -15,9 +15,21 @@ _names: frozenset[str] = frozenset()
 _contracts: dict[str, Any] = {}
 
 
+# nested runs (subflows): their own artifact names by run id
+_by_run: dict[str, tuple[frozenset[str], dict[str, Any]]] = {}
+
+
 def configure(names: Iterable[str], contracts: Mapping[str, Any]) -> None:
     global _names, _contracts
     _names, _contracts = frozenset(names), dict(contracts)
+
+
+def configure_run(run_id: str, names: Iterable[str], contracts: Mapping[str, Any]) -> None:
+    _by_run[run_id] = (frozenset(names), dict(contracts))
+
+
+def release_run(run_id: str) -> None:
+    _by_run.pop(run_id, None)
 
 
 @tool("save_artifact", "Saves an intermediate result of the run (e.g. 01_summary.json).",
@@ -27,10 +39,11 @@ async def save_artifact(args):
         path = safe_artifact_path(settings.runs_dir, args["run_id"], args["name"])
     except ValueError as e:
         return err(str(e))
-    if args["name"] not in _names:
+    names, contracts = _by_run.get(args["run_id"], (_names, _contracts))
+    if args["name"] not in names:
         return err(f"Unexpected artifact name: '{args['name']}'. "
-                   f"Valid names: {', '.join(sorted(_names))}.")
-    contract = _contracts.get(args["name"])
+                   f"Valid names: {', '.join(sorted(names))}.")
+    contract = contracts.get(args["name"])
     if contract is not None:
         try:
             contract.validate_json(args["content"])

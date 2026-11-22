@@ -78,6 +78,13 @@ def _validate(raw: dict[str, Any], prompts: dict[str, str]) -> dict[str, Any]:
 
 
 def _check(raw: dict[str, Any], prompts: dict[str, str]) -> dict[str, Any]:
+    from .. import workspaces
+    raw, unknown = workspaces.substitute(raw)  # {vars.x}/{roots.x} as the run will see them
+    if unknown:
+        err = workspaces.unknown_error(unknown).msgs[0]
+        return {"ok": False, "errors": [{"loc": "", "msg": str(err), "nodes": [],
+                                         **(to_json(err) or {})}]}
+    prompts = {k: workspaces.substitute_text(v)[0] for k, v in prompts.items()}
     try:
         spec = FlowSpec.model_validate(raw)
     except ValidationError as e:

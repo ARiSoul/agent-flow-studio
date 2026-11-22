@@ -27,6 +27,8 @@ export interface IOTypeRaw {
   contract?: string | null;
   draft?: boolean;
   show_if?: string | null;  // flow inputs: shown only when this expression on earlier inputs holds
+  // flow inputs: the output of another flow that usually gives this value ("Fill from a run")
+  source?: { flow: string; output: string } | null;
 }
 
 /** An agent input: from a flow input (input.<x>) or an agent output (<agent>.<out>), or free. */
@@ -59,6 +61,14 @@ export interface AgentRaw {
   // an action node (graph mode): the studio runs this connector action, no model
   action?: { connector: string; name: string; params?: Record<string, string>;
     outputs?: Record<string, { from?: string; match?: string }> } | null;
+  // a subflow node (graph mode): another flow of the workspace runs as one step
+  subflow?: SubflowRaw | null;
+}
+
+export interface SubflowRaw {
+  flow: string;
+  inputs?: Record<string, string>;  // child flow input -> text with {expression} parts
+  outputs?: Record<string, { from: string }>;  // node output -> "<agent>.<output>" or "message"
 }
 
 /** An agent of the library (GET /api/agents): copied into flows, then tuned there. */
@@ -137,7 +147,8 @@ export interface McpRaw {
 export type Autonomy = "approve" | "approve_prod" | "auto";
 
 export interface WorkspaceRaw {
-  path: string;
+  path?: string;  // a folder (absolute, or relative to where the studio runs), or…
+  root?: string;  // …a root of the studio workspace
   environment?: "dev" | "staging" | "prod";
   description?: string;
   protected_branches?: string[];
@@ -162,6 +173,9 @@ export interface FlowRaw {
   edges?: EdgeRaw[];
   mcp_servers?: Record<string, McpRaw>;
   autonomy?: Autonomy;
+  // studio workspaces: the agents read the workspace context; after a finished run, update it
+  use_context?: boolean;
+  context_update?: "suggest" | "always" | "never";
   workspace?: WorkspaceRaw | null;
   // w, h: the size the person gave the node in cards; compact and avatar keep their own
   layout?: Record<string, { x: number; y: number; w?: number; h?: number;
@@ -207,6 +221,113 @@ export interface Catalog {
   connections: Record<string, { type: string; environment: string; description: string; access: string;
     actions_only?: boolean; actions?: Record<string, { access: string; description: string; params?: string[] }> }>;
   locations?: string[];  // where things can be kept: "local" and the loaded extensions
+  workspace?: WorkspaceNow;  // the open studio workspace and environment
+}
+
+/** The open studio workspace (cookie afs_ws) and environment (afs_env). */
+export interface WorkspaceNow {
+  name: string;
+  title?: string;
+  where: "studio" | "repo" | "local";
+  environment: string | null;
+  environments: string[];
+  kind: "dev" | "staging" | "prod" | null;
+  vars?: string[];
+  roots?: string[];
+}
+
+export interface WorkspaceItem {
+  name: string;
+  title: string;
+  where: "studio" | "repo" | "local" | "missing";
+  folder: string | null;
+  ok: boolean;
+  environments: string[];
+  default_environment: string | null;
+}
+
+export interface WorkspaceSpecRaw {
+  version?: number;
+  name: string;
+  title?: string;
+  description?: string;
+  roots: Record<string, { path: string; description?: string }>;
+  vars: Record<string, string>;
+  environments: Record<string, { kind: "dev" | "staging" | "prod"; vars?: Record<string, string> }>;
+  default_environment?: string | null;
+}
+
+export interface WorkspaceDetail {
+  name: string;
+  where: "studio" | "repo" | "local";
+  folder: string | null;
+  home: string | null;
+  spec?: WorkspaceSpecRaw;
+  roots?: Record<string, string>;  // absolute folders
+}
+
+export type CopyKind = "flow" | "agent" | "flow_agent" | "connector" | "vars";
+export interface CopyItem {
+  kind: CopyKind;
+  name?: string;
+  agent?: string;
+  to_flow?: string | null;
+  vars?: string[];
+  environments?: string[];
+}
+export interface CopyDep {
+  kind: "var" | "root" | "connector" | "agent" | "flow";
+  name: string;
+  in_source: boolean;
+  in_target: boolean;
+  copyable: boolean;
+  choice: "copy" | "target" | "leave";
+}
+export interface CopyPlan {
+  kind: CopyKind;
+  name?: string;
+  clash?: boolean;
+  suggestion?: string;
+  deps: CopyDep[];
+  secrets?: string[];
+  clash_vars?: string[];
+  clash_environments?: string[];
+}
+export interface CopyResult {
+  copied: { kind: string; name: string; as: string }[];
+  secrets: string[];
+  missing_secrets: string[];
+}
+
+export interface BoardFlow {
+  name: string;
+  title: string;
+  description?: string;
+  valid: boolean;
+  execution?: string;
+  inputs: Record<string, { type: string; label: string; source?: { flow: string; output: string } }>;
+  outputs: { agent: string; name: string; type: string }[];
+  subflows: string[];
+  handoffs: { flow: string; output: string; input: string }[];
+  last_run?: { input: string; status: string; started: number };
+}
+
+/** The workspace context (GET /api/context). */
+export interface WorkspaceContext {
+  studio: boolean;
+  file?: string | null;
+  sections: Record<string, string>;  // root name or "notes" → Markdown
+  roots: Record<string, { path: string; exists: boolean; git: boolean; explored: boolean;
+    updated: number | null; commit: string | null; commits_since: number | null }>;
+  chars?: number;
+  limit?: number;
+}
+
+export interface HandoffRun {
+  input: string;
+  started: number;
+  status: string;
+  outputs: { agent: string; name: string; type: string; label: string; preview: string }[];
 }
 
 export interface FlowSummary {

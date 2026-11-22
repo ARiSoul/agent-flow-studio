@@ -128,6 +128,30 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   `/api/chats`), `runner.py` (full/step/until/agent runs,
   gates, live approvals, decisions in `runs/<id>/decisions.jsonl`; `ask` = ask an agent for more
   after a run; `past_runs`/`open_past` = open a saved run again from its `events.jsonl`), `yaml_io.py`, `validation.py`.
+- `workspaces.py`: studio workspaces (`workspace.yaml`: roots, vars, environments with a `kind`;
+  in a repo `<repo>/.agent-flow/` or in the studio `workspaces/<name>/`; registry
+  `~/.agent-flow-studio/workspaces.json`). The current workspace/environment is a ContextVar
+  (`current()`, `using()`); the editor sends it in the cookies `afs_ws`/`afs_env` (middleware in
+  `server.py`), runs keep theirs for life, the CLI takes `--workspace`/`--env`. The studio's own
+  workspace (`studio`) is today's behaviour. A workspace layers its `flows/`, `agents/` and
+  `connections.yaml` over the studio ones (keyring keys `ws:<ws>/<conn>/<field>`); `{vars.x}`/
+  `{roots.x}` are substituted when a flow loads (`substitute`; `if` keeps `vars.x` as names);
+  the environment kind drives `approve_prod`. Machine state per workspace via `scoped()`
+  (`runs/@<ws>/<id>`, chats, `.previous`, connector tests, browser profiles).
+  `editor/copying.py`: `copy_plan`/`copy`/`duplicate` across workspaces (dependency check; secrets
+  never in files, "same secrets" copies the keyring entry). Hand-off: flow input `source` hint,
+  `Runner.flow_outputs`/`output_value`, `io/_handoff.json`. Subflow nodes (`AgentSpec.subflow`,
+  graph only): `compile._check_subflows` (same workspace, graph, no human gates, no cycles, depth
+  ≤ 3), `engine._subflow_node` (child `GraphEngine` with `nested=True` on `<run>--<node>`, the
+  flow registered per run id in `io`/`artifacts`, shared approver, events tagged `sub`).
+- `context.py`: the workspace context (`context.md` with one marked section per root + `notes`,
+  `context.json` with the commit per root) in the workspace folder; `compile._context_section`
+  adds it to every agent prompt of a workspace flow (`FlowSpec.use_context`). The context keeper
+  is a flow built in code (`keeper_flow(root)`: one agent, read-only `workspace.*` tools on that
+  root, typed outputs `section`/`summary`); `Runner.update_context` / `_context_steps` run it per
+  root and the studio stores the section (the model never writes files). After a done full run,
+  `FlowSpec.context_update` (`suggest` default · `always` = last system step in the same run ·
+  `never`). `copying.move` = copy then remove the original (only the workspace's own items).
 - `extensions.py`: loads `extensions/<name>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
 - Frontend in `editor/` (Vite + React + @xyflow/react, i18n in `editor/src/i18n/`) → build in
   `src/agent_flow_studio/editor/static/`.
@@ -145,7 +169,7 @@ Subagents accept MCP tools by their full name `mcp__server__tool`.
 ## Commands
 - `pytest` · `AFS_NO_EXTENSIONS=1 pytest tests` · `ruff check .`
 - Website connectors: `pip install -e ".[web]"` (Playwright; uses the installed Edge/Chrome)
-- `agent-flow-studio <input> --flow <flow> [--resume <session_id>]`
+- `agent-flow-studio <input> --flow <flow> [--resume <session_id>] [--workspace <ws>] [--env <env>]`
 - `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog|templates|agents`
 - `agent-flow-studio-flows new <flow> --template <id> --set <param>=<value>`
 - `agent-flow-studio-editor [--port 8765] [--flows <folder>]` · frontend: `cd editor && npm run build`

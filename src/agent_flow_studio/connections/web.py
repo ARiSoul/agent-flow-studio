@@ -48,6 +48,12 @@ def profiles_dir() -> Path:
 
 
 def profile_dir(name: str) -> Path:
+    """The browser profile of a website connector; a workspace's own connectors have their own
+    (two workspaces can be signed in as different people under the same name)."""
+    from .. import workspaces
+    from . import store
+    if not workspaces.current().studio and store.location(name) == "workspace":
+        return workspaces.scoped(profiles_dir()) / name
     return profiles_dir() / name
 
 

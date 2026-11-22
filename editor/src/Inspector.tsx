@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { api } from "./api";
 import { CommitInput, Field, NumberInput } from "./fields";
 import { Icon, ICON_IDS } from "./icons";
 import { AgentInputsEditor, ExprInput, IOListEditor, exprRefs } from "./IOEditors";
@@ -17,6 +18,7 @@ interface Props {
   select: (s: Selection) => void;
   remove: (s: Selection) => void;
   testAgent?: (id: string) => void;
+  flows?: string[];  // the other flows of this workspace (subflow nodes)
   library?: {
     state: (id: string) => string; has: (lib: string) => boolean;
     update: (id: string) => void; detach: (id: string) => void; save: (id: string) => void;
@@ -36,14 +38,37 @@ const unkv = (o: Record<string, string> | undefined, sep: string) =>
   Object.entries(o ?? {}).map(([k, v]) => `${k}${sep}${v}`).join("\n");
 
 /** Inline prompt or in a prompts/*.md file (edited here and saved with the flow). */
-function PromptEditor({ owner, defaultPath, doc, update, pick }: {
+/** The workspace's variables and roots as buttons that insert {vars.x} / {roots.x} at the cursor. */
+function VarChips({ catalog, onInsert }: { catalog?: Catalog; onInsert: (text: string) => void }) {
+  const { t } = useI18n();
+  const ws = catalog?.workspace;
+  const items = [...(ws?.vars ?? []).map((v) => `{vars.${v}}`), ...(ws?.roots ?? []).map((r) => `{roots.${r}}`)];
+  if (!items.length) return null;
+  return (
+    <div className="var-chips" role="group" aria-label={t("insp.vars")}>
+      <span className="muted small" title={t("insp.varsHint")}>{t("insp.vars")}</span>
+      {items.map((x) => <button key={x} type="button" className="chip mono" title={t("insp.varsInsert")}
+        onMouseDown={(e) => e.preventDefault()} onClick={() => onInsert(x)}>{x}</button>)}
+    </div>
+  );
+}
+
+/** Inserts text at the cursor of a text field (or at the end). */
+function insertAt(el: HTMLTextAreaElement | HTMLInputElement | null, text: string, add: string): string {
+  const a = el?.selectionStart ?? text.length, b = el?.selectionEnd ?? text.length;
+  return text.slice(0, a) + add + text.slice(b);
+}
+
+function PromptEditor({ owner, defaultPath, doc, update, pick, catalog }: {
   owner: { prompt?: string | null; prompt_file?: string | null };
   defaultPath: string;
   doc: Doc;
   update: Update;
   pick: (d: Doc) => { prompt?: string | null; prompt_file?: string | null };
+  catalog?: Catalog;
 }) {
   const { t } = useI18n();
+  const ref = useRef<HTMLTextAreaElement>(null);
   const file = owner.prompt_file ?? null;
   const text = file ? doc.prompts[file] ?? "" : owner.prompt ?? "";
   const missing = file !== null && !(file in doc.prompts);
@@ -67,7 +92,7 @@ function PromptEditor({ owner, defaultPath, doc, update, pick }: {
         {file && <code className="path">{file}</code>}
       </div>
       {missing && <span className="field-err">{t("insp.fileMissing")}</span>}
-      <textarea className="mono" rows={14} value={text} spellCheck={false}
+      <textarea ref={ref} className="mono" rows={14} value={text} spellCheck={false}
         onChange={(e) => {
           const v = e.target.value;
           update((d) => {
@@ -76,6 +101,10 @@ function PromptEditor({ owner, defaultPath, doc, update, pick }: {
             else o.prompt = v;
           });
         }} />
+      <VarChips catalog={catalog} onInsert={(x) => {
+        const v = insertAt(ref.current, text, x);
+        update((d) => { const o = pick(d); if (o.prompt_file) d.prompts[o.prompt_file] = v; else o.prompt = v; });
+      }} />
     </div>
   );
 }
@@ -153,7 +182,7 @@ function WritesEditor({ writes, catalog, set }: { writes: ArtifactRaw[]; catalog
   );
 }
 
-function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, library, val }: { id: string; focus?: string } & Omit<Props, "sel" | "remove">) {
+function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, library, val, flows }: { id: string; focus?: string } & Omit<Props, "sel" | "remove">) {
   const { t } = useI18n();
   const spec = doc.spec;
   const a = spec.agents[id];
@@ -224,9 +253,11 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
       </Field>
       {a.action
         ? <ActionNodeEditor a={a} catalog={catalog} setA={setA} />
+        : a.subflow
+        ? <SubflowEditor id={id} a={a} flows={(flows ?? []).filter((f) => f !== doc.spec.name)} setA={setA} />
         : <Field label={t("insp.prompt")}>
           <PromptEditor owner={a} defaultPath={`prompts/${id}.md`} doc={doc} update={update}
-            pick={(d) => d.spec.agents[id]} />
+            pick={(d) => d.spec.agents[id]} catalog={catalog} />
         </Field>}
       <h3>{t("io.inputs")}</h3>
       <p className="muted small">{t("io.agentInputsHint")}</p>
@@ -247,7 +278,7 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
               onChange={(v) => setA((x) => { if (v === null) delete x.max_runs; else x.max_runs = v; })} />
           </Field>
         </div>)}
-      {!a.action && <>{/* a model agent: model, tools, connectors, artifacts (not for an action node) */}
+      {!a.action && !a.subflow && <>{/* a model agent: model, tools, connectors, artifacts (not for an action or subflow node) */}
       <div className="grid2">
         <Field label={t("insp.model")}>
           <input list="models" value={a.model ?? ""} placeholder={t("insp.modelFromFlow")}
@@ -395,6 +426,74 @@ function ActionNodeEditor({ a, catalog, setA }: { a: AgentRaw; catalog: Catalog;
             <input className="mono" value={act.outputs?.[o]?.match ?? ""} placeholder={"(\\d+)\\D*$"}
               onChange={(e) => setOut(o, "match", e.target.value)} /></label>
         </div>))}
+    </div>
+  </>;
+}
+
+/** A subflow node: which flow runs, what its inputs get ({expression} texts), and where each output
+ * of this node comes from (an output of the child flow, or the message of its stop gate). */
+function SubflowEditor({ id, a, flows, setA }: { id: string; a: AgentRaw; flows: string[];
+  setA: (fn: (a: AgentRaw) => void) => void }) {
+  const { t } = useI18n();
+  const sub = a.subflow!;
+  const [child, setChild] = useState<Doc["spec"] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    setChild(null); setErr(null);
+    if (!sub.flow) return;
+    api.load(sub.flow).then((r) => setChild(r.spec)).catch((e) => setErr(String((e as Error).message ?? e)));
+  }, [sub.flow]);
+  const setSub = (fn: (x: NonNullable<AgentRaw["subflow"]>) => void) => setA((x) => { fn(x.subflow!); });
+  const childOuts = child ? Object.entries(child.agents).flatMap(([an, ca]) =>
+    Object.entries(ca.outputs ?? {}).map(([on, o]) => ({ ref: `${an}.${on}`, name: on, type: o.type ?? "text" }))) : [];
+  const humans = child ? Object.entries(child.gates ?? {}).filter(([, g]) => g.kind === "human").map(([n]) => n) : [];
+  const takeAll = () => setA((x) => {
+    const outs = (x.outputs = x.outputs ?? {});
+    const map = (x.subflow!.outputs = x.subflow!.outputs ?? {});
+    const mapped = new Set(Object.values(map).map((m) => m.from));
+    for (const o of childOuts) {
+      if (mapped.has(o.ref)) continue;
+      let n = o.name, i = 2;
+      while (n in outs) n = `${o.name}_${i++}`;
+      outs[n] = { type: o.type as "text" };
+      map[n] = { from: o.ref };
+    }
+  });
+  return <>
+    <p className="muted small">{t("insp.subflowHint")}</p>
+    <Field label={t("insp.subflowFlow")}>
+      <select value={sub.flow} onChange={(e) => setSub((x) => { x.flow = e.target.value; x.inputs = {}; x.outputs = {}; })}>
+        {!flows.includes(sub.flow) && <option value={sub.flow}>{sub.flow || "—"}</option>}
+        {flows.map((f) => <option key={f} value={f}>{f}</option>)}
+      </select>
+    </Field>
+    {err && <span className="field-err">{err}</span>}
+    {child && child.execution !== "graph" && <span className="field-err">{t("insp.subflowNotGraph")}</span>}
+    {humans.length > 0 && <span className="field-err">{t("insp.subflowHuman", { gates: humans.join(", ") })}</span>}
+    {child && Object.keys(child.inputs ?? {}).length > 0 && (
+      <div className="field">
+        <span className="field-label">{t("insp.subflowInputs")}</span>
+        <span className="field-hint">{t("insp.subflowInputsHint")}</span>
+        {Object.entries(child.inputs ?? {}).map(([n, x]) => (
+          <label key={n} className="field"><span className="field-label">{n} <span className="muted">· {x.type ?? "text"}{x.required === false ? ` · ${t("app.optional")}` : ""}</span></span>
+            <input className="mono" value={sub.inputs?.[n] ?? ""} placeholder={`{input.${n}}`}
+              onChange={(e) => setSub((s2) => { const m = (s2.inputs = s2.inputs ?? {}); if (e.target.value) m[n] = e.target.value; else delete m[n]; })} />
+          </label>))}
+      </div>)}
+    <div className="field">
+      <span className="field-label">{t("insp.subflowOutputs")}</span>
+      <span className="field-hint">{t("insp.subflowOutputsHint")}</span>
+      {Object.keys(a.outputs ?? {}).map((o) => (
+        <label key={o} className="field"><span className="field-label">{o} ← </span>
+          <select value={sub.outputs?.[o]?.from ?? ""}
+            onChange={(e) => setSub((s2) => { const m = (s2.outputs = s2.outputs ?? {}); if (e.target.value) m[o] = { from: e.target.value }; else delete m[o]; })}>
+            <option value="">—</option>
+            {childOuts.map((c) => <option key={c.ref} value={c.ref}>{c.ref} · {c.type}</option>)}
+            <option value="message">{t("insp.subflowMessage")}</option>
+          </select>
+        </label>))}
+      <button className="small" disabled={!childOuts.length} onClick={takeAll}>{t("insp.subflowTakeAll")}</button>
+      <span className="muted small">{t("insp.subflowRun", { id })}</span>
     </div>
   </>;
 }
@@ -631,6 +730,8 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
   const { t } = useI18n();
   const s = doc.spec;
   const [newMcp, setNewMcp] = useState("");
+  const taskRef = useRef<HTMLTextAreaElement>(null);
+  const roots = catalog.workspace?.roots ?? [];
   const set = (fn: (s: FlowRaw) => void) => update((d) => fn(d.spec));
   const reserved = new Set(catalog.servers);
   return (
@@ -673,8 +774,9 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
         </>}
       <IOListEditor root="input" doc={doc} catalog={catalog} update={update} />
       <Field label={t("insp.task")} hint={t(isTyped(s) ? "insp.taskHintTyped" : "insp.taskHint")}>
-        <textarea rows={3} value={s.task ?? ""} onChange={(e) => set((x) => { x.task = e.target.value; })} />
+        <textarea ref={taskRef} rows={3} value={s.task ?? ""} onChange={(e) => set((x) => { x.task = e.target.value; })} />
       </Field>
+      <VarChips catalog={catalog} onInsert={(x) => set((y) => { y.task = insertAt(taskRef.current, s.task ?? "", x); })} />
       <Field label={t("insp.start")}>
         <select value={s.start} onChange={(e) => set((x) => { x.start = e.target.value; })}>
           {Object.keys(s.agents).map((a) => <option key={a}>{a}</option>)}
@@ -682,8 +784,24 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
       </Field>
       <Field label={t("insp.orchestratorPrompt")} hint={t("insp.orchestratorPromptHint")}>
         <PromptEditor owner={s.orchestrator ?? {}} defaultPath="prompts/orchestrator.md" doc={doc} update={update}
-          pick={(d) => (d.spec.orchestrator = d.spec.orchestrator ?? {})} />
+          pick={(d) => (d.spec.orchestrator = d.spec.orchestrator ?? {})} catalog={catalog} />
       </Field>
+      {catalog.workspace && catalog.workspace.name !== "studio" && <>
+        <h3>{t("ctx.flowTitle")}</h3>
+        <label className="check">
+          <input type="checkbox" checked={s.use_context !== false}
+            onChange={(e) => set((x) => { if (e.target.checked) delete x.use_context; else x.use_context = false; })} />
+          {t("ctx.useContext")}
+        </label>
+        <Field label={t("ctx.afterRun")} hint={t("ctx.afterRunHint")}>
+          <select value={s.context_update ?? "suggest"} onChange={(e) => set((x) => {
+            const v = e.target.value as "suggest" | "always" | "never";
+            if (v === "suggest") delete x.context_update; else x.context_update = v;
+          })}>
+            {(["suggest", "always", "never"] as const).map((k) => <option key={k} value={k}>{t(`ctx.after.${k}`)}</option>)}
+          </select>
+        </Field>
+      </>}
       <h3>{t("insp.writing")}</h3>
       <Field label={t("insp.autonomy")} hint={t("insp.autonomyHint")}>
         <select value={s.autonomy ?? "approve"} onChange={(e) => set((x) => { x.autonomy = e.target.value as FlowRaw["autonomy"]; })}>
@@ -693,15 +811,27 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
       {s.autonomy === "auto" && <p className="field-err">{t("insp.autoWarning")}</p>}
       <label className="check">
         <input type="checkbox" checked={!!s.workspace} onChange={(e) => set((x) => {
-          if (e.target.checked) x.workspace = { path: "", environment: "dev" }; else delete x.workspace;
+          if (e.target.checked) x.workspace = roots.length ? { root: roots[0], environment: "dev" } : { path: "", environment: "dev" };
+          else delete x.workspace;
         })} /> {t("insp.workspace")}
       </label>
       {s.workspace && <>
-        <Field label={t("insp.folder")} hint={t("insp.folderHint")}>
-          <input className="mono" value={s.workspace.path} onChange={(e) => set((x) => { x.workspace = { ...x.workspace!, path: e.target.value }; })} />
-        </Field>
+        {(roots.length > 0 || s.workspace.root) && (
+          <Field label={t("insp.folderRoot")} hint={t("insp.folderRootHint")}>
+            <select value={s.workspace.root ?? ""} onChange={(e) => set((x) => {
+              const w = { ...x.workspace! };
+              if (e.target.value) { w.root = e.target.value; delete w.path; } else { delete w.root; w.path = ""; }
+              x.workspace = w;
+            })}>
+              <option value="">{t("insp.folderPathOption")}</option>
+              {[...new Set([...roots, ...(s.workspace.root ? [s.workspace.root] : [])])].map((r) => <option key={r} value={r}>{`{roots.${r}}`}</option>)}
+            </select>
+          </Field>)}
+        {!s.workspace.root && <Field label={t("insp.folder")} hint={t("insp.folderHint")}>
+          <input className="mono" value={s.workspace.path ?? ""} onChange={(e) => set((x) => { x.workspace = { ...x.workspace!, path: e.target.value }; })} />
+        </Field>}
         <div className="grid2">
-          <Field label={t("insp.environment")}>
+          <Field label={t("insp.environment")} hint={catalog.workspace?.kind ? t("insp.environmentFromWs", { env: catalog.workspace.environment ?? "", kind: catalog.workspace.kind }) : undefined}>
             <select value={s.workspace.environment ?? "dev"} onChange={(e) => set((x) => { x.workspace = { ...x.workspace!, environment: e.target.value as "dev" }; })}>
               <option>dev</option><option>staging</option><option>prod</option>
             </select>
@@ -760,6 +890,7 @@ export function Inspector(p: Props) {
       </div>
       <div className="panel-body">{body}</div>
       <datalist id="models">{p.catalog.models.map((m) => <option key={m} value={m} />)}</datalist>
+      <datalist id="afs-flows">{(p.flows ?? []).filter((f) => f !== doc.spec.name).map((f) => <option key={f} value={f} />)}</datalist>
     </aside>
   );
 }

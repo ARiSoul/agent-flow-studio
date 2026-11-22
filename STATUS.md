@@ -59,10 +59,20 @@ Checked in the browser with a fake model (no real model run). The flow on this m
 (local, outside git) still has its old recorded action (with the sign-in clicks and no extract):
 record it again after "Sign in" and rebuild the flow with a decision.
 
-**Next suggested task**: item 1 of the backlog.
+Then (second machine, 2026-11-22): **studio workspaces** — a workspace per project (in a
+repository `.agent-flow/` or in the studio `workspaces/<name>/`) with roots, variables and
+environments, its own flows/agents/connectors, the Board view, hand-off between flows ("Fill from
+a run", `source` hints), subflow nodes, and "Copy to…" for flows, agents, connectors and
+variables/environments plus "Duplicate workspace". Checked in the browser with a fake model and a
+fake keyring (scratch folders only); no real model run. **After you pull**: `npm run build` and
+restart the editor; nothing changes until you create or open a workspace (top bar → ⋯).
+
+**Next suggested task**: create a real workspace for a repository on the work machine (top bar →
+⋯ → New workspace → In a repository), move its flows there with "Copy to…", set its variables and
+environments, then item 1 of the backlog.
 
 ## Current state
-Works and is tested (`pytest`: core 443 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 518 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -131,6 +141,20 @@ Works and is tested (`pytest`: core 443 tests, without extensions; `ruff` clean;
 - **Local extensions** (`extensions/<name>/`, outside git) for domain tools/contracts/templates.
   `AFS_MOCK` only affects extension tools (the core never uses it).
 - Public example flow: `flows/repo-review` (repository review, read only, graph mode).
+- **Studio workspaces** (`workspaces.py`, `editor/copying.py`, `Workspaces.tsx`, `Board.tsx`):
+  workspace + environment selectors in the top bar (cookies `afs_ws`/`afs_env`); a workspace
+  lives in a repo (`<repo>/.agent-flow/`) or in the studio (`workspaces/<name>/`, ignored by git);
+  registry in `~/.agent-flow-studio/workspaces.json`. `roots`, `vars` and `environments` (kind
+  dev/staging/prod drives `approve_prod`); `{vars.x}`/`{roots.x}` in flows and prompts, `vars.x`
+  in conditions, `workspace: {root: app}`. The workspace's flows, agents and connectors come
+  first (keyring per workspace); runs, chats, `previous` per workspace (`runs/@<ws>/`).
+  Board view (cards, source/subflow/hand-off links, settings panel). Hand-off: `source` hint on
+  flow inputs, "Fill from a run…", `io/_handoff.json`. Subflow nodes (graph mode, no human gates
+  inside, depth ≤ 3, no cycles). "Copy to…" with a dependency check for flows, flow agents,
+  library agents, connectors, variables/environments; "Duplicate workspace"; secrets never in
+  files ("use the same secrets" copies the keyring entry). Assistant: `view_workspace`,
+  `set_agent(subflow=…)`, `source` hints. CLI: `--workspace`/`--env`,
+  `agent-flow-studio-flows workspaces`.
 
 **Note for the other machine (from the translation):** local flows and the extension there may
 still have Portuguese prompts/texts (outside git). Defaults changed: `input.label` "Entrada" →
@@ -157,6 +181,11 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
    with the last run → message) took many rounds; with the assistant it worked. Ideas: starters
    for common patterns ("check a value and compare it with the last run"), the assistant as the
    default way to start a flow, a guided wizard, clearer empty states and hints on the canvas.
+
+9. [ ] Workspaces, next steps: try them with a real repository and real flows; the board could
+   start a run and show running flows; "Fill from a run" could also take files; copy a whole
+   run's inputs to another flow; the assistant could propose splitting a big flow into
+   subflows.
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
 · editor polish · context menu · agent library · assistant commands/history · connector actions
@@ -332,3 +361,34 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-21 · second machine (account B) · Run panel layout: a drag bar between the conversation
   and the outputs (double click: default), the run setup can be hidden (▴/▾ next to Run),
   and the Outputs/Artifacts blocks fold; all kept in the browser (`afs.run.*`).
+- 2026-11-22 · second machine (account B) · Studio workspaces (one go): `workspace.yaml` with
+  roots, vars and environments, in a repo or in the studio, registry per machine; workspace
+  flows/agents/connectors layered over the studio ones (keyring per workspace); `{vars.x}`/
+  `{roots.x}` substitution and `vars` in conditions; environment kind → `approve_prod`; runs,
+  chats, previous and connector tests per workspace; Board view; hand-off between flows (`source`
+  hints, "Fill from a run", provenance); subflow nodes; "Copy to…" (flows, flow agents, library
+  agents, connectors, vars/environments) with a dependency check and "Duplicate workspace";
+  assistant `view_workspace` and subflows; CLI `--workspace`/`--env`. Tests: 52 new (495 core).
+  Checked in the browser with a fake model and a fake keyring.
+- 2026-11-22 · second machine (account B) · Workspaces, after the first look: "Browse…" next to
+  folder fields (New / Open / Duplicate workspace) opens an in-dialog folder browser
+  (`/api/folders`: subfolders by name, drives, git repositories and workspaces marked); the
+  repository field shows only "In a repository"; the top bar says "Workspace" before the
+  workspace selector and "Flow" before the flow selector (the "Flows" brand is gone).
+- 2026-11-22 · second machine (account B) · Workspace context and move: `context.md` per
+  workspace (a section per root + notes) that every agent of its flows reads; the context
+  keeper (read-only system agent per root) explores or updates it from the board, when a root
+  is added (Browse… in the roots table), from the Run panel ("suggest", the default) or as a
+  last system step of each run ("always", shown on the canvas); "Move to workspace…" for flows,
+  flow agents, library agents, connectors (with their secret) and variables/environments, in
+  the top bar, board, canvas, library and connector menus. CLI `context`. Checked in the
+  browser with a fake model (explore, always, suggest, move).
+- 2026-11-22 · second machine (account B) · Board: the side panel shows where the workspace
+  lives (the repository folder, the workspace files) and the absolute folder of each root; it
+  can be resized (drag bar, shared with the editor's right panel); context menus on the canvas
+  (new flow, update/explore the context, arrange, fit, new/duplicate workspace) and on each
+  card (open, run, duplicate here, copy, move, delete).
+- 2026-11-22 · second machine (account B) · Context keeper progress: the board's context block
+  follows the run live (spinner, elapsed time, state per root, its last actions, Stop) and
+  finds a run that is already going (started from the board menu, a new root or another tab).
+

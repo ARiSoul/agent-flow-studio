@@ -68,7 +68,7 @@ def agent_query(behave=None, defaults=None):
         for k, v in (values or {}).items():
             yield _am(ToolUseBlock(f"t-{agent}-{n}-{k}", "mcp__io__set_output",
                                    {"run_id": rid, "agent": agent, "name": k, "value": v}))
-            io_tool.store_output(io_tool._spec, rid, agent, k, v)
+            io_tool.store_output(io_tool.spec_for(rid), rid, agent, k, v)
         entry["end"] = time.perf_counter()
         yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
                             num_turns=2, session_id=f"s-{agent}-{n}", total_cost_usd=0.01)

@@ -24,6 +24,15 @@ MAX_TEXT = 200_000
 MAX_ITEMS = 200
 
 
+class InputSource(BaseModel):
+    """Flow inputs only: the output of another flow that usually gives this value (a hint for
+    "Fill from a run"; typing the value by hand stays possible)."""
+
+    model_config = ConfigDict(extra="forbid")
+    flow: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,39}$")
+    output: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}\.[a-z][a-z0-9_]{0,39}$")  # agent.output
+
+
 class IOType(BaseModel):
     """A typed value. min/max: value (number, integer) or length (text, markdown)."""
 
@@ -44,6 +53,7 @@ class IOType(BaseModel):
     # flow inputs only: shown (and required) only when this expression on the inputs declared
     # before it holds, e.g. input.source == "platform"; hidden inputs get no value
     show_if: str | None = None
+    source: InputSource | None = None  # flow inputs only: where the value usually comes from
 
     @model_validator(mode="after")
     def _check(self) -> IOType:

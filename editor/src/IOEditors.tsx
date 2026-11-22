@@ -132,12 +132,26 @@ export function IOListEditor({ root, doc, catalog, update }: { root: string; doc
                   <DefaultInput t={it} set={(v) => setOpt(name, "default", v as IOTypeRaw["default"])} />
                 </Field>)}
               {flow && (
+                <div className="grid2">
+                  <Field label={t("io.sourceFlow")} hint={t("io.sourceHint")}>
+                    <input className="mono" list="afs-flows" value={it.source?.flow ?? ""} placeholder="feature-analysis"
+                      onChange={(e) => setOpt(name, "source", e.target.value || it.source?.output
+                        ? { flow: e.target.value, output: it.source?.output ?? "" } : null)} />
+                  </Field>
+                  <Field label={t("io.sourceOutput")}>
+                    <input className="mono" value={it.source?.output ?? ""} placeholder="planner.plan"
+                      onChange={(e) => setOpt(name, "source", e.target.value || it.source?.flow
+                        ? { flow: it.source?.flow ?? "", output: e.target.value } : null)} />
+                  </Field>
+                </div>)}
+              {flow && (
                 <Field label={t("io.showIf")} hint={t("io.showIfHint")}>
                   <input className="mono" value={it.show_if ?? ""} placeholder={'input.source == "platform"'}
                     onChange={(e) => setOpt(name, "show_if", e.target.value || null)} />
                 </Field>)}
             </details>
             {flow && it.show_if && <span className="muted small">{t("io.shownWhen", { expr: it.show_if })}</span>}
+            {flow && it.source?.flow && <span className="muted small">{t("io.sourceShown", { flow: it.source.flow, output: it.source.output })}</span>}
           </div>
         );
       })}

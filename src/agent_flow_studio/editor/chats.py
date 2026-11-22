@@ -45,7 +45,8 @@ class Chat(BaseModel):
 
 
 def chats_dir() -> Path:
-    return settings.runs_dir / "chats"
+    from .. import workspaces
+    return workspaces.scoped(settings.runs_dir / "chats")  # per workspace
 
 
 def _path(flow: str, chat_id: str) -> Path:
