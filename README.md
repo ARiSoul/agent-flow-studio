@@ -38,6 +38,13 @@ approvals, connectors and writes with controlled autonomy.
   `{expression}` parts, and each output can say where it comes from (`from`: a value or field
   path; `match`: a regular expression whose first group is the value, e.g. `(\d+)\D*$` takes 14
   out of "1–14 of 14"). Example: action → decision → stops with a message, no model at all.
+- **Images and videos**: an agent with a `file` input sees it with `view_image` (PNG, JPEG, GIF,
+  WebP; large ones are scaled down) and `view_video` (MP4, MOV, WebM, MKV, AVI: up to 12 frames per
+  call, each with its time, for the whole video or a part; no sound), besides `read_file` for
+  text; `accept` on the input decides which of them it gets. Videos and large images need ffmpeg
+  (on PATH, or `pip install -e ".[media]"`). The run form streams large files to disk (up to 1 GB,
+  kept a day in `runs/.uploads/`). Claude Code keeps its own copy of the images an agent saw with
+  the session, in its config folder (`~/.claude`).
 - **Artifacts** (`reads`/`writes`): free files in `runs/<id>/`, still supported.
 - **Tools**: `artifacts.*` (intermediate results in `runs/<id>/`, with optional contracts),
   `connections.http_get|http_write` (connectors), `workspace.read|glob|grep|edit|write|bash`

@@ -16,6 +16,8 @@ editor = ["fastapi>=0.110", "uvicorn>=0.29"]
 dev = ["pytest", "ruff", "httpx", "fastapi>=0.110", "uvicorn>=0.29"]
 # website connectors (a real browser with your sign-in; uses the installed Edge/Chrome)
 web = ["playwright>=1.45"]
+# video frames and large images for the agents, when ffmpeg is not on PATH
+media = ["imageio-ffmpeg>=0.5"]
 
 [project.scripts]
 agent-flow-studio = "agent_flow_studio.main:main"

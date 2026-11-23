@@ -56,7 +56,7 @@ from ..publish import (
     terms_in,
 )
 from ..tools import io as io_tool
-from . import assistant, copying
+from . import assistant, copying, uploads
 from . import chats as assist_chats
 from . import commands as assist_commands
 from .runner import RunError, Runner, input_visible, list_artifacts, read_artifact_text
@@ -1254,6 +1254,17 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             raise _ws_error(e) from e
         _audit_event("workspace_context_edit", workspace=ws.name, section=name)
         return get_context()
+
+    @app.put("/api/uploads", dependencies=[Depends(csrf)], status_code=201)
+    async def upload(request: Request) -> dict[str, Any]:
+        """Stages a large file for a run (the body is the file): {upload, size}."""
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > uploads.MAX_FILE:
+            raise HTTPException(413, f"file larger than {uploads.MAX_FILE // (1024 * 1024)} MB")
+        try:
+            return await uploads.receive(request.stream())
+        except uploads.UploadError as e:
+            raise HTTPException(413 if "larger" in str(e) else 422, str(e)) from e
 
     @app.post("/api/context/update", dependencies=[Depends(csrf)])
     async def update_context(body: dict[str, Any]) -> dict[str, Any]:

@@ -5,7 +5,10 @@
 - `set_output(run_id, agent, name, value)`: saves one output after checking its type
   (builder/types.py). A file output is `{"filename", "content"}` (text, saved in
   `runs/<id>/files/<agent>/`) or `{"path"}` of an existing file in the workspace or the run folder.
-- `read_file(run_id, path)`: reads a text file from the run folder (uploaded inputs, file outputs).
+- `read_file(run_id, agent, path)`: reads a text file from the run folder (uploaded inputs, file
+  outputs).
+- `view_image(run_id, agent, path)`: shows an image of the run folder to the agent (tools/media.py).
+- `view_video(run_id, agent, path, start?, end?, frames?)`: shows frames of a video (needs ffmpeg).
 
 The guard hook makes sure `agent` is the agent that calls the tool. Values live in
 `runs/<id>/io/`: `_inputs.json` (flow inputs), `_gates.json` (human decisions), `<agent>.json`
@@ -21,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from claude_agent_sdk import tool
 
 from ..config import settings
+from . import media
 from .artifacts import DRAFT_MARKER
 from .common import err, ok
 from .guards import safe_artifact_path
@@ -300,12 +304,23 @@ def _file_value(rd: Path, agent: str, value: Any, workspace: Path | None, multip
     raise ValueError("a file output is {filename, content} or {path}")
 
 
-def read_run_file(run_id: str, rel: str) -> str:
+def run_file(run_id: str, rel: str) -> Path:
+    """A file of the run folder, never outside it."""
     rd = run_dir(run_id).resolve()
     p = (rd / rel).resolve()
     if rd not in p.parents or not p.is_file():
         raise ValueError(f"file not found in the run folder: {rel}")
-    data = p.read_bytes()[:MAX_READ]
+    return p
+
+
+def read_run_file(run_id: str, rel: str) -> str:
+    p = run_file(run_id, rel)
+    with p.open("rb") as f:
+        data = f.read(MAX_READ)
+    if media.image_type(data[:16]):
+        raise ValueError("this is an image: use view_image")
+    if media.video_format(data[:16]):
+        raise ValueError("this is a video: use view_video")
     if b"\x00" in data[:4096]:
         raise ValueError("binary file: only text files can be read")
     return data.decode("utf-8", "replace")
@@ -357,7 +372,8 @@ async def set_output(args):
 
 
 @tool("read_file", "Reads a text file of the run (an uploaded input or a file output), by its "
-      "path in the run folder, e.g. inputs/docs/notes.md.", {"run_id": str, "path": str})
+      "path in the run folder, e.g. inputs/docs/notes.md.",
+      {"run_id": str, "agent": str, "path": str})
 async def read_file(args):
     try:
         return ok(read_run_file(args["run_id"], args["path"]))
@@ -365,4 +381,33 @@ async def read_file(args):
         return err(str(e))
 
 
-IO_TOOLS = ("get_inputs", "set_output", "read_file")
+@tool("view_image", "Shows you an image of the run (PNG, JPEG, GIF or WebP: an uploaded input or a "
+      "file output), by its path in the run folder, e.g. inputs/shot/screen.png. A large image is "
+      "scaled down.", {"run_id": str, "agent": str, "path": str})
+async def view_image(args):
+    try:
+        return {"content": await media.image_blocks(run_file(args["run_id"], args["path"]))}
+    except (ValueError, OSError) as e:
+        return err(str(e))
+
+
+@tool("view_video", "Shows you frames of a video of the run (MP4, MOV, WebM, MKV or AVI), evenly "
+      "spread between start and end (seconds; default the whole video), each with its time. "
+      f"frames: 1 to {media.MAX_FRAMES} (default {media.DEFAULT_FRAMES}). You get no sound. Look "
+      "at the whole video first, then at the parts that matter.",
+      {"type": "object", "properties": {
+          "run_id": {"type": "string"}, "agent": {"type": "string"}, "path": {"type": "string"},
+          "start": {"type": "number", "minimum": 0}, "end": {"type": "number", "minimum": 0},
+          "frames": {"type": "integer", "minimum": 1, "maximum": media.MAX_FRAMES}},
+       "required": ["run_id", "agent", "path"]})
+async def view_video(args):
+    try:
+        blocks = await media.video_blocks(
+            run_file(args["run_id"], args["path"]), float(args.get("start") or 0),
+            args.get("end"), int(args.get("frames") or media.DEFAULT_FRAMES))
+    except (ValueError, OSError) as e:
+        return err(str(e))
+    return {"content": blocks}
+
+
+IO_TOOLS = ("get_inputs", "set_output", "read_file", "view_image", "view_video")

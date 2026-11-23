@@ -72,7 +72,7 @@ restart the editor; nothing changes until you create or open a workspace (top ba
 environments, then item 1 of the backlog.
 
 ## Current state
-Works and is tested (`pytest`: core 518 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 540 tests, without extensions; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -186,6 +186,9 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
    start a run and show running flows; "Fill from a run" could also take files; copy a whole
    run's inputs to another flow; the assistant could propose splitting a big flow into
    subflows.
+
+10. [ ] Files for agents, next: sound of a video (a transcription tool), PDF and Office files,
+   images/videos in the workspace folder (`workspace.read` shows images; no video there yet).
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
 · editor polish · context menu · agent library · assistant commands/history · connector actions
@@ -391,4 +394,9 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-22 · second machine (account B) · Context keeper progress: the board's context block
   follows the run live (spinner, elapsed time, state per root, its last actions, Stop) and
   finds a run that is already going (started from the board menu, a new root or another tab).
-
+- 2026-11-23 · second machine (account B) · Agents see images and videos: `view_image` and
+  `view_video` (ffmpeg frames) for file inputs, by the input's `accept`; large files are
+  streamed (`/api/uploads`, up to 1 GB); the SDK's 1 MB message limit is raised (a large image
+  ended the session); `read_file` now declares the `agent` argument the guard checks. Checked
+  with the real CLI against a local fake API: the images reach the model request. After you
+  pull: `npm run build`, restart the editor, and install ffmpeg (or `.[media]`) for videos.

@@ -28,7 +28,7 @@ from ..extensions import extension_flow_dirs
 from ..hooks import DELEGATION_TOOL, DELEGATION_TOOLS, make_guard, make_hooks
 from ..messages import MsgError, msg, reason
 from ..policy import RUN_ACTION_TOOL, WritePolicy
-from ..tools import artifacts
+from ..tools import artifacts, media
 from ..tools import git as git_tool
 from ..tools import io as io_tool
 from ..tools.common import err, ok
@@ -57,6 +57,9 @@ AGENT_RULES = (
     "in the message as `run_id`. Finish with a short summary of what you did."
 )
 DEFAULT_AGENT_TURNS = 40
+# a tool result with images is one message of the SDK stream, and the SDK ends the session on a
+# message over its own limit (1 MB by default)
+MAX_MESSAGE = 64 * 1024 * 1024
 _ENV_IN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 # Orchestrator-only tool: signals in a structured way that the flow reached a gate
 # (the editor uses it to show the pending approval). It runs nothing.
@@ -206,8 +209,26 @@ def io_tools(spec: FlowSpec, agent: str) -> list[str]:
         out.append("mcp__io__get_inputs")
     if a.outputs:
         out.append("mcp__io__set_output")
-    if any(spec.input_type(agent, n) == "file" for n in a.inputs):
-        out.append("mcp__io__read_file")
+    files = file_tools(spec, agent)
+    out += [f"mcp__io__{t}" for t in ("read_file", "view_image", "view_video") if t in files]
+    return out
+
+
+def file_tools(spec: FlowSpec, agent: str) -> set[str]:
+    """What an agent with file inputs needs to read them: by the extensions the file accepts
+    (`accept`), or all of them when it accepts any file."""
+    out: set[str] = set()
+    for n, i in spec.agents[agent].inputs.items():
+        if spec.input_type(agent, n) != "file":
+            continue
+        src = spec.source_io(i.from_) if i.from_ else None
+        exts = {e.lower() for e in src.accept} if src is not None else set()
+        if not exts or exts - media.IMAGE_EXTS - media.VIDEO_EXTS:
+            out.add("read_file")
+        if not exts or exts & media.IMAGE_EXTS:
+            out.add("view_image")
+        if not exts or exts & media.VIDEO_EXTS:
+            out.add("view_video")
     return out
 
 
@@ -229,9 +250,14 @@ def _io_section(spec: FlowSpec, agent: str) -> str:
         if any((i.from_ or "").startswith("previous.") for i in a.inputs.values()):
             lines.append("Inputs from `previous.*` are the values of the last finished run of this "
                          "flow; on the first run they are missing.")
-        if any(spec.input_type(agent, n) == "file" for n in a.inputs):
-            lines.append("File inputs are references {name, path}: read text files with "
-                         "`read_file` (path in the run folder).")
+        files = file_tools(spec, agent)
+        if files:
+            how = [text for t, text in (
+                ("read_file", "text files with `read_file`"),
+                ("view_image", "images with `view_image`"),
+                ("view_video", "videos with `view_video` (frames, no sound)")) if t in files]
+            lines.append("File inputs are references {name, path}: open "
+                         + ", ".join(how) + " (path in the run folder).")
     if a.outputs:
         lines.append("Outputs — save each one with `set_output` before you finish (the value must "
                      "match the type; a file is {\"filename\", \"content\"} or {\"path\"}):")
@@ -717,6 +743,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
         disallowed_tools=[d for d in DISALLOWED if d not in natives],
         permission_mode="dontAsk",
         setting_sources=[],
+        max_buffer_size=MAX_MESSAGE,
         agents=agents,
         hooks=make_hooks(make_guard(allowed, agent_tools,
                                     {n: a.connections for n, a in spec.agents.items()}, policy)),
@@ -883,6 +910,7 @@ def compile_agent(spec: FlowSpec, flow_dir: Path, agent: str, *,
         disallowed_tools=[d for d in DISALLOWED if d not in natives] + sorted(DELEGATION_TOOLS),
         permission_mode="dontAsk",
         setting_sources=[],
+        max_buffer_size=MAX_MESSAGE,
         hooks=make_hooks(make_guard(tools, {agent: tools}, {agent: a.connections}, policy,
                                     fixed_agent=agent)),
         max_turns=a.max_turns or DEFAULT_AGENT_TURNS,

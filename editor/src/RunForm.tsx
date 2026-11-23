@@ -1,10 +1,13 @@
 // Run form: one field per typed value (flow inputs, or the inputs of the agent under test).
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { api, errorText } from "./api";
 import { useI18n } from "./i18n";
 import { typeTag } from "./nodes";
 import type { IOTypeRaw } from "./types";
 
-export type FileVal = { name: string; content_b64: string; size: number };
+/** A chosen file: small ones travel in the request, large ones are staged on the server first. */
+export type FileVal = { name: string; content_b64?: string; upload?: string; size: number };
+const STAGE_OVER = 1024 * 1024;
 /** What a field holds while editing: text, a checkbox, choices or files. */
 export type FormVal = string | boolean | string[] | FileVal[];
 
@@ -30,7 +33,7 @@ export function sendValue(t: IOTypeRaw, v: FormVal): { value?: unknown; error?: 
   const k = t.type ?? "text";
   if (k === "boolean") return { value: v === true };
   if (k === "file") {
-    const files = (v as FileVal[]).map(({ name, content_b64 }) => ({ name, content_b64 }));
+    const files = (v as FileVal[]).map(({ name, content_b64, upload }) => (upload ? { name, upload } : { name, content_b64 }));
     return { value: files.length ? (t.multiple ? files : files[0]) : undefined };
   }
   if (Array.isArray(v)) return { value: v.length ? v : undefined };
@@ -52,7 +55,9 @@ export function sendValue(t: IOTypeRaw, v: FormVal): { value?: unknown; error?: 
 const safeName = (n: string) => n.replace(/[^A-Za-z0-9_.-]/g, "_").replace(/\.{2,}/g, ".").slice(-80) || "file";
 
 function readFiles(list: FileList): Promise<FileVal[]> {
-  return Promise.all([...list].map((f) => new Promise<FileVal>((resolve, reject) => {
+  return Promise.all([...list].map((f) => f.size > STAGE_OVER
+    ? api.upload(f).then((r): FileVal => ({ name: safeName(f.name), upload: r.upload, size: f.size }))
+    : new Promise<FileVal>((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => {
       const s = String(r.result);
@@ -72,6 +77,8 @@ export function ValueField({ name, t, value, onChange, error, disabled, saved, e
 }) {
   const { t: tr } = useI18n();
   const [readErr, setReadErr] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  const pick = useRef(0);  // the last choice wins when an earlier upload is still going
   const k = t.type ?? "text";
   const required = t.required !== false && t.default === undefined;
   const label = t.label || name;
@@ -105,10 +112,16 @@ export function ValueField({ name, t, value, onChange, error, disabled, saved, e
           accept={(t.accept ?? []).join(",") || undefined}
           onChange={(e) => {
             const list = e.target.files;
-            setReadErr(null);
-            if (!list?.length) return onChange([]);
-            readFiles(list).then(onChange).catch((x) => setReadErr(String(x)));
+            const mine = ++pick.current;
+            setReadErr(null); setReading(false);
+            onChange([]);
+            if (!list?.length) return;
+            setReading(true);
+            readFiles(list).then((v) => { if (mine === pick.current) onChange(v); })
+              .catch((x) => { if (mine === pick.current) setReadErr(errorText(x, tr)); })
+              .finally(() => { if (mine === pick.current) setReading(false); });
           }} />
+        {reading && <span className="field-hint row" role="status"><span className="spinner" aria-hidden="true" /> {tr("run.form.reading")}</span>}
         {files.length > 0 && <span className="field-hint">{files.map((f) => `${f.name} (${kb(f.size)})`).join(", ")}</span>}
         {!files.length && savedFiles.length > 0 &&
           <span className="field-hint">{tr("run.form.savedFile", { names: savedFiles.map((f) => f.name ?? "?").join(", ") })}</span>}

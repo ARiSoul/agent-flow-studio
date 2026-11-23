@@ -7,7 +7,8 @@ from .tools import artifacts, connections, git, io
 _GROUPS = {
     "artifacts": [artifacts.save_artifact, artifacts.read_artifact],
     "connections": [connections.http_get, connections.http_write, connections.run_action],
-    "io": [io.get_inputs, io.set_output, io.read_file],  # typed inputs/outputs of the agents
+    # typed inputs/outputs of the agents, and the files of the run
+    "io": [io.get_inputs, io.set_output, io.read_file, io.view_image, io.view_video],
     "workspace": [git.git],  # read-only git; the other workspace.* tools are native (catalog.py)
     **LOADED.tool_groups,
 }

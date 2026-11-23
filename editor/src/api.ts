@@ -193,6 +193,11 @@ export const api = {
     call<CopyResult>(`/api/workspaces/${encodeURIComponent(src)}/copy`, {
       method: "POST", headers: MUTATE, body: JSON.stringify(body) })
       .then((r) => { if (r.status === 422) throw msgError(r.data); return r.data; }),
+  /** Stages a large file (a video…) for a run: streamed to disk, never as base64. */
+  upload: (file: File) =>
+    call<{ upload: string; size: number }>("/api/uploads", {
+      method: "PUT", headers: { "Content-Type": "application/octet-stream", "X-Flow-Editor": "1" }, body: file })
+      .then((r) => { if (r.status === 422) throw msgError(r.data); return r.data; }),
   folders: (path: string) => call<FolderList>(`/api/folders?path=${encodeURIComponent(path)}`).then((r) => r.data),
   context: () => call<WorkspaceContext>("/api/context").then((r) => r.data),
   setContext: (name: string, text: string) =>

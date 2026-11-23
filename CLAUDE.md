@@ -94,6 +94,11 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   one session per agent from `compile_agent`, guard with `fixed_agent`, parallel branches, joins,
   `if`/`when`, loops with `max_runs`). Legacy flows (no `inputs`) keep the one `input` that is also
   the run id.
+- Files of a run: `io.read_file` (text), `io.view_image`, `io.view_video` (`tools/media.py`: the
+  format comes from the content and is forced on ffmpeg with only the file/pipe protocols; MCP
+  image blocks). `compile.file_tools` gives them by the input's `accept`; `MAX_MESSAGE` raises
+  the SDK's 1 MB message limit (an image over it ended the session). Large uploads are streamed:
+  `editor/uploads.py` (`PUT /api/uploads`, `{name, upload}` in the run inputs).
 - `tools/git.py`: `workspace.git`, read-only git (closed list of subcommands and options, no
   `-c`/`--output`/external diff, fsmonitor off). Writing with git stays in `workspace.bash`.
 - `hooks.py` (guard + audit) and `policy.py` (writes, workspace, Bash, autonomy, approvals,

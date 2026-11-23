@@ -466,7 +466,7 @@ export const pt: Messages = {
   "io.pattern": "Padrão",
   "io.patternHint": "Regex; o texto inteiro tem de corresponder",
   "io.accept": "Tipos de ficheiro aceites",
-  "io.acceptHint": "Separados por vírgulas, p. ex. .md, .txt (vazio = qualquer)",
+  "io.acceptHint": "Separados por vírgulas, p. ex. .md, .txt (vazio = qualquer). Os agentes veem imagens (.png, .jpg, .gif, .webp) e fotogramas de vídeos (.mp4, .mov, .webm, .mkv, .avi; sem som).",
   "io.default": "Valor por defeito",
   "io.noDefault": "— sem valor por defeito —",
   "io.addInput": "+ entrada",
@@ -1043,4 +1043,5 @@ export const pt: Messages = {
   "ctx.state.done": "concluída",
   "ctx.state.error": "falhou",
   "ctx.stopped": "Atualização do contexto parada; as raízes já concluídas ficaram gravadas.",
+  "run.form.reading": "A carregar o ficheiro…",
 };

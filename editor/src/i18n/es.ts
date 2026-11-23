@@ -466,7 +466,7 @@ export const es: Messages = {
   "io.pattern": "Patrón",
   "io.patternHint": "Regex; todo el texto debe coincidir",
   "io.accept": "Tipos de archivo aceptados",
-  "io.acceptHint": "Separados por comas, p. ej. .md, .txt (vacío = cualquiera)",
+  "io.acceptHint": "Separados por comas, p. ej. .md, .txt (vacío = cualquiera). Los agentes ven imágenes (.png, .jpg, .gif, .webp) y fotogramas de vídeos (.mp4, .mov, .webm, .mkv, .avi; sin sonido).",
   "io.default": "Valor por defecto",
   "io.noDefault": "— sin valor por defecto —",
   "io.addInput": "+ entrada",
@@ -1043,4 +1043,5 @@ export const es: Messages = {
   "ctx.state.done": "terminada",
   "ctx.state.error": "falló",
   "ctx.stopped": "Actualización del contexto detenida; las raíces ya terminadas quedaron guardadas.",
+  "run.form.reading": "Cargando el archivo…",
 };

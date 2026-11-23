@@ -61,6 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+STAGE_OVER = 8 * 1024 * 1024  # --set x=@file: larger files are staged (editor/uploads.py)
+
+
 def parse_sets(sets: Sequence[str], cwd: Path | None = None) -> dict[str, Any]:
     """["a=1", "a=2", "doc=@x.md"] → {"a": ["1", "2"], "doc": {"name", "content_b64"}}."""
     out: dict[str, Any] = {}
@@ -77,7 +80,12 @@ def parse_sets(sets: Sequence[str], cwd: Path | None = None) -> dict[str, Any]:
             path = path if path.is_absolute() else (cwd or Path.cwd()) / path
             if not path.is_file():
                 raise ValueError(f"--set {name}: file not found: {path}")
-            v = {"name": path.name, "content_b64": base64.b64encode(path.read_bytes()).decode()}
+            if path.stat().st_size > STAGE_OVER:  # a video…: not in memory as base64
+                from .editor import uploads
+                v = {"name": path.name, "upload": uploads.stage(path)["upload"]}
+            else:
+                v = {"name": path.name,
+                     "content_b64": base64.b64encode(path.read_bytes()).decode()}
         if name in out:
             prev = out[name]
             out[name] = [*prev, v] if isinstance(prev, list) else [prev, v]

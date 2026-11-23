@@ -49,6 +49,7 @@ from ..policy import ApprovalRequest
 from ..tools import io as io_tool
 from ..tools.guards import safe_artifact_path
 from ..trace import error_text, tool_detail
+from . import uploads
 
 Status = Literal["running", "gate", "paused", "done", "error", "stopped"]
 Mode = Literal["full", "step", "until", "agent"]
@@ -74,7 +75,7 @@ AUTH_ERROR = re.compile(
 def error_hint(message: str) -> str | None:
     """'auth' when a run or agent error is a sign-in problem of the Claude Code CLI."""
     return "auth" if AUTH_ERROR.search(message or "") else None
-MAX_UPLOAD = 20 * 1024 * 1024  # all files of one run, after base64 decoding
+MAX_UPLOAD = 20 * 1024 * 1024  # files sent inside the request (larger ones: uploads.py)
 _FILE_NAME = re.compile(r"^[A-Za-z0-9 _.()-]{1,100}$")
 QueryFn = Callable[..., AsyncIterator[Any]]
 
@@ -130,12 +131,16 @@ def new_run_id(flow: str) -> str:
 
 
 def _write_upload(rd: Path, name: str, f: Any, total: list[int]) -> dict[str, Any]:
-    """{"name", "content_b64"} → runs/<id>/inputs/<input>/<file>; returns the file reference."""
-    if not isinstance(f, dict) or "content_b64" not in f:
-        raise ValueError("a file is {name, content_b64}")
+    """{"name", "content_b64"} or {"name", "upload"} (a staged file, uploads.py) →
+    runs/<id>/inputs/<input>/<file>; returns the file reference."""
+    if not isinstance(f, dict) or ("content_b64" not in f and "upload" not in f):
+        raise ValueError("a file is {name, content_b64} or {name, upload}")
     fname = str(f.get("name") or "file").strip()
     if not _FILE_NAME.fullmatch(fname) or ".." in fname:
         raise ValueError(f"invalid file name {fname!r}")
+    if "upload" in f:
+        uploads.take(f["upload"], rd / "inputs" / name / fname)
+        return {"name": fname, "path": f"inputs/{name}/{fname}"}
     try:
         data = base64.b64decode(str(f["content_b64"]), validate=True)
     except (binascii.Error, ValueError):

@@ -466,7 +466,7 @@ export const en = {
   "io.pattern": "Pattern",
   "io.patternHint": "Regex; the whole text must match",
   "io.accept": "Accepted file types",
-  "io.acceptHint": "Comma-separated, e.g. .md, .txt (empty = any)",
+  "io.acceptHint": "Comma-separated, e.g. .md, .txt (empty = any). Agents see images (.png, .jpg, .gif, .webp) and frames of videos (.mp4, .mov, .webm, .mkv, .avi; no sound).",
   "io.default": "Default",
   "io.noDefault": "— no default —",
   "io.addInput": "+ input",
@@ -1043,6 +1043,7 @@ export const en = {
   "ctx.state.done": "done",
   "ctx.state.error": "failed",
   "ctx.stopped": "Context update stopped; the roots already done are saved.",
+  "run.form.reading": "Loading the file…",
 };
 
 export type Messages = typeof en;

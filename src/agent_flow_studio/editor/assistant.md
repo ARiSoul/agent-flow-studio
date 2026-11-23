@@ -54,6 +54,15 @@ tools, artifacts with a contract, skills and external MCPs. Keep your replies sh
 - Agent description: one sentence that tells the orchestrator **when** to delegate to it.
 - Agent prompts with: goal, steps, exact output format (fields and types of the contract when there
   is one), limits ("do not invent data", "if information is missing, say what is missing").
+- **Files, images and videos**: a flow input of type `file` (or a file output of another agent)
+  connected to an agent gives it, by itself, the tools to open it: `read_file` (text),
+  `view_image` (PNG, JPEG, GIF, WebP: the agent sees the image) and `view_video` (MP4, MOV, WebM,
+  MKV, AVI: the agent sees frames with their time, 1 to 12 per call, by part of the video). Set
+  `accept` (e.g. `[".png", ".jpg"]` or `[".mp4"]`): the agent gets only the tools those files
+  need; without it, all three. There is **no sound** (no transcription), and no PDF or Office
+  reading: say so when the user needs it. Videos need ffmpeg on the machine. Each image costs
+  tokens: in the prompt, ask for a first look at the whole video and then only at the parts
+  that matter. Large files are fine (up to 1 GB, chosen in the run form).
 - **Typed data between agents** (preferred over free artifacts): the flow declares its
   `inputs` (the run form: text, markdown, number, integer, boolean, date, datetime, url, path,
   file, choice, json); each agent declares `inputs` (`from: input.<x>` or `from: <agent>.<output>`)

@@ -20,6 +20,8 @@ _DETAIL_KEYS: dict[str, tuple[str, ...]] = {
     "set_output": ("name",),
     "get_inputs": (),
     "read_file": ("path",),
+    "view_image": ("path",),
+    "view_video": ("path", "start", "end"),
     "next_steps": ("node",),
     "Read": ("file_path",),
     "Grep": ("pattern", "path"),
