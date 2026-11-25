@@ -56,7 +56,7 @@ from ..publish import (
     terms_in,
 )
 from ..tools import io as io_tool
-from . import assistant, copying, uploads
+from . import assistant, copying, uploads, ws_assistant
 from . import chats as assist_chats
 from . import commands as assist_commands
 from .runner import RunError, Runner, input_visible, list_artifacts, read_artifact_text
@@ -88,6 +88,13 @@ class AssistBody(BaseModel):
     session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9-]{1,80}$")
     lang: str | None = Field(default=None, max_length=10)  # "pt" | "en" | "es"; else English
     command: str | None = Field(default=None, pattern=r"^[a-z0-9]{6,32}$")  # saved command used
+
+
+class WsAssistBody(BaseModel):
+    message: str = Field(min_length=1, max_length=20_000)
+    session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9-]{1,80}$")
+    lang: str | None = Field(default=None, max_length=10)
+    command: str | None = Field(default=None, pattern=r"^[a-z0-9]{6,32}$")
 
 
 class HandoffRef(BaseModel):
@@ -799,6 +806,31 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
 
         return StreamingResponse(events(), media_type="application/x-ndjson")
 
+    def _command(cid: str | None):  # type: ignore[no-untyped-def]
+        if not cid:
+            return None
+        try:
+            cmd = assist_commands.get(cid)
+        except assist_commands.CommandError as e:
+            raise HTTPException(500, str(e)) from e
+        if cmd is None:
+            raise HTTPException(404, "saved command does not exist")
+        return cmd
+
+    @app.post("/api/assist/workspace", dependencies=[Depends(csrf)])
+    def assist_workspace(body: WsAssistBody) -> StreamingResponse:
+        """Workspace assistant (Board): NDJSON events; it only proposes (the editor applies)."""
+        cmd = _command(body.command)
+        ws, env = workspaces.current(), workspaces.current_env()
+
+        async def events():  # type: ignore[no-untyped-def]
+            with workspaces.using(ws, env):  # the stream runs after the request returned
+                async for ev in ws_assistant.chat(body.message, body.session_id, lang=body.lang,
+                                                  command=cmd):
+                    yield assistant.encode(ev)
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
+
     # --- runs -----------------------------------------------------------------------------
     runner = Runner(base)
     app.state.runner = runner
@@ -1352,14 +1384,17 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         if ws.studio or ws.spec is None:
             raise HTTPException(400, "the studio's own workspace has no settings")
         data = {**ws.spec.model_dump(mode="json"), **body, "name": ws.name}
+        before = {k: r.path for k, r in ws.spec.roots.items()}
         try:
             ws.spec = workspaces.WorkspaceSpec.model_validate(data)
         except (MsgError, ValidationError) as e:
             raise HTTPException(422, _structured(e, data) if isinstance(e, ValidationError)
                                 else {"msg": str(e)}) from e
         workspaces.save(ws)
+        # a root that only changed its name keeps its explored context
+        renamed = context.follow_renames(ws, before)
         _audit_event("workspace_update", workspace=ws.name, fields=sorted(body))
-        return _ws_detail(ws)
+        return _ws_detail(ws) | {"renamed_roots": renamed}
 
     def _two(src: str, to: str) -> tuple[workspaces.Workspace, workspaces.Workspace]:
         try:

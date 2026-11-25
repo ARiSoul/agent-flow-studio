@@ -193,7 +193,7 @@ def test_real_browser_reads_a_local_site(tmp_path, monkeypatch):
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     monkeypatch.setenv("AFS_BROWSER_DIR", str(tmp_path / "browser"))
     (tmp_path / "browser" / "portal").mkdir(parents=True)  # as after a sign-in

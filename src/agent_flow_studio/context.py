@@ -132,6 +132,36 @@ def set_section(ws: workspaces.Workspace, name: str, body: str, *, commit: str |
         _write(folder / STATE_FILE, json.dumps({"version": 1, "roots": st}, indent=1) + "\n")
 
 
+def follow_renames(ws: workspaces.Workspace, before: dict[str, str]) -> dict[str, str]:
+    """After the roots changed: a root that only changed its name (same folder, before → now)
+    keeps its explored section and state under the new name. Returns {old: new}."""
+    if ws.spec is None or ws.folder is None:
+        return {}
+    now = {k: r.path for k, r in ws.spec.roots.items()}
+    gone = {k: p for k, p in before.items() if k not in now}
+    new = {k: p for k, p in now.items() if k not in before}
+    renames = {}
+    for old, path in gone.items():
+        same = [k for k, p in new.items() if p == path]
+        if len(same) == 1 and same[0] not in renames.values():
+            renames[old] = same[0]
+    if not renames:
+        return {}
+    secs, st = sections(ws), state(ws)
+    moved = False
+    for old, to in renames.items():
+        if old in secs and to not in secs:
+            secs[to] = secs.pop(old)
+            moved = True
+        if old in st and to not in st:
+            st[to] = st.pop(old)
+            moved = True
+    if moved:
+        _write(ws.folder / CONTEXT_FILE, _render(ws, secs))
+        _write(ws.folder / STATE_FILE, json.dumps({"version": 1, "roots": st}, indent=1) + "\n")
+    return renames
+
+
 def context_text(ws: workspaces.Workspace, limit: int = MAX_PROMPT) -> str:
     """The context as the agents get it (current roots and the notes), cut at `limit`."""
     if ws.studio or ws.spec is None:

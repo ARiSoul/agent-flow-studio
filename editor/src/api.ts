@@ -112,6 +112,15 @@ export const api = {
   chats: (flow: string) => call<ChatSummary[]>(`/api/chats/${encodeURIComponent(flow)}`).then((r) => r.data),
   chat: (flow: string, id: string) =>
     call<SavedChat>(`/api/chats/${encodeURIComponent(flow)}/${id}`).then((r) => r.data),
+  /** A connector definition (no secrets: the server keeps them); location only for a new one. */
+  saveConnection: (name: string, body: Record<string, unknown>) =>
+    call<{ saved: string }>(`/api/connections/${encodeURIComponent(name)}`, {
+      method: "PUT", headers: MUTATE, body: JSON.stringify(body),
+    }).then((r) => {
+      const d = (r.data as { detail?: unknown }).detail;
+      if (r.status === 422) throw new Error(typeof d === "string" ? d : JSON.stringify(d ?? "invalid"));
+      return r.data;
+    }),
   saveChat: (flow: string, id: string, c: Omit<SavedChat, "id" | "created" | "updated">) =>
     call<ChatSummary>(`/api/chats/${encodeURIComponent(flow)}/${id}`, {
       method: "PUT", headers: MUTATE, body: JSON.stringify(c),

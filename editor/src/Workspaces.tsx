@@ -254,12 +254,15 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
   const save = async () => {
     setErr(null);
     const before = Object.keys((JSON.parse(saved || "{}") as WorkspaceSpecRaw).roots ?? {});
-    const added = Object.keys(spec.roots).filter((r) => !before.includes(r));
+    let added = Object.keys(spec.roots).filter((r) => !before.includes(r));
     try {
       const w = await api.updateWorkspace(name, { title: spec.title, description: spec.description, roots: spec.roots,
         vars: spec.vars, environments: spec.environments, default_environment: spec.default_environment ?? null });
       if (w.spec) { setSpec(w.spec); setSaved(JSON.stringify(w.spec)); }
       setRoots(w.roots ?? {});
+      // a root that only changed its name kept its explored context: nothing new to explore
+      const renamed = Object.values(w.renamed_roots ?? {});
+      added = added.filter((r) => !renamed.includes(r));
       flash(t("ws.saved"));
       onSaved();
     } catch (e) { return setErr(wsErrorText(e, lang)); }
@@ -272,15 +275,34 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
       } catch (e) { flash(wsErrorText(e, lang), true); }
     }
   };
+  /** A name typed in a table (root, environment, variable): spaces and "-" become "_"; a name that
+   * is still invalid or already used is refused with a message and the field shows the old name. */
+  const commitName = (kind: "var" | "env" | "root", from: string, input: HTMLInputElement) => {
+    const typed = input.value.trim();
+    const to = typed.toLowerCase().replace(/[\s-]+/g, "_");
+    if (to === from) { input.value = from; return; }
+    const used = kind === "var" ? allVars : kind === "env" ? envs : Object.keys(spec.roots);
+    if (!KEY.test(to) || used.includes(to)) {
+      input.value = from;
+      flash(t(!KEY.test(to) ? "ws.badName" : "ws.nameUsed", { name: typed }), true);
+      return;
+    }
+    if (to !== typed) flash(t("ws.nameChanged", { from: typed, to }));
+    input.value = to;
+    rename(kind, from, to);
+  };
+  /** The same object with one key renamed, in the same place (the tables keep their order). */
+  const rekey = <V,>(o: Record<string, V>, from: string, to: string): Record<string, V> =>
+    Object.fromEntries(Object.entries(o).map(([k, v]) => [k === from ? to : k, v]));
   const rename = (kind: "var" | "env" | "root", from: string, to: string) => set((s) => {
     if (!KEY.test(to) || to === from) return;
     if (kind === "var") {
-      if (from in s.vars) { s.vars[to] = s.vars[from]; delete s.vars[from]; }
-      for (const e of Object.values(s.environments)) if (e.vars && from in e.vars) { e.vars[to] = e.vars[from]; delete e.vars[from]; }
+      if (from in s.vars) s.vars = rekey(s.vars, from, to);
+      for (const e of Object.values(s.environments)) if (e.vars && from in e.vars) e.vars = rekey(e.vars, from, to);
     } else if (kind === "env") {
-      s.environments[to] = s.environments[from]; delete s.environments[from];
+      s.environments = rekey(s.environments, from, to);
       if (s.default_environment === from) s.default_environment = to;
-    } else { s.roots[to] = s.roots[from]; delete s.roots[from]; }
+    } else { s.roots = rekey(s.roots, from, to); }
   });
   const pickedVars = allVars.filter((v) => picked.has(`var:${v}`));
   const pickedEnvs = envs.filter((e) => picked.has(`env:${e}`));
@@ -301,7 +323,8 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
       <table className="ws-table"><tbody>
         {Object.entries(spec.roots).flatMap(([k, r]) => [
           <tr key={k}>
-            <td><input className="mono" defaultValue={k} aria-label={t("ws.name")} onBlur={(e) => rename("root", k, e.target.value.trim())} /></td>
+            <td><input className="mono" defaultValue={k} aria-label={t("ws.name")} title={t("ws.nameRule")}
+              onBlur={(e) => commitName("root", k, e.target)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} /></td>
             <td><input className="mono" value={r.path} aria-label={t("ws.folder")} title={roots[k]}
               onChange={(e) => set((s) => { s.roots[k].path = e.target.value; })} />
               {roots[k] && <span className="muted small root-abs" title={roots[k]}>→ {roots[k]}</span>}</td>
@@ -324,7 +347,8 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
         {envs.map((e) => (
           <tr key={e}>
             <td><input type="checkbox" checked={picked.has(`env:${e}`)} aria-label={t("ws.pick")} onChange={() => toggle(`env:${e}`)} /></td>
-            <td><input className="mono" defaultValue={e} aria-label={t("ws.name")} onBlur={(x) => rename("env", e, x.target.value.trim())} /></td>
+            <td><input className="mono" defaultValue={e} aria-label={t("ws.name")} title={t("ws.nameRule")}
+              onBlur={(x) => commitName("env", e, x.target)} onKeyDown={(x) => { if (x.key === "Enter") x.currentTarget.blur(); }} /></td>
             <td><select value={spec.environments[e].kind} aria-label={t("ws.kind")}
               onChange={(x) => set((s) => { s.environments[e].kind = x.target.value as "dev"; })}>
               {KINDS.map((k) => <option key={k} value={k}>{t(`ws.kind.${k}`)}</option>)}</select></td>
@@ -343,7 +367,8 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
         <tbody>{allVars.map((v) => (
           <tr key={v}>
             <td><input type="checkbox" checked={picked.has(`var:${v}`)} aria-label={t("ws.pick")} onChange={() => toggle(`var:${v}`)} /></td>
-            <td><input className="mono" defaultValue={v} aria-label={t("ws.name")} onBlur={(e) => rename("var", v, e.target.value.trim())} /></td>
+            <td><input className="mono" defaultValue={v} aria-label={t("ws.name")} title={t("ws.nameRule")}
+              onBlur={(e) => commitName("var", v, e.target)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} /></td>
             <td><input value={spec.vars[v] ?? ""} placeholder="—" aria-label={`${v} · ${t("ws.base")}`}
               onChange={(e) => set((s) => { if (e.target.value) s.vars[v] = e.target.value; else delete s.vars[v]; })} /></td>
             {envs.map((en) => (

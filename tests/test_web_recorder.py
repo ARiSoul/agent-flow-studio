@@ -177,7 +177,7 @@ def test_real_browser_recording(tmp_path, monkeypatch):
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     monkeypatch.setenv("AFS_BROWSER_DIR", str(tmp_path / "browser"))
     c = conn(base_url=f"http://127.0.0.1:{srv.server_port}", allowed_paths=[])
@@ -292,7 +292,7 @@ def test_real_browser_options_by_text_and_extracts_not(tmp_path, monkeypatch):
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     monkeypatch.setenv("AFS_BROWSER_DIR", str(tmp_path / "browser"))
     c = conn(base_url=f"http://127.0.0.1:{srv.server_port}", allowed_paths=[])
@@ -386,7 +386,7 @@ def test_real_browser_menu_clicks_become_one_address(tmp_path, monkeypatch):
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), Site)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     monkeypatch.setenv("AFS_BROWSER_DIR", str(tmp_path / "browser"))
     c = conn(base_url=f"http://127.0.0.1:{srv.server_port}", allowed_paths=[])

@@ -49,7 +49,7 @@ def local_site():
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield srv.server_port
     srv.shutdown()
@@ -170,7 +170,7 @@ def test_steps_use_the_first_visible_match(tmp_path, monkeypatch):
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), Site)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     monkeypatch.setenv("AFS_BROWSER_DIR", str(tmp_path / "browser"))
     (tmp_path / "browser" / "portal").mkdir(parents=True)
@@ -213,7 +213,7 @@ def _serve(pages: dict[str, str]):
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), Site)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 

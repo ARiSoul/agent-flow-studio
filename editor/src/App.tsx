@@ -844,6 +844,16 @@ function Editor() {
   if (!catalog) return <div className="loading">{t("app.loading")}</div>;
   const currentFlow = flows.find((f) => f.name === current);
   const errors = val?.errors ?? [];
+  // windows over the page: in the flow editor and in the Board alike
+  const windows = <>
+    {showLibrary && <LibraryManager library={library} locations={catalog.locations ?? ["local"]}
+        onChange={async () => setLibrary(await api.library())} onClose={() => setShowLibrary(false)} />}
+    {showConns && <Connections onClose={() => {
+        setShowConns(false);
+        api.catalog().then(setCatalog).catch(() => undefined);
+        if (doc && current) api.validate(current, tidy(doc)).then(setVal).catch(() => undefined);
+      }} />}  </>;
+  const board = view === "board" && !!catalog.workspace;
   const header = (
     <header className="topbar">
       <WorkspaceBar current={catalog.workspace} beforeSwitch={confirmDiscard} onEnv={refreshEnv} flash={flash} />
@@ -855,9 +865,10 @@ function Editor() {
         {flows.map((f) => <option key={f.name} value={f.name}>{f.title} ({f.name}){f.valid ? "" : " ⚠"}
           {f.public ? ` · ${t("loc.public")}` : f.location && f.location !== "local" && f.location !== "workspace" ? ` · ${f.location}` : ""}</option>)}
       </select>
-      {currentFlow && <button className="link-btn" title={t("loc.moveTitle")} onClick={moveFlow}>
+      {currentFlow && !board && <button className="link-btn" title={t("loc.moveTitle")} onClick={moveFlow}>
         <LocationBadge loc={currentFlow.location} isPublic={currentFlow.public} /></button>}
       <button onClick={() => createFlow()}>{t("app.new")}</button>
+      {!board && <>
       <button onClick={() => current && createFlow(current)} disabled={!current}>{t("app.duplicate")}</button>
       <button disabled={!current} title={t("copy.flowTitle")} aria-haspopup="menu"
         onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); flowCopyMenu(r.left, r.bottom + 2); }}>
@@ -869,20 +880,21 @@ function Editor() {
       <button onClick={arrange}>{t("app.arrange")}</button>
       <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
         title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
+      </>}
       <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
       <span className="grow" />
       {msg && <span className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</span>}
-      <span className={`status ${val?.ok ? "ok" : "bad"}`} onClick={() => setTab("problems")}>
+      {!board && <span className={`status ${val?.ok ? "ok" : "bad"}`} onClick={() => setTab("problems")}>
         {val?.ok ? t("app.valid") : tn("app.problems", errors.length)}
-      </span>
-      <span className="panel-toggles" role="group" aria-label={t("app.panels")}>
+      </span>}
+      {!board && <span className="panel-toggles" role="group" aria-label={t("app.panels")}>
         {([["pal", "panelLeft", "Ctrl+B"], ["bottom", "panelBottom", "Ctrl+J"], ["insp", "panelRight", "Ctrl+Alt+B"]] as const)
           .map(([p, icon, keys]) => (
             <button key={p} className={`icon-btn${hidden[p] ? "" : " on"}`} aria-pressed={!hidden[p]}
               title={`${t(`app.panel.${p}`)} (${keys})`} aria-label={t(`app.panel.${p}`)} onClick={() => togglePanel(p)}>
               <Icon id={icon} size={16} />
             </button>))}
-      </span>
+      </span>}
       <select className="lang" value={lang} title={t("app.language")} aria-label={t("app.language")}
         onChange={(e) => setLang(e.target.value as Lang)}>
         {Object.entries(LANGS).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
@@ -895,15 +907,17 @@ function Editor() {
         onChange={(e) => setTheme(e.target.value as Theme)}>
         {(Object.keys(THEMES) as Theme[]).map((k) => <option key={k} value={k}>{t(`theme.${k}`)}</option>)}
       </select>
-      <button className="primary" onClick={save} disabled={!dirty} title="Ctrl+S">
+      {!board && <button className="primary" onClick={save} disabled={!dirty} title="Ctrl+S">
         {dirty ? t("app.save") : t("app.saved")}
-      </button>
+      </button>}
     </header>
   );
   if (view === "board" && catalog.workspace) return (
     <div className="app board-mode">
       {header}
       <Board ws={catalog.workspace} flash={flash} onSaved={refreshEnv}
+        onConnectors={() => setShowConns(true)}
+        onCatalog={() => { api.catalog().then(setCatalog).catch(() => undefined); }}
         side={sizes.insp ?? DEFAULT_SIZES.insp} onSide={resize("insp")}
         flowsKey={flows.map((f) => f.name).join(",")} onFlowsChanged={refreshFlows} onNewFlow={() => createFlow()}
         onOpen={async (name) => { if (name === current || (await confirmDiscard())) { setCurrent(name); setView("flow"); } }}
@@ -911,6 +925,7 @@ function Editor() {
           if (name !== current && !(await confirmDiscard())) return;
           setCurrent(name); setView("flow"); setRight("run");
         }} />
+      {windows}
     </div>
   );
   return (
@@ -1041,13 +1056,8 @@ function Editor() {
       <div className="split-host split-bottom">
         <Splitter edge="top" size={sizes.bottom ?? DEFAULT_SIZES.bottom} onSize={resize("bottom")} label={t("app.resizePanel")} />
       </div>
-      {showLibrary && <LibraryManager library={library} locations={catalog.locations ?? ["local"]}
-        onChange={async () => setLibrary(await api.library())} onClose={() => setShowLibrary(false)} />}
-      {showConns && <Connections onClose={() => {
-        setShowConns(false);
-        api.catalog().then(setCatalog).catch(() => undefined);
-        if (doc && current) api.validate(current, tidy(doc)).then(setVal).catch(() => undefined);
-      }} />}
+      {windows}
+
     </div>
   );
 }

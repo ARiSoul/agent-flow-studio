@@ -7,6 +7,7 @@ import { ChatHistory, newChatId } from "./ChatHistory";
 import { Markdown } from "./Markdown";
 import { CommandBar, CommandsManager, useCommandForm } from "./Commands";
 import type { AgentRaw, Doc, SavedCommand, Validation } from "./types";
+import { ProposalCard, type WsProposal } from "./WsProposals";
 
 /** An agent proposed by the assistant for the library (saved only by the user). */
 type Proposal = { id: string; title: string; exists: boolean; notes: string[]; agent: AgentRaw; prompt: string };
@@ -15,16 +16,26 @@ type Item =
   | { kind: "user"; text: string; cmd?: string }
   | { kind: "assistant" | "error" | "info"; text: string }
   | { kind: "tool"; name: string; arg: string; edit: boolean }
-  | { kind: "library"; p: Proposal };
+  | { kind: "library"; p: Proposal }
+  | { kind: "proposal"; p: WsProposal }
+  | { kind: "limit"; max: number };  // the message reached the turn limit: "Continue" goes on
 
 type Event =
   | { type: "text"; text: string }
   | { type: "tool"; name: string; arg: string; edit: boolean }
-  | { type: "done"; session_id: string; cost: number | null; turns: number; is_error: boolean;
-      changed: boolean; doc: Doc | null; validation: Validation; library?: Proposal[] }
+  | { type: "turn"; n: number; max: number }  // model turns used so far in this message
+  | { type: "done"; limit?: boolean; max_turns?: number; session_id: string; cost: number | null; turns: number; is_error: boolean;
+      changed?: boolean; doc?: Doc | null; validation?: Validation; library?: Proposal[];
+      proposals?: WsProposal[] }
   | { type: "error"; message: string };
 
 const SUGGESTIONS = ["chat.suggest1", "chat.suggest2", "chat.suggest3", "chat.suggest4"] as const;
+const WS_SUGGESTIONS = ["wsa.suggest1", "wsa.suggest2", "wsa.suggest3", "wsa.suggest4"] as const;
+
+/** The workspace assistant (Board): no flow draft; it proposes cards the person applies. */
+export type WorkspaceChat = {
+  onApplied: (p: WsProposal) => void; onOpenFlow: (name: string) => void; onConnectors: () => void;
+};
 
 /** Inline `code` and ``` blocks — the rest is plain text (no HTML). */
 function Rich({ text }: { text: string }) {
@@ -80,9 +91,9 @@ function LibraryCard({ p, onSaved }: { p: Proposal; onSaved: () => void }) {
   );
 }
 
-export function Chat({ flow, lang, doc, apply, onBusy, onLibrary }: {
-  flow: string; lang: Lang; doc: Doc; apply: (d: Doc) => void; onBusy: (b: boolean) => void;
-  onLibrary: () => void;
+export function Chat({ flow, lang, doc, apply, onBusy, onLibrary, workspace }: {
+  flow: string; lang: Lang; doc?: Doc; apply?: (d: Doc) => void; onBusy: (b: boolean) => void;
+  onLibrary: () => void; workspace?: WorkspaceChat;  // flow = "@workspace" then
 }) {
   const { t } = useI18n();
   const [items, setItems] = useState<Item[]>([]);
@@ -90,6 +101,7 @@ export function Chat({ flow, lang, doc, apply, onBusy, onLibrary }: {
   const [busy, setBusy] = useState(false);
   const [session, setSession] = useState<string | null>(null);
   const [cost, setCost] = useState(0);
+  const [turn, setTurn] = useState<{ n: number; max: number } | null>(null);
   const abort = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const docRef = useRef(doc);
@@ -150,14 +162,16 @@ export function Chat({ flow, lang, doc, apply, onBusy, onLibrary }: {
     setActive(null);
     push({ kind: "user", text: msg, cmd: cmd?.name });
     pending.current = true;
+    setTurn(null);
     setB(true);
     const ctrl = new AbortController();
     abort.current = ctrl;
     try {
-      const r = await fetch("/api/assist", {
+      const base = { message: msg, session_id: session, lang, command: cmd?.id ?? null };
+      const r = await fetch(workspace ? "/api/assist/workspace" : "/api/assist", {
         method: "POST", signal: ctrl.signal,
         headers: { "Content-Type": "application/json", "X-Flow-Editor": "1" },
-        body: JSON.stringify({ flow, message: msg, session_id: session, lang, command: cmd?.id ?? null, ...docRef.current }),
+        body: JSON.stringify(workspace ? base : { flow, ...base, ...docRef.current }),
       });
       if (!r.ok || !r.body) throw new Error((await r.text()) || r.statusText);
       const reader = r.body.getReader();
@@ -175,13 +189,16 @@ export function Chat({ flow, lang, doc, apply, onBusy, onLibrary }: {
           const ev = JSON.parse(line) as Event;
           if (ev.type === "text") push({ kind: "assistant", text: ev.text });
           else if (ev.type === "tool") push({ kind: "tool", name: ev.name, arg: ev.arg, edit: ev.edit });
+          else if (ev.type === "turn") setTurn({ n: ev.n, max: ev.max });
           else if (ev.type === "error") push({ kind: "error", text: ev.message });
           else if (ev.type === "done") {
             setSession(ev.session_id);
             setCost((c) => c + (ev.cost ?? 0));
             if (ev.is_error) push({ kind: "error", text: t("chat.endedWithError") });
+            if (ev.limit) push({ kind: "limit", max: ev.max_turns ?? ev.turns });
             for (const p of ev.library ?? []) push({ kind: "library", p });
-            if (ev.changed && ev.doc) {
+            for (const p of ev.proposals ?? []) push({ kind: "proposal", p });
+            if (ev.changed && ev.doc && ev.validation && apply) {
               apply(ev.doc);
               push({ kind: "info", text: (ev.validation.ok ? t("chat.applied")
                 : t("chat.appliedWithProblems", { n: ev.validation.errors.length })) + t("chat.undoHint") });
@@ -203,13 +220,23 @@ export function Chat({ flow, lang, doc, apply, onBusy, onLibrary }: {
       <div className="chat-log">
         {items.length === 0 && (
           <div className="chat-empty">
-            <p>{t("chat.intro")}</p>
-            {SUGGESTIONS.map((s) => <button key={s} className="suggest" onClick={() => send(t(s))}>{t(s)}</button>)}
+            <p>{t(workspace ? "wsa.intro" : "chat.intro")}</p>
+            {(workspace ? WS_SUGGESTIONS : SUGGESTIONS).map((s) => <button key={s} className="suggest" onClick={() => send(t(s))}>{t(s)}</button>)}
           </div>
         )}
         {items.map((it, i) => it.kind === "tool"
           ? <div key={i} className={`chat-tool${it.edit ? " edit" : ""}`}>{it.edit ? "✎" : "·"} {it.name} {it.arg && <code>{it.arg}</code>}</div>
           : it.kind === "library" ? <LibraryCard key={i} p={it.p} onSaved={onLibrary} />
+          : it.kind === "limit" ? (
+            <div key={i} className="chat-msg limit">
+              <span>{t("chat.limit", { max: it.max })}</span>
+              {i === items.length - 1 && !busy && <button className="small primary"
+                onClick={() => send(t("chat.continueMessage"))}>{t("chat.continue")}</button>}
+            </div>)
+          : it.kind === "proposal" ? (workspace
+            ? <ProposalCard key={i} p={it.p} onApplied={workspace.onApplied} onOpenFlow={workspace.onOpenFlow}
+              onConnectors={workspace.onConnectors} />
+            : null)
           : it.kind === "user" ? (
             <div key={i} className="chat-msg user">
               {it.cmd && <span className="cmd-used">⌘ {it.cmd}</span>}
@@ -219,7 +246,8 @@ export function Chat({ flow, lang, doc, apply, onBusy, onLibrary }: {
             </div>)
           : it.kind === "assistant" ? <div key={i} className="chat-msg assistant"><Markdown text={it.text} /></div>
           : <div key={i} className={`chat-msg ${it.kind}`}><Rich text={it.text} /></div>)}
-        {busy && <div className="chat-tool">{t("chat.thinking")}</div>}
+        {busy && <div className="chat-tool">{t("chat.thinking")}{turn
+          ? ` ${t("chat.turns", { n: turn.n, max: turn.max })}` : ""}</div>}
         <div ref={end} />
       </div>
       <div className="chat-input">

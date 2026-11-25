@@ -14,7 +14,8 @@ const NEW_YAML = "description: What this agent does and when to use it.\ntools: 
 type Form = { id: string; title: string; location: string; yaml: string; prompt: string; isNew: boolean };
 
 export function locLabel(t: ReturnType<typeof useI18n>["t"], loc: string) {
-  return loc === "local" ? t("loc.local") : loc === "public" ? t("loc.public") : t("loc.extension", { name: loc });
+  return loc === "local" ? t("loc.local") : loc === "public" ? t("loc.public")
+    : loc === "workspace" ? t("loc.workspace") : t("loc.extension", { name: loc });
 }
 
 export function LibraryManager({ library, locations, onChange, onClose }: {

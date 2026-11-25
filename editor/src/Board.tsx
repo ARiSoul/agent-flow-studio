@@ -15,6 +15,7 @@ import { ContextPanel } from "./ContextPanel";
 import { useDialog } from "./Dialog";
 import { Splitter } from "./Splitter";
 import { useWorkspaceActions, WorkspaceSettings, wsErrorText } from "./Workspaces";
+import { Chat } from "./Chat";
 
 type CardData = { flow: BoardFlow; label: (k: string) => string };
 
@@ -173,11 +174,15 @@ function BoardCanvas({ ws, flash, onOpen, onRun, onNewFlow, onFlowsChanged, onCo
 }
 
 /** The board view: the canvas of flows and the workspace settings beside it (resizable). */
-export function Board({ ws, flash, onSaved, side, onSide, ...acts }: { ws: WorkspaceNow;
+export function Board({ ws, flash, onSaved, side, onSide, onConnectors, onCatalog, ...acts }: { ws: WorkspaceNow;
   flash: (text: string, bad?: boolean) => void; onSaved: () => void;
+  onConnectors: () => void; onCatalog: () => void;
   side: number; onSide: (px: number | null) => void } & Omit<BoardActions, "onContext">) {
   const { t, lang } = useI18n();
   const [ctxKey, setCtxKey] = useState(0);  // the context block reloads after the settings change
+  const [setKey, setSetKey] = useState(0);  // the settings reload after the assistant changed them
+  const [tab, setTab] = useState<"settings" | "assistant">("settings");
+  const [, setBusy] = useState(false);
   const onContext = async (mode: "explore" | "update") => {
     try {
       await api.updateContext(mode, null);
@@ -195,8 +200,25 @@ export function Board({ ws, flash, onSaved, side, onSide, ...acts }: { ws: Works
         {ws.name === "studio"
           ? <p className="muted small">{t("board.studioHint")}</p>
           : <>
-            <ContextPanel key={ctxKey} flash={flash} />
-            <WorkspaceSettings name={ws.name} flash={flash} onSaved={() => { onSaved(); setCtxKey((k) => k + 1); }} />
+            <div className="tabs board-tabs">
+              <button className={tab === "settings" ? "on" : ""} onClick={() => setTab("settings")}>{t("wsa.tabSettings")}</button>
+              <button className={tab === "assistant" ? "on" : ""} onClick={() => setTab("assistant")}>{t("tabs.assistant")}</button>
+            </div>
+            <div className="board-settings" hidden={tab !== "settings"}>
+              <ContextPanel key={ctxKey} flash={flash} />
+              <WorkspaceSettings key={setKey} name={ws.name} flash={flash} onSaved={() => { onSaved(); setCtxKey((k) => k + 1); }} />
+            </div>
+            <div className="board-chat" hidden={tab !== "assistant"}>
+              <Chat key={ws.name} flow="@workspace" lang={lang} onBusy={setBusy} onLibrary={() => undefined}
+                workspace={{
+                  onApplied: (p) => {
+                    if (p.kind === "workspace") { onSaved(); setSetKey((k) => k + 1); setCtxKey((k) => k + 1); }
+                    else if (p.kind === "flow") acts.onFlowsChanged();
+                    else onCatalog();
+                  },
+                  onOpenFlow: acts.onOpen, onConnectors,
+                }} />
+            </div>
           </>}
       </aside>
     </div>

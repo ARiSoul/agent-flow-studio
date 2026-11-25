@@ -128,7 +128,15 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   or edited library agent with `library.check` and the chat shows it with a "Save to library"
   button — the assistant never saves), `commands.py` (saved assistant commands: message +
   instructions in `assistant_commands.yaml` outside git; `/api/assist` takes `command` and
-  `with_command` puts its instructions before the message), `chats.py` (conversation history per
+  `with_command` puts its instructions before the message), `ws_assistant.py` (+ `ws_assistant.md`:
+  the workspace assistant of the Board, `POST /api/assist/workspace`; read tools over the current
+  workspace and `propose_workspace_change` / `propose_flow` / `propose_connector`, checked with
+  `WorkspaceSpec`, `_validate` and `Connection` — never `auto`, MCPs unapproved, connectors
+  read-only without secrets; the done event carries `proposals`, the editor's cards apply them;
+  chat history key `@workspace`; `propose_flow` fills a short spec with `fill_defaults` and
+  returns all problems as JSON with where they are). Both assistants stream through
+  `assistant.stream`: `turn` events (n of `MAX_TURNS` = 60) and, at the limit, a `done` with
+  `limit: true` instead of an error (the editor offers Continue in the same session), `chats.py` (conversation history per
   flow in `runs/chats/<flow>/<id>.json`: the editor saves its items + session id after each reply;
   `/api/chats`), `runner.py` (full/step/until/agent runs,
   gates, live approvals, decisions in `runs/<id>/decisions.jsonl`; `ask` = ask an agent for more

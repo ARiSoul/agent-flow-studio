@@ -209,7 +209,9 @@ export function Connections({ onClose }: { onClose: () => void }) {
     if (isNew && meta.connections[name]) throw new Error(t("conn.exists"));
     // the actions go as YAML text (the server parses and checks them)
     const body = { ...form, secrets: undefined, secret: undefined, oauth: undefined, actions: undefined,
-      web_session: undefined, actions_yaml: form.actions_yaml ?? "" };
+      web_session: undefined, actions_yaml: form.actions_yaml ?? "",
+      // a new connector goes where the field says (the open workspace first, when there is one)
+      location: form.location ?? (isNew ? meta.locations?.[0] : undefined) };
     await req(`/api/connections/${name}`, "PUT", body);
     await reload(name);
     setMsg({ text: t("conn.saved") });
@@ -385,7 +387,7 @@ export function Connections({ onClose }: { onClose: () => void }) {
               </div>
               {(meta.locations ?? ["local"]).length > 1 && (
                 <label className="field"><span className="field-label">{t("loc.where")}</span>
-                  <select value={form.location ?? "local"} onChange={(e) => set({ location: e.target.value })}>
+                  <select value={form.location ?? meta.locations?.[0] ?? "local"} onChange={(e) => set({ location: e.target.value })}>
                     {meta.locations!.map((l) => <option key={l} value={l}>{locLabel(t, l)}</option>)}
                   </select>
                   <span className="field-hint">{t("loc.connWhereHint")}</span></label>)}

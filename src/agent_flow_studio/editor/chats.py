@@ -18,7 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from ..config import settings
 
 CHAT_ID = re.compile(r"^[a-z0-9]{8,32}$")
-FLOW = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+# a flow name, or "@workspace" (the workspace assistant of the Board)
+FLOW = re.compile(r"^(?:[a-z0-9][a-z0-9_-]{0,39}|@workspace)$")
 MAX_BYTES = 2_000_000
 MAX_ITEMS = 2_000
 
@@ -30,7 +31,7 @@ class ChatError(ValueError):
 class Item(BaseModel):
     """One line of the conversation as the editor shows it (other fields are kept as they are)."""
     model_config = ConfigDict(extra="allow")
-    kind: Literal["user", "assistant", "tool", "info", "error", "library"]
+    kind: Literal["user", "assistant", "tool", "info", "error", "library", "proposal", "limit"]
 
 
 class Chat(BaseModel):

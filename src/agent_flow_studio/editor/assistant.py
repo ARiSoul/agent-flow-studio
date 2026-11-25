@@ -11,13 +11,14 @@ from __future__ import annotations
 import copy
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ResultError,
     ResultMessage,
     TextBlock,
     ToolUseBlock,
@@ -38,7 +39,7 @@ from .validation import _validate
 SERVER = "flow_builder"
 PROMPT = (Path(__file__).parent / "assistant.md").read_text(encoding="utf-8")
 SLUG = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-MAX_TURNS = 40
+MAX_TURNS = 60  # model turns per message; at the limit the chat offers to continue
 LANGS = {"pt": "European Portuguese (pt-PT)", "en": "English", "es": "Spanish"}
 DEFAULT_LANG = "en"
 
@@ -648,35 +649,63 @@ def build_options(draft: Draft, session_id: str | None,
     )
 
 
-async def chat(message: str, flow: str, spec: dict[str, Any], prompts: dict[str, str],
-               session_id: str | None = None,
-               lang: str | None = None, command: Any = None) -> AsyncIterator[dict[str, Any]]:
-    """Events: text, tool, done (with the draft and the validation) or error. `command` is a
-    saved command (editor/commands.py) whose instructions go with the message."""
-    draft = Draft(spec, prompts)
-    prompt = with_command(f"[Flow open in the editor: {flow}]", message, command)
+async def stream(prompt: str, options: ClaudeAgentOptions, server: str, read_only: set[str],
+                 done: Callable[[ResultMessage | None], dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
+    """The events of one assistant message (both assistants): text, tool, turn (how many model
+    turns so far, of `max_turns`), done (with `done(result)`) or error. At the turn limit the done
+    event says `limit: true` (the session can go on with another message) instead of an error."""
+    turns: set[str] = set()
+    limit = options.max_turns or 0
+    finished = False
     try:
-        async for msg in query(prompt=prompt, options=build_options(draft, session_id, lang)):
+        async for msg in query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
+                key = msg.message_id or msg.uuid or str(len(turns))
+                if key not in turns and msg.parent_tool_use_id is None:
+                    turns.add(key)
+                    yield {"type": "turn", "n": len(turns), "max": limit}
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
                         yield {"type": "text", "text": block.text}
                     elif isinstance(block, ToolUseBlock):
-                        name = block.name.removeprefix(f"mcp__{SERVER}__")
+                        name = block.name.removeprefix(f"mcp__{server}__")
                         arg = (block.input.get("name") or block.input.get("node")
-                               or block.input.get("id") or (
+                               or block.input.get("id") or block.input.get("section") or (
                                    f"{block.input.get('from')} → {block.input.get('to')}"
                                    if "from" in block.input else ""))
                         yield {"type": "tool", "name": name, "arg": str(arg)[:60],
-                               "edit": name not in READ_ONLY_TOOLS}
+                               "edit": name not in read_only}
             elif isinstance(msg, ResultMessage):
+                at_limit = msg.subtype == "error_max_turns"
+                finished = True
                 yield {"type": "done", "session_id": msg.session_id, "cost": msg.total_cost_usd,
-                       "turns": msg.num_turns, "is_error": msg.is_error,
-                       "changed": draft.changed, "doc": draft.doc() if draft.changed else None,
-                       "library": list(draft.library_proposals.values()),
-                       "validation": draft.validation()}
+                       "turns": msg.num_turns, "max_turns": limit,
+                       "is_error": msg.is_error and not at_limit, "limit": at_limit,
+                       **done(msg)}
+    except ResultError as e:  # the CLI exits non-zero after an error result it already sent
+        at_limit = e.subtype == "error_max_turns" or e.terminal_reason == "max_turns"
+        if at_limit and not finished and e.session_id:  # the result came only in the error
+            yield {"type": "done", "session_id": e.session_id, "cost": None, "turns": limit,
+                   "max_turns": limit, "is_error": False, "limit": True, **done(None)}
+        elif not at_limit:
+            yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
     except Exception as e:  # noqa: BLE001 — the editor shows the error; do not hang the stream
         yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
+
+
+async def chat(message: str, flow: str, spec: dict[str, Any], prompts: dict[str, str],
+               session_id: str | None = None,
+               lang: str | None = None, command: Any = None) -> AsyncIterator[dict[str, Any]]:
+    """Events: text, tool, turn, done (with the draft and the validation) or error. `command` is a
+    saved command (editor/commands.py) whose instructions go with the message."""
+    draft = Draft(spec, prompts)
+    prompt = with_command(f"[Flow open in the editor: {flow}]", message, command)
+    async for ev in stream(prompt, build_options(draft, session_id, lang), SERVER, READ_ONLY_TOOLS,
+                           lambda _: {"changed": draft.changed,
+                                      "doc": draft.doc() if draft.changed else None,
+                                      "library": list(draft.library_proposals.values()),
+                                      "validation": draft.validation()}):
+        yield ev
 
 
 def encode(event: dict[str, Any]) -> bytes:

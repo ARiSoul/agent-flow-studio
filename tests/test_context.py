@@ -235,3 +235,20 @@ def test_context_update_through_the_api(ws, tmp_path, monkeypatch):
             time.sleep(0.05)
         assert run["status"] == "done"
         assert c.get("/api/context").json()["sections"]["docs"] == "Docs here."
+
+
+def test_a_renamed_root_keeps_its_context(ws, tmp_path):
+    """Renaming a root (same folder) moves its explored section and state to the new name; a new
+    root with another folder starts empty, and the agents see the section under the new name."""
+    context.set_section(ws, "docs", "Shared documentation.", commit="c1", by="r1")
+    c = TestClient(create_app(tmp_path / "flows", allowed_hosts=["testserver"]))
+    roots = {"app": {"path": "."}, "shared_docs": {"path": "docs"}}
+    r = c.put("/api/workspaces/game", json={"roots": roots}, headers=H)
+    assert r.status_code == 200 and r.json()["renamed_roots"] == {"docs": "shared_docs"}
+    w = workspaces.get("game")
+    assert context.sections(w) == {"shared_docs": "Shared documentation."}
+    assert context.state(w)["shared_docs"]["commit"] == "c1" and "docs" not in context.state(w)
+    assert "### Root `shared_docs`" in context.context_text(w)
+    # another folder: not a rename, nothing moves
+    roots2 = {"app": {"path": "."}, "other": {"path": "elsewhere"}}
+    assert c.put("/api/workspaces/game", json={"roots": roots2}, headers=H).json()["renamed_roots"] == {}

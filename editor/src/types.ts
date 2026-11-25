@@ -264,6 +264,7 @@ export interface WorkspaceDetail {
   home: string | null;
   spec?: WorkspaceSpecRaw;
   roots?: Record<string, string>;  // absolute folders
+  renamed_roots?: Record<string, string>;  // after a save: old name → new (same folder)
 }
 
 export type CopyKind = "flow" | "agent" | "flow_agent" | "connector" | "vars";

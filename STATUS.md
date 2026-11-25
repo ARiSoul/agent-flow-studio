@@ -4,75 +4,71 @@ Hand-over file between machines/accounts. **When you start:** read this. **When 
 update "Current state" and "Next steps", add a line to the "Log" (date, machine/account in generic
 terms — no emails —, what was done) and commit + push.
 
-## Where we stopped (2026-11-20, work machine / account A)
-Last commit: `dcb9990` (all the work of this session; pushed by the user).
+## Where we stopped (2026-11-25, work machine / account A)
+Last pushed commit: `c7fb682`. The commit after it (this session, see the Log of 2026-11-24/25)
+holds everything below; the user pushes by hand.
 
 **After you pull on the other machine**
-1. `.\.venv\Scripts\python -m pip install -e ".[dev,web]"` (`web` = Playwright, optional: only for
-   website connectors; it uses the installed Edge/Chrome, no browser download). **Stop the
-   editor first**: on Windows a running `agent-flow-studio-editor.exe` is locked, pip stops halfway
-   and the package disappears from the venv (`No module named 'agent_flow_studio'`; fix: delete
-   `.venv/Lib/site-packages/~gent_flow_studio-*` and install again).
-2. `cd editor; npm run build; cd ..` and **restart** `agent-flow-studio-editor` (the server has new
-   routes; with an old server the editor says "restart agent-flow-studio-editor").
-3. `git status`: flows in `flows/` other than `repo-review` are now **ignored by git** (nothing is
-   deleted). Create `private_terms.txt` there too (outside git) with the words that must never be
-   published.
+1. **Stop the editor first**, then `.\.venv\Scripts\python -m pip install -e ".[dev,web]"` (a
+   running `agent-flow-studio-editor.exe` is locked on Windows: pip stops halfway and the package
+   disappears from the venv; fix: delete `.venv/Lib/site-packages/~gent_flow_studio-*` and install
+   again). No new dependencies in this session.
+2. `cd editor; npm run build; cd ..` and **restart** `agent-flow-studio-editor`: the server has
+   new routes (`POST /api/assist/workspace`); with an old server the editor says "restart".
+3. `.\.venv\Scripts\pytest` (all should pass; the 11 video/ffmpeg tests are skipped without the
+   `media` extra).
 
-**What this session added** (details in "Current state" and the Log)
-- Assistant: agent library tools (view / copy / update, and proposals of new or edited library
-  agents saved by the user), saved commands, conversation history per flow, Markdown in the chat.
-- Editor: last open flow remembered, resizable and hideable panels, save with problems (asks
-  first; never with a literal secret), agent library window (palette → Manage).
-- Connectors: instructions for the agents; named **actions** as permissions (`run_action`,
-  policy, "only these actions"); **website** connector type (sign-in by the person, declared steps
-  or `get_json`, read actions cannot write, `redact`).
-- Flows: `show_if` on inputs; template `ticket-triage` (text / URL / number → one ticket text).
-- **Where things live**: local by default (`flows/*` ignored); an extension (can be its own private
-  repo) or, explicitly, public (git) for flows, library agents and connectors; private terms
-  block anything public.
+**What this session added (2026-11-24 → 25)**
+- **Workspace assistant** (Board → side panel → **Assistant** tab; `editor/ws_assistant.py` +
+  `ws_assistant.md`, `editor/src/WsProposals.tsx`). It reads the workspace (settings, context
+  sections, flows, connectors, templates, library), answers questions citing the context, and only
+  **proposes** — workspace settings, a new flow (from a template or a short spec that the studio
+  fills in), a connector (read-only, no secrets). Each proposal is a card the person applies
+  (PUT workspace / create + save the flow in the workspace / PUT connector with location
+  `workspace`); secrets, sign-in and write access stay in the Connectors window. Saved commands
+  and history (key `@workspace`) as in the flow assistant.
+- **Both assistants**: 60 model turns per message (was 30 / 40), "turn n of 60" while working, and
+  at the limit no error: a message with **Continue** (same session). Shared event loop
+  `assistant.stream`. `propose_flow` gives all problems at once (JSON with where each one is).
+- **Board**: the top bar shows only what works there (⋯ / Flow editor / New / Connectors); the
+  Connectors and library windows now open over the Board (before, only in the flow view).
+- **Workspace settings**: names with spaces or "-" become "_" (with a message), invalid or
+  repeated names are refused, order is kept; a root renamed with the same folder keeps its
+  explored context (`context.follow_renames`).
+- **Connectors in a workspace**: a new connector defaults to location "workspace", and the label
+  says "workspace" (it said "extension workspace").
+- **Tests**: the real-browser tests use `ThreadingHTTPServer` (the single-threaded one could hang
+  for ever on Edge's idle sockets); the whole suite takes about 2 min.
 
-**Real use on the work machine (local only, not in git)**: one website connector to the internal
-ticket platform works (`get_ticket` on a real ticket, phones redacted); details in
-`CLAUDE.local.md` there.
+**Checked how**: unit/API tests, plus the browser with **simulated** assistant replies (cards
+applied in a temporary workspace, then removed; the limit message and Continue). **Not tried yet
+with the real model**: the workspace assistant, the turn counter and Continue.
 
-**Not tried yet**: `ticket-triage` end to end with the model; the assistant's new tools in a real
-chat with the model; resuming a conversation after a server restart.
+**Local only (work machine, outside git)**: a studio workspace with the two local ticket flows
+copied into it (the originals are still in `flows/`); the local extension now uses the core's
+draft marker. The website connector's session expires after a few days: sign in again
+(Connectors → Sign in) before a run. Details in `CLAUDE.local.md` there.
 
-**Known**: the local extension's `test_save_artifact_marks_drafts` fails on the
-work machine (the core draft marker is English since the translation; the extension test expects
-the Portuguese one). Fix it in the extension (outside git).
+**Idea discussed, not started**: a flow that reads Azure DevOps boards/PBIs and follows each item
+through stages (analysis → refinement → approved → development ⇄ tests ⇄ review → final approval).
+Possible today as one flow per stage with the item id as input (the `azure_devops` connector with
+named read actions, human gates, a decision loop with `max_runs`, a final write with approval).
+Missing: a **board of items** in the studio (cards from a connector action, columns from a field,
+a flow per column) and state per item across runs — see backlog item 11.
 
-**Since then, on the second machine (account B)**: backlog items 3 (links of a run on the canvas),
-7 (server messages in the UI language) and the first part of item 2 (record a website action).
-Recording is tested with Playwright and Edge (headless, on a local page); it was not tried yet by
-a person on a real site: try it on the work machine. After you pull: `npm run build` and restart the editor.
+**Next suggested task**: try the workspace assistant with the real model (e.g. "propose a flow
+for …" in a workspace); then item 1 of the backlog (sign in on the website connector and run the
+copied triage flow end to end from the workspace).
 
-Then the fixes from the first real run of a hand-made flow (a website connector, one agent, a stop):
-run log with the tool detail and its error text, Markdown in the log, a default turn limit per
-agent (40) and "retry at most once" for the orchestrator, a run id only for flows without inputs,
-the agent panel says what each connector gives (no more automatic `http_get` for websites), the
-recorder leaves out sign-in steps and warns without extracts, resizable visible browser windows,
-`previous.<agent>.<output>` (the last finished run), stop **messages** with `{expression}` parts
-and the **decision** node (diamond, first branch whose `if` holds, "otherwise", labels "yes/no").
-Checked in the browser with a fake model (no real model run). The flow on this machine
-(local, outside git) still has its old recorded action (with the sign-in clicks and no extract):
-record it again after "Sign in" and rebuild the flow with a decision.
-
-Then (second machine, 2026-11-22): **studio workspaces** — a workspace per project (in a
-repository `.agent-flow/` or in the studio `workspaces/<name>/`) with roots, variables and
-environments, its own flows/agents/connectors, the Board view, hand-off between flows ("Fill from
-a run", `source` hints), subflow nodes, and "Copy to…" for flows, agents, connectors and
-variables/environments plus "Duplicate workspace". Checked in the browser with a fake model and a
-fake keyring (scratch folders only); no real model run. **After you pull**: `npm run build` and
-restart the editor; nothing changes until you create or open a workspace (top bar → ⋯).
-
-**Next suggested task**: create a real workspace for a repository on the work machine (top bar →
-⋯ → New workspace → In a repository), move its flows there with "Copy to…", set its variables and
-environments, then item 1 of the backlog.
+**Earlier hand-overs (summary; details in the Log)**: 2026-11-20 agent library, assistant
+commands/history, connector actions and website connectors, local/extension/public locations;
+second machine: run links on the canvas, server messages in the UI language, action recording,
+decision/stop-message nodes, `previous.*`; 2026-11-22 studio workspaces (roots, vars,
+environments, Board, hand-off, subflows, Copy to…, workspace context); 2026-11-24 images and
+videos for agents.
 
 ## Current state
-Works and is tested (`pytest`: core 540 tests, without extensions; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 553 tests without extensions — 542 + 11 that need the `media` extra; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -108,6 +104,9 @@ Works and is tested (`pytest`: core 540 tests, without extensions; `ruff` clean;
   from the order of the agents and gates); outputs view;
   artifacts; gates with a decision; live write approvals; a card with the `claude` → `/login`
   steps when the CLI is not signed in.
+- **Workspace assistant** in the Board (Assistant tab): reads the workspace and proposes settings,
+  new flows and connectors as cards the person applies; never writes.
+- **Assistant limits**: 60 turns per message, turn counter, Continue at the limit (both assistants).
 - **Chat assistant** in the editor: builds/changes the flow in a draft (never saves on its own);
   knows typed IO, `if` conditions, execution modes, icons, the agent library (copy, update,
   propose new/edited library agents) and the connectors' instructions and actions. Saved
@@ -165,7 +164,8 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
 ## Next steps (backlog, in suggested order)
 1. [ ] Run `ticket-triage` end to end with the model and a real connector (work machine), then the
    other templates and a graph flow (check `tools=[]` per agent session, the router, parallel
-   sessions); tune the template prompts. Try the assistant's library tools in a real chat.
+   sessions); tune the template prompts. Try the assistant's library tools in a real chat, and
+   the workspace assistant (Board → Assistant) with the real model.
 2. [ ] Website/API actions, next steps: ~~record the steps by clicking on the site~~ (done
    2026-11-20: Connectors → website → Record; try it with a real site); the assistant
    proposes actions for a connector (as proposals the user saves); a "guided" mode (the model
@@ -190,9 +190,15 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
 10. [ ] Files for agents, next: sound of a video (a transcription tool), PDF and Office files,
    images/videos in the workspace folder (`workspace.read` shows images; no video there yet).
 
+11. [ ] Board of items: cards that come from a connector action (e.g. Azure DevOps PBIs of a
+   sprint), columns from a field (the state), a flow per column run on a card, the last run and
+   state per item; first step: an `azure_devops` connector with named read actions and one flow
+   per stage. Check whether HTTP read actions can use POST (WIQL) or stay on saved queries (GET).
+
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
 · editor polish · context menu · agent library · assistant commands/history · connector actions
-and website connectors · local by default / extensions / public (see the Log).
+and website connectors · local by default / extensions / public · studio workspaces · workspace
+assistant (see the Log).
 
 ## Getting started on a new machine
 ```powershell
@@ -400,3 +406,11 @@ start the editor or the CLI (the studio does not read `.env`).
   ended the session); `read_file` now declares the `agent` argument the guard checks. Checked
   with the real CLI against a local fake API: the images reach the model request. After you
   pull: `npm run build`, restart the editor, and install ffmpeg (or `.[media]`) for videos.
+- 2026-11-24 · work machine (account A) · Pulled and rebuilt; first real workspace with the local ticket
+  flows copied into it (connector fixed in the copy); local extension uses the core draft marker.
+- 2026-11-25 · work machine (account A) · Workspace names: spaces/- become _, invalid or repeated
+  names refused with a message, order kept; a renamed root keeps its explored context.
+- 2026-11-25 · work machine (account A) · Workspace assistant in the Board (read + proposals the
+  person applies); Board top bar cleaned up and the Connectors window opens over the Board.
+- 2026-11-25 · work machine (account A) · Assistants: 60 turns, turn counter, Continue at the limit;
+  short flow proposals filled in, all problems at once.

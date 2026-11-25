@@ -147,7 +147,21 @@ sometimes several folders), like a Postman workspace. Choose it in the top bar (
   are kept per workspace (`runs/@<workspace>/`).
 - **Board**: the **Board** button shows the workspace's flows as cards (inputs, outputs, last run),
   linked by where an input usually comes from, by subflows and by the values passed in runs; the
-  side panel edits roots, variables and environments.
+  side panel edits roots, variables and environments. In the Board, the top bar keeps only what
+  works there (Flow editor, New, Connectors).
+- **Workspace assistant**: the **Assistant** tab of the Board side panel is a chat about the whole
+  workspace. It reads the settings, the context of each root, the flows, the connectors and the
+  library, answers questions (citing the context section), and **proposes**: workspace settings
+  (roots, variables, environments), a new flow (from a template or written in full, always valid,
+  autonomy `approve`/`approve_prod`, external MCPs unapproved) or a connector (read-only, no
+  secrets). Each proposal is a card; **you** apply it (then add the secret / sign in / give write
+  access in the Connectors window). It never writes by itself. Saved commands and the
+  conversation history work as in the flow assistant. A new flow can be proposed short (agents
+  with a description, gates, edges): the studio fills in graph execution, the start, a task with
+  `{input}` and a prompt per agent, and gives every problem back at once.
+- **Assistant turns**: both assistants may take up to 60 model turns per message; while working the
+  chat shows "turn n of 60". At the limit the chat says so (no error) and **Continue** goes on in
+  the same session.
 - **Flows that feed each other**: a flow input can say where its value usually comes from
   (`inputs.plan.source: {flow: feature-analysis, output: planner.plan}`); in the Run panel,
   **Fill from a run…** takes the value from a finished run of that flow (typing it stays possible),
@@ -295,7 +309,7 @@ src/agent_flow_studio/
   builder/        spec.py (format + validation), catalog.py, compile.py, templates.py, library.py
   templates/      flow templates (code-review, test-runner, fix-and-pr)
   agents/         built-in agent library (repo_explorer, code_reviewer, summarizer)
-  editor/         server.py (API), assistant.py, runner.py, validation.py, yaml_io.py, static/ (build)
+  editor/         server.py (API), assistant.py, ws_assistant.py, runner.py, validation.py, yaml_io.py, static/ (build)
   connections/    model.py, store.py (keyring/${VAR}), client.py
   tools/          artifacts.py, connections.py, git.py (read-only), guards.py, common.py
   hooks.py        guard (closed list) + audit · policy.py  writes, workspace, autonomy

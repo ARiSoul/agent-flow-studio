@@ -748,3 +748,12 @@ td.ctx-running { color: var(--accent); font-weight: 600; }
   border-top-color: var(--accent); animation: afs-spin .8s linear infinite; flex-shrink: 0; }
 @keyframes afs-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+
+/* Board side panel: settings | assistant tabs (the chat fills the height) */
+.board-side { display: flex; flex-direction: column; overflow: hidden; }
+.board-side > h2 { margin-top: 0; }
+.board-tabs { padding: 0 0 6px; margin: 0 0 6px; }
+.board-settings { flex: 1; min-height: 0; overflow: auto; }
+.board-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0 -14px -10px; }
+.board-settings[hidden], .board-chat[hidden] { display: none; }
+.chat-msg.limit { background: var(--panel-2); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font-size: 12px; }
