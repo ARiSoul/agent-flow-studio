@@ -21,8 +21,17 @@ pull: `cd editor; npm run build; cd ..` and restart the editor (new routes under
   the run. Learned sources are kept per machine in `runs/@<ws>/.context/learned.json`.
 - Agents get the history after all root sections (`MAX_PROMPT` now 16 000, history ≤ 8 000).
 - Checked with fake sessions and a fake model (tests + browser). **Not tried with the real model
-  or real sessions yet.** Known small issue (older): the roots table of the workspace settings
-  is about 30 px too wide for a narrow side panel.
+  or real sessions yet.
+
+**Then (2026-11-26, home machine)**
+- **Model on agent cards**: each agent card (all three styles) shows the model it runs with, under
+  its name: its own (accent colour), else the flow's, else the studio default
+  (`/api/catalog` → `default_model` = `AFS_MODEL`; "default model" when unset = the Claude CLI's).
+  Action and subflow nodes show none. The tooltip says where the model comes from.
+- **Model in the node context menu**: a row "flow · sonnet · opus · haiku · …"; "…" asks for a
+  full model ID. "flow" removes the agent's own model.
+- **Workspace settings fit a narrow side panel**: the roots table has a fixed layout, and long
+  paths in the "stored in" box wrap (the panel scrolled sideways before).
 
 ## Earlier stop (2026-11-25, work machine / account A)
 Commit `dbd1c69` holds everything below.
@@ -438,3 +447,5 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-25 · home machine (account B) · History from past Claude Code sessions: Learn on a root
   (sessions and memory notes of its folder, studio sessions set apart and tagged), readers + a
   history keeper, a draft the person reviews, `<root>.history` in context.md.
+- 2026-11-26 · home machine (account B) · Agent cards show their model (own / flow / studio
+  default); model choice in the node context menu; workspace settings fit a narrow side panel.

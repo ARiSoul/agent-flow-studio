@@ -8,8 +8,8 @@ export type MenuItem =
   | { kind: "sep" }
   | { kind: "label"; label: string }
   /** A row of small buttons (e.g. icons); each one is a menu item for the keyboard. */
-  | { kind: "grid"; label: string; cells: { key: string; title: string; content: ReactNode; on?: boolean;
-      onSelect: () => void }[] };
+  | { kind: "grid"; label: string; wide?: boolean; cells: { key: string; title: string; content: ReactNode;
+      on?: boolean; onSelect: () => void }[] };
 
 export interface MenuState { x: number; y: number; title?: string; items: MenuItem[] }
 
@@ -70,7 +70,7 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState; onClose: () =>
         if (it.kind === "label") return <div key={k} className="ctx-label">{it.label}</div>;
         if (it.kind === "grid") return (<div key={k}>
           <div className="ctx-label" aria-hidden="true">{it.label}</div>
-          <div className="ctx-grid" role="group" aria-label={it.label}>
+          <div className={`ctx-grid${it.wide ? " wide" : ""}`} role="group" aria-label={it.label}>
             {it.cells.map((c) => (
               <button key={c.key} type="button" role="menuitemradio" aria-checked={!!c.on} title={c.title}
                 aria-label={c.title} data-cell="1" tabIndex={-1} className={`ctx-cell${c.on ? " on" : ""}`}

@@ -217,6 +217,7 @@ export interface Catalog {
   servers: string[];
   contracts: Record<string, unknown>;
   models: string[];
+  default_model?: string | null;  // the studio's model (AFS_MODEL); null: the Claude CLI default
   mock: boolean;
   connections: Record<string, { type: string; environment: string; description: string; access: string;
     actions_only?: boolean; actions?: Record<string, { access: string; description: string; params?: string[] }> }>;

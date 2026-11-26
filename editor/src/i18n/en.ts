@@ -98,6 +98,10 @@ export const en = {
 
   // ---- nodes / defaults
   "node.agent": "Agent",
+  "node.modelDefault": "default model",
+  "node.modelFrom.agent": "Model: {model} (set on this agent)",
+  "node.modelFrom.flow": "Model: {model} (the flow's model; this agent sets none)",
+  "node.modelFrom.studio": "Model: {model} (the studio's default; neither the agent nor the flow sets one)",
   "node.start": "start",
   "node.human": "Human approval",
   "node.stop": "Stop",
@@ -535,6 +539,12 @@ export const en = {
   // ---- context menu
   "menu.properties": "Properties",
   "menu.rename": "Rename…",
+  "menu.model": "Model",
+  "menu.modelInherit": "flow",
+  "menu.modelInheritTitle": "Use the flow's model (or the studio default)",
+  "menu.modelOther": "Another model (full ID)…",
+  "menu.modelTitle": "Model of {name}",
+  "menu.modelHint": "A short name (sonnet, opus, haiku) or a full model ID, without spaces. Empty: the flow's model.",
   "menu.renameTitle": "Rename {name}",
   "menu.setStart": "Set as start",
   "menu.autoSize": "Automatic size",

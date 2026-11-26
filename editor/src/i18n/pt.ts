@@ -99,6 +99,10 @@ export const pt: Messages = {
 
   // ---- nodes / defaults
   "node.agent": "Agente",
+  "node.modelDefault": "modelo por omissão",
+  "node.modelFrom.agent": "Modelo: {model} (definido neste agente)",
+  "node.modelFrom.flow": "Modelo: {model} (o modelo do fluxo; este agente não define nenhum)",
+  "node.modelFrom.studio": "Modelo: {model} (o modelo por omissão do estúdio; nem o agente nem o fluxo definem um)",
   "node.start": "início",
   "node.human": "Aprovação humana",
   "node.stop": "Paragem",
@@ -535,6 +539,12 @@ export const pt: Messages = {
   // ---- context menu
   "menu.properties": "Propriedades",
   "menu.rename": "Mudar o nome…",
+  "menu.model": "Modelo",
+  "menu.modelInherit": "fluxo",
+  "menu.modelInheritTitle": "Usa o modelo do fluxo (ou o modelo por omissão do estúdio)",
+  "menu.modelOther": "Outro modelo (ID completo)…",
+  "menu.modelTitle": "Modelo de {name}",
+  "menu.modelHint": "Um nome curto (sonnet, opus, haiku) ou o ID completo de um modelo, sem espaços. Vazio: o modelo do fluxo.",
   "menu.renameTitle": "Mudar o nome de {name}",
   "menu.setStart": "Definir como início",
   "menu.autoSize": "Tamanho automático",

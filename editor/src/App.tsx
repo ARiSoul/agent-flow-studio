@@ -329,7 +329,11 @@ function Editor() {
           id, type: "agent", position: pos(id), measured: dims[id], ...size(id),
           selected: sel?.kind === "node" && sel.id === id,
           data: { name: id, agent: a, start: s.start === id, error: errNodes.has(id), run: trace.nodes[id], ins, outs,
-            style: nodeStyle, lib: a.origin ? val?.origins?.[id] : undefined },
+            style: nodeStyle, lib: a.origin ? val?.origins?.[id] : undefined,
+            model: a.action || a.subflow ? null
+              : a.model && a.model !== "inherit" ? { name: a.model, from: "agent" as const }
+              : s.model ? { name: s.model, from: "flow" as const }
+              : { name: catalog?.default_model ?? null, from: "studio" as const } },
         };
       }),
       ...Object.entries(s.gates ?? {}).map(([id, g]) => ({
@@ -625,6 +629,30 @@ function Editor() {
     const at = doc?.spec.layout?.[id];
     pasteNode(copyNode(id, true), at && { x: at.x + 40, y: at.y + 40 });
   };
+  /** The model of an agent in its context menu: the flow's (none set), a short name, or any ID. */
+  const modelGrid = (id: string, current?: string | null): MenuItem => {
+    const names = catalog?.models ?? ["inherit", "sonnet", "opus", "haiku"];
+    const own = current && current !== "inherit" ? current : null;
+    const other = own && !names.includes(own) ? own : null;
+    const pick = (m: string | null) => update((d) => { d.spec.agents[id].model = m ?? undefined; });
+    return { kind: "grid", wide: true, label: t("menu.model"), cells: [
+      ...names.map((m) => m === "inherit"
+        ? { key: m, title: t("menu.modelInheritTitle"), on: !own, content: t("menu.modelInherit"), onSelect: () => pick(null) }
+        : { key: m, title: m, on: own === m, content: m, onSelect: () => pick(m) }),
+      { key: "other", title: other ? `${other} · ${t("menu.modelOther")}` : t("menu.modelOther"), on: !!other, content: other ?? "…", onSelect: () => modelDialog(id) },
+    ] };
+  };
+  const modelDialog = async (id: string) => {
+    const a = doc?.spec.agents[id];
+    if (!a) return;
+    const r = await dialog.form({
+      title: t("menu.modelTitle", { name: id }), ok: t("app.save"),
+      fields: [{ key: "model", label: t("insp.model"), value: a.model ?? "", hint: t("menu.modelHint"),
+        validate: (v) => /\s/.test(v.trim()) ? t("menu.modelHint") : null }],
+    });
+    if (!r) return;
+    update((d) => { d.spec.agents[id].model = r.model.trim() || undefined; });
+  };
   const renameDialog = async (id: string) => {
     if (!doc) return;
     const r = await dialog.form({
@@ -669,6 +697,7 @@ function Editor() {
         key: k, title: k, on: (a.icon || "robot") === k, content: <Icon id={k} size={16} />,
         onSelect: () => update((d) => { d.spec.agents[id].icon = k === "robot" ? undefined : k; }),
       })) },
+      ...(a.action || a.subflow ? [] : [modelGrid(id, a.model)]),
       { label: t("menu.addInput"), onSelect: () => addPort(id, "in") },
       { label: t("menu.addOutput"), onSelect: () => addPort(id, "out") },
       { kind: "sep" },

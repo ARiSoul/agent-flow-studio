@@ -408,6 +408,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             "servers": sorted(BUILTIN_SERVERS),
             "contracts": {k: v.json_schema() for k, v in CONTRACTS.items()},
             "models": MODELS,
+            "default_model": settings.model,  # agents with no model (and flows) use it; None: the CLI's
             "mock": settings.mock,
             "connections": _conn_summary(),
             # where flows, library agents and connectors can be kept: this machine or an extension

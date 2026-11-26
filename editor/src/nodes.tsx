@@ -10,7 +10,20 @@ export type Port = { name: string; type: IOKind; multiple: boolean; from?: strin
 export type AgentNodeData = {
   name: string; agent: AgentRaw; start: boolean; error: boolean; run?: NodeRun;
   ins: Port[]; outs: Port[]; style?: NodeStyle; lib?: OriginState;
+  model?: AgentModel | null;  // null: the node runs no model (action, subflow)
 };
+/** The model an agent runs with, and where it comes from (its own, the flow's, the studio's). */
+export type AgentModel = { name: string | null; from: "agent" | "flow" | "studio" };
+
+function ModelBadge({ model }: { model?: AgentModel | null }) {
+  const { t } = useI18n();
+  if (!model) return null;
+  const name = model.name ?? t("node.modelDefault");
+  return (
+    <span className={`badge model from-${model.from}`} title={t(`node.modelFrom.${model.from}`, { model: name })}>
+      {name}
+    </span>);
+}
 
 /** "lib" badge of an agent copied from the library (↑ when the library has another version). */
 function LibBadge({ agent, lib }: { agent: AgentRaw; lib?: OriginState }) {
@@ -146,6 +159,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
         </div>
         <div className="avatar-name">{data.name}</div>
         <div className="avatar-badges">
+          <ModelBadge model={data.model} />
           {data.start && <span className="badge start">{t("node.start")}</span>}
           <LibBadge agent={a} lib={data.lib} />
           <RunningBadge run={data.run} />
@@ -164,7 +178,8 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
           <span className="node-name">{data.name}</span>
           <RunDot run={data.run} />
         </div>
-        {(data.start || data.run === "active" || a.origin) && <div className="node-head">
+        {(data.start || data.run === "active" || a.origin || data.model) && <div className="node-head">
+          <ModelBadge model={data.model} />
           {data.start && <span className="badge start">{t("node.start")}</span>}
           <LibBadge agent={a} lib={data.lib} />
           <RunningBadge run={data.run} />
@@ -189,9 +204,9 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
         {data.start && <span className="badge start">{t("node.start")}</span>}
         <LibBadge agent={a} lib={data.lib} />
         {a.join === "any" && <span className="badge" title={t("node.joinAnyTitle")}>{t("node.joinAny")}</span>}
-        {a.model && <span className="badge">{a.model}</span>}
       </div>
       <div className="node-name">{data.name}</div>
+      {data.model && <div className="node-model"><ModelBadge model={data.model} /></div>}
       <div className="node-desc">{a.description}</div>
       <div className="node-foot">
         {servers.map((s) => (

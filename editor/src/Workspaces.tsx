@@ -320,7 +320,7 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
 
       <h3>{t("ws.roots")}</h3>
       <p className="muted small">{t("ws.rootsHint")}</p>
-      <table className="ws-table"><tbody>
+      <table className="ws-table ws-roots"><tbody>
         {Object.entries(spec.roots).flatMap(([k, r]) => [
           <tr key={k}>
             <td><input className="mono" defaultValue={k} aria-label={t("ws.name")} title={t("ws.nameRule")}

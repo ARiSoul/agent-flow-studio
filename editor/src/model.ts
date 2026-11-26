@@ -5,6 +5,7 @@ import type { AgentInputRaw, AgentRaw, Doc, FlowRaw, GateRaw, IOKind, IOTypeRaw 
 export const SLUG = /^[a-z][a-z0-9_]{0,39}$/;
 export const NODE_W = 240;
 export const NODE_H = 96;
+const MODEL_H = 18;  // the model badge under an agent's name (card style)
 export const PORT_H = 18;  // height of one port row (keep in sync with .port in styles.css)
 export const LEGACY_INPUT = "input";  // the one implicit input of flows without `inputs`
 
@@ -178,7 +179,7 @@ export function setSavedSize(spec: FlowRaw, id: string, style: NodeStyle, size: 
  * part that shrinks). `rows`: port rows. */
 export function agentMinHeight(rows: number, style: NodeStyle): number {
   if (style === "avatar") return 90;  // the circle and the name (the ports are on the ring)
-  return (style === "compact" ? 46 : 70) + rows * PORT_H;
+  return (style === "compact" ? 46 : 70 + MODEL_H) + rows * PORT_H;
 }
 
 /** The size a node takes by itself in a style (its ports included). */
@@ -187,7 +188,7 @@ export function autoNodeSize(spec: FlowRaw, id: string, style: NodeStyle = "card
   if (style === "avatar") return a ? { w: 140, h: 130 } : { w: 120, h: 120 };
   const rows = a ? Math.max(Object.keys(a.inputs ?? {}).length + 1, Object.keys(a.outputs ?? {}).length) : 0;
   if (style === "compact") return a ? { w: 200, h: 46 + rows * PORT_H + 12 } : { w: 200, h: 56 };
-  return { w: NODE_W, h: a ? NODE_H + rows * PORT_H + 24 : NODE_H };  // + the ports block's padding
+  return { w: NODE_W, h: a ? NODE_H + MODEL_H + rows * PORT_H + 24 : NODE_H };  // + the ports block's padding
 }
 
 /** Automatic layout (top to bottom). Only moves the given nodes (all by default). */

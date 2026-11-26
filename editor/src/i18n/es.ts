@@ -99,6 +99,10 @@ export const es: Messages = {
 
   // ---- nodes / defaults
   "node.agent": "Agente",
+  "node.modelDefault": "modelo por defecto",
+  "node.modelFrom.agent": "Modelo: {model} (definido en este agente)",
+  "node.modelFrom.flow": "Modelo: {model} (el modelo del flujo; este agente no define ninguno)",
+  "node.modelFrom.studio": "Modelo: {model} (el modelo por defecto del estudio; ni el agente ni el flujo definen uno)",
   "node.start": "inicio",
   "node.human": "Aprobación humana",
   "node.stop": "Parada",
@@ -535,6 +539,12 @@ export const es: Messages = {
   // ---- context menu
   "menu.properties": "Propiedades",
   "menu.rename": "Cambiar nombre…",
+  "menu.model": "Modelo",
+  "menu.modelInherit": "flujo",
+  "menu.modelInheritTitle": "Usa el modelo del flujo (o el modelo por defecto del estudio)",
+  "menu.modelOther": "Otro modelo (ID completo)…",
+  "menu.modelTitle": "Modelo de {name}",
+  "menu.modelHint": "Un nombre corto (sonnet, opus, haiku) o el ID completo de un modelo, sin espacios. Vacío: el modelo del flujo.",
   "menu.renameTitle": "Cambiar el nombre de {name}",
   "menu.setStart": "Definir como inicio",
   "menu.autoSize": "Tamaño automático",
