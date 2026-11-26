@@ -292,6 +292,14 @@ class Position(_Strict):
     avatar: Size | None = None
 
 
+class RetrySpec(_Strict):
+    """Graph mode: a step whose session ends with a temporary API error (busy, rate limit, 5xx)
+    runs again by itself, up to `transient` more times, after `wait` seconds (doubled each time,
+    at most 5 minutes). 0 turns it off. The person can retry at once or cancel while it waits."""
+    transient: int = Field(default=2, ge=0, le=5)
+    wait: int = Field(default=15, ge=1, le=300)
+
+
 class FlowSpec(_Strict):
     version: Literal[1] = 1
     name: str
@@ -301,6 +309,7 @@ class FlowSpec(_Strict):
     max_turns: int = Field(default=60, ge=1, le=500)
     execution: Literal["orchestrator", "graph"] = "orchestrator"
     max_parallel: int = Field(default=4, ge=1, le=16)  # graph: agents running at the same time
+    retry: RetrySpec = Field(default_factory=RetrySpec)  # graph: temporary errors run again
     inputs: dict[str, IOType] = Field(default_factory=dict)  # typed flow inputs (run form)
     input: InputSpec = Field(default_factory=InputSpec)  # legacy: one text input = run id
     task: str = "Run the flow for {input}."

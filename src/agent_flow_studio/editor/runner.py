@@ -41,7 +41,7 @@ from ..builder.spec import LEGACY_INPUT, FlowSpec
 from ..builder.types import IOType, check_value
 from ..builder.types import compatible as types_compatible
 from ..config import settings
-from ..engine import GraphEngine, RouteFn
+from ..engine import GraphEngine, RouteFn, usage_tokens
 from ..hooks import DELEGATION_TOOLS
 from ..messages import msg as m_
 from ..messages import reason, to_json
@@ -51,7 +51,9 @@ from ..tools.guards import safe_artifact_path
 from ..trace import error_text, tool_detail
 from . import uploads
 
-Status = Literal["running", "gate", "paused", "done", "error", "stopped"]
+# "decided": decided at its gate while another run went; it goes on as soon as no run goes (a
+# lasting state: its `end` event keeps the decision, so a restart goes on with it)
+Status = Literal["running", "gate", "paused", "decided", "done", "error", "stopped"]
 Mode = Literal["full", "step", "until", "agent", "from"]
 STEP_HINT = ("\n\n(Step-by-step test mode: delegate to one agent at a time. After each agent, "
              "finish with a short summary and wait for the instruction to continue.)")
@@ -75,6 +77,9 @@ AUTH_ERROR = re.compile(
 def error_hint(message: str) -> str | None:
     """'auth' when a run or agent error is a sign-in problem of the Claude Code CLI."""
     return "auth" if AUTH_ERROR.search(message or "") else None
+HOLD_FOR = 15 * 60  # a decision being changed holds its run at most this long
+STALE_GATE = 24 * 3600  # a gate waiting longer no longer counts as "waits for you"
+GATE_SCAN = 30.0  # seconds the scan of saved gates is kept
 MAX_UPLOAD = 20 * 1024 * 1024  # files sent inside the request (larger ones: uploads.py)
 _FILE_NAME = re.compile(r"^[A-Za-z0-9 _.()-]{1,100}$")
 QueryFn = Callable[..., AsyncIterator[Any]]
@@ -97,6 +102,8 @@ class Run:
     target: str | None = None  # until/agent mode
     done_agents: set[str] = field(default_factory=set)
     tool_names: dict[str, str] = field(default_factory=dict)  # tool_use_id → tool (for errors)
+    after: tuple[dict[str, Any], Any, str, float] | None = None  # a decision waiting its turn
+    holding: float | None = None  # the person is changing that decision: it does not go on
     pending: dict[str, tuple[ApprovalRequest, asyncio.Future[tuple[bool, str]]]] = field(
         default_factory=dict)
     engine: GraphEngine | None = None  # graph mode: the engine state (continue/decide resume it)
@@ -113,6 +120,8 @@ class Run:
                "started": self.started, "events": len(self.events),
                "pending_approvals": list(self.pending), "mode": self.mode,
                "target": self.target, "done_agents": sorted(self.done_agents)}
+        if self.status == "decided" and self.holding:  # until when a change of decision holds it
+            out["held_until"] = self.holding + HOLD_FOR
         if self.engine is not None:
             out["execution"] = "graph"
             out["nodes"] = dict(self.engine.state)
@@ -262,6 +271,14 @@ class Runner:
         self.runs: dict[str, Run] = {}
         self._query = query_fn
         self._route = route_fn
+        # History: the summary of each run folder, by the time and size of its events file
+        self._summaries: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
+        # runs asked for while another one runs: they start, in order, when it stops
+        self.queued: list[dict[str, Any]] = []
+        self.queue_log: list[dict[str, Any]] = []  # queued runs that started or failed to start
+        self._restored = False  # the queue and the decided runs come back from disk once
+        # saved runs at a gate, per runs folder: (when scanned, items); dropped on any change
+        self._gates: dict[Path, tuple[float, list[dict[str, Any]]]] = {}
 
     # --- state
     def active(self) -> Run | None:
@@ -279,6 +296,8 @@ class Runner:
             if hint:
                 ev["hint"] = hint
         run.events.append(ev)
+        if ev.get("type") == "end":
+            self._gates.clear()  # the saved gates may have changed
         if ev.get("type") == "end" and ev.get("status") == "done" and run.mode != "agent":
             try:  # its outputs become previous.<agent>.<output> for the next run of the flow
                 io_tool.save_previous(run.flow, run.input)
@@ -363,6 +382,190 @@ class Runner:
         self._launch(run, prompt, None)
         return run
 
+    def _queue_file(self) -> Path:
+        return settings.runs_dir / ".queue.json"
+
+    def _save_queue(self) -> None:
+        """The queue on disk (`runs/.queue.json`), so a restart keeps it. An item whose files were
+        sent inside the request (not staged uploads) cannot be kept: it is saved without them and
+        reported as lost after a restart."""
+        items = []
+        for i in self.queued:
+            kw = i["_kw"]
+            inline = any(isinstance(v, dict) and "content_b64" in v or (
+                isinstance(v, list) and any(isinstance(x, dict) and "content_b64" in x for x in v))
+                for v in (kw.get("inputs") or {}).values())
+            items.append(self._public(i) | {"env": i["_env"], "kw": None if inline else kw})
+        try:
+            path = self._queue_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(items, ensure_ascii=False, default=str), encoding="utf-8")
+        except OSError:
+            pass  # the queue still works in memory
+
+    def _load_queue(self) -> None:
+        try:
+            items = json.loads(self._queue_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        known = {i["id"] for i in self.queued}
+        for it in items if isinstance(items, list) else []:
+            if it.get("id") in known:
+                continue  # already in memory (this studio queued it)
+            ws = workspaces.get_or_none(it.get("workspace") or workspaces.STUDIO)
+            if it.get("kw") is None or ws is None:
+                self.queue_log = [*self.queue_log, {k: it.get(k) for k in (
+                    "id", "flow", "name", "mode", "workspace")} | {
+                    "ts": time.time(), "error": "not kept after the restart (its files were sent "
+                    "with the request, or its workspace is gone): queue it again"}][-30:]
+                continue
+            self.queued.append({k: it.get(k) for k in ("id", "flow", "queued", "name", "mode",
+                                                        "workspace")}
+                               | {"_ws": ws, "_env": it.get("env"), "_kw": it["kw"]})
+
+    def tick(self) -> None:
+        """The queue's own clock (the server calls it every few seconds): once, after a start,
+        the queue and the decided runs come back from disk; then decided runs and queued runs go
+        on when nothing holds them (a gate that turned older than a day holds nothing)."""
+        if not self._restored:
+            self._restored = True
+            self._load_queue()
+            self._restore_decided()
+        if self.queued or any(r.status == "decided" for r in self.runs.values()):
+            self._start_queued()
+
+    def _restore_decided(self) -> None:
+        """Runs decided while another went, saved before a restart: back in memory, decided."""
+        spaces = [workspaces.STUDIO_WS] + [w for w in (workspaces.get_or_none(x.get("name"))
+                                                        for x in workspaces.list_all()) if w]
+        seen: set[str] = set()
+        for ws in spaces:
+            if ws.name in seen:
+                continue
+            seen.add(ws.name)
+            with workspaces.using(ws):
+                root = workspaces.scoped(settings.runs_dir)
+                for d in (root.iterdir() if root.is_dir() else []):
+                    if not d.is_dir() or d.name.startswith((".", "@")) or d.name == "chats":
+                        continue
+                    sm = self._run_summary(d)
+                    if sm and sm["status"] == "decided" and sm["run"] not in self.runs:
+                        try:
+                            self.open_past(d.name)
+                        except (RunError, FlowError, ValueError, OSError):
+                            pass  # the flow is gone or broken: it stays saved as it is
+
+    def holds(self) -> list[dict[str, Any]]:
+        """What keeps a queued run of the current workspace from starting: the run that goes (any
+        workspace: one run at a time), or the runs that wait for the person. The same rule as the
+        editor's count of what waits for you (`waiting()`, without gates older than a day or
+        dismissed): starting a run then would block the person's decision."""
+        live = self.active()
+        if live is not None:
+            return [{"kind": "running", "input": live.input, "flow": live.flow, "label": "",
+                     "workspace": live.workspace or workspaces.STUDIO}]
+        now = time.time()  # a change of decision holds any workspace, like the run that goes
+        changing = [{"kind": "changing", "input": r.input, "flow": r.flow, "label": "",
+                     "since": r.holding} for r in self.runs.values()
+                    if r.status == "decided" and r.holding and now - r.holding < HOLD_FOR]
+        return changing + [w for w in self.waiting() if not w.get("stale") and not w.get("dismissed")]
+
+    def _holds_for(self, item: dict[str, Any]) -> list[dict[str, Any]]:
+        with workspaces.using(item["_ws"], item["_env"]):
+            return self.holds()
+
+    def enqueue(self, flow: str, **kw: Any) -> dict[str, Any]:
+        """A run to start when no run goes and none waits for the person (only one runs at a
+        time). The flow is checked now; inputs when it starts (an error shows in the queue)."""
+        if not self.holds():
+            raise RunError(409, "nothing is running or waiting: start the run now")
+        load_flow(flow, base=self.flows_base())
+        ws, env = workspaces.current(), workspaces.current_env()
+        item = {"id": uuid.uuid4().hex[:10], "flow": flow, "queued": time.time(),
+                "name": str(kw.get("run_id") or kw.get("run_input") or ""),
+                "mode": kw.get("mode") or "full", "workspace": ws.name, "_ws": ws, "_env": env,
+                "_kw": kw}
+        self.queued.append(item)
+        self._save_queue()
+        return self._public(item)
+
+    @staticmethod
+    def _public(item: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in item.items() if not k.startswith("_")}
+
+    def queue(self) -> dict[str, Any]:
+        """The queue of this workspace: waiting runs (their place and what holds them) and the
+        last outcomes. The queue lives in memory: a restart of the studio clears it."""
+        here = workspaces.current().name
+        mine = [i for i in self.queued if i["workspace"] == here]
+        held = self.holds() if mine else []
+        return {"queued": [self._public(i) | {"place": n + 1, "held_by": held}
+                           for n, i in enumerate(mine)],
+                "log": [i for i in self.queue_log if i["workspace"] == here][-10:]}
+
+    def start_queued_now(self, item_id: str) -> Run:
+        """A queued run starts now, even while other runs wait for the person (a decision made
+        meanwhile is kept and its run goes on when this one ends); never while another run goes."""
+        item = next((i for i in self.queued if i["id"] == item_id), None)
+        if item is None:
+            raise RunError(404, "that run is not in the queue")
+        if self.active():
+            raise RunError(409, "a run is in progress: only one runs at a time")
+        self.queued.remove(item)
+        self._save_queue()
+        kw = dict(item["_kw"])
+        with workspaces.using(item["_ws"], item["_env"]):
+            run = self.start(item["flow"], kw.pop("run_input", None), **kw)
+        self._emit(run, {"type": "from_queue", "queued": item["queued"], "anyway": True})
+        self.queue_log = [*self.queue_log, self._public(item) | {
+            "ts": time.time(), "started": run.id, "input": run.input}][-30:]
+        return run
+
+    def unqueue(self, item_id: str) -> None:
+        before = len(self.queued)
+        self.queued = [i for i in self.queued if i["id"] != item_id]
+        if len(self.queued) == before:
+            raise RunError(404, "that run is not in the queue")
+        self._save_queue()
+
+    def _start_queued(self) -> None:
+        """When nothing runs: first a run decided at its gate while another went (the person's
+        decision never waits behind the queue), then the next queued run that nothing waiting
+        for the person holds (called when a run's task ends, a waiting run is stopped or
+        dismissed, and on each look at what waits)."""
+        now = time.time()
+        waiting_turn = sorted((r for r in self.runs.values() if r.status == "decided" and r.after
+                               and not (r.holding and now - r.holding < HOLD_FOR)),
+                              key=lambda r: r.after[3])  # type: ignore[index]  # in decision order
+        decided = waiting_turn[0] if waiting_turn else None
+        if decided is not None and not self.active():
+            gate, decision, comment, _ = decided.after  # type: ignore[misc]
+            decided.after = None
+            try:
+                with self._in(decided):
+                    self._continue_gate(decided, gate, decision, comment)
+                return
+            except Exception as e:  # noqa: BLE001 — whatever failed, it ends; the queue goes on
+                decided.status = "error"
+                self._emit(decided, {"type": "end", "status": "error", "message":
+                                     f"could not go on after the decision: {e}"[:500]})
+        while self.queued:
+            item = next((i for i in self.queued if not self._holds_for(i)), None)
+            if item is None:
+                return
+            self.queued.remove(item)
+            self._save_queue()
+            out = self._public(item) | {"ts": time.time()}
+            try:
+                with workspaces.using(item["_ws"], item["_env"]):
+                    kw = dict(item["_kw"])
+                    run = self.start(item["flow"], kw.pop("run_input", None), **kw)
+                self._emit(run, {"type": "from_queue", "queued": item["queued"]})
+                out["started"], out["input"] = run.id, run.input
+            except (RunError, FlowError, ValueError, OSError) as e:
+                out["error"] = str(e)[:300]
+            self.queue_log = [*self.queue_log, out][-30:]
+
     @staticmethod
     def first_prompt(compiled: CompiledFlow, run_id: str, values: dict[str, Any], mode: Mode,
                      instruction: str) -> str:
@@ -425,9 +628,27 @@ class Runner:
         self._spawn(run, self._drive_graph(run))
         return run
 
-    def rename(self, run_input: str, title: str) -> str:
-        """A name for a saved run (the folder and id stay): shown in the list of past runs."""
-        title = " ".join(title.split())[:80]
+    def from_plan(self, run_input: str, node: str | None = None) -> dict[str, Any]:
+        """What "run from step" on a saved run would do: the state of each step in that run and,
+        for `node`, the steps it keeps (`reuse`), runs again (`redo`) and the earlier ones that
+        never ran there (`unreached`: their outputs are missing). Nothing runs."""
+        try:
+            run = self.open_past(run_input, register=False)  # a look only: nothing is kept
+        except ValueError as e:
+            raise RunError(400, str(e)) from e
+        if run.engine is None:
+            raise RunError(409, "only graph runs can start from a step")
+        engine = self._fresh_engine(run)
+        out: dict[str, Any] = {"status": run.status, "states": dict(engine.state)}
+        if node:
+            if node not in engine.state:
+                raise RunError(400, f"{node!r} is not a step of the flow")
+            plan = engine.resume_plan(_recorded_fingerprints(run.events), True, start_at=node)
+            out |= {k: plan[k] for k in ("reuse", "redo", "unreached", "gates")}
+        return out
+
+    def _set_meta(self, run_input: str, key: str, value: Any) -> None:
+        """One field of a saved run's run_meta.json (None removes it)."""
         path = safe_artifact_path(settings.runs_dir, run_input, "run_meta.json")
         if not _last_run_events(path.parent / "events.jsonl"):
             raise RunError(404, "no saved run in this folder")
@@ -437,20 +658,62 @@ class Runner:
                 meta = json.loads(path.read_text(encoding="utf-8"))
             except ValueError:
                 meta = {}
-        if title:
-            meta["title"] = title
+        if value is None:
+            meta.pop(key, None)
         else:
-            meta.pop("title", None)
+            meta[key] = value
         path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        self._gates.clear()
+
+    def rename(self, run_input: str, title: str) -> str:
+        """A name for a saved run (the folder and id stay): shown in the list of past runs."""
+        title = " ".join(title.split())[:80]
+        self._set_meta(run_input, "title", title or None)
         return title
 
-    @staticmethod
-    def _title_of(folder: Path) -> str:
+    def dismiss(self, run_input: str, dismissed: bool) -> None:
+        """A run waiting at a gate leaves (or goes back to) the "waits for you" count, badge and
+        notifications; it still waits and can be decided at any time."""
+        self._set_meta(run_input, "dismissed", time.time() if dismissed else None)
+        self._start_queued()  # a dismissed gate no longer holds the queue
+
+    def delete_run(self, run_input: str) -> str:
+        """Moves a saved run folder to `runs/.trash/` (of its workspace); never one that runs.
+        Returns the name it got in the trash."""
+        path = safe_artifact_path(settings.runs_dir, run_input, "events.jsonl").parent
+        if not path.is_dir():
+            raise RunError(404, "no saved run in this folder")
+        events = _last_run_events(path / "events.jsonl")
+        rid = (events[0].get("run") if events else None)
+        live = next((r for r in self.runs.values() if r.id == rid), None)
+        if live is not None and live.status == "running":
+            raise RunError(409, "the run is still running: stop it first")
+        trash = workspaces.scoped(settings.runs_dir) / ".trash"
+        trash.mkdir(parents=True, exist_ok=True)
+        meta_path = path / "run_meta.json"  # when it was deleted (the folder keeps its own time)
         try:
-            return str(json.loads((folder / "run_meta.json").read_text(encoding="utf-8"))
-                       .get("title") or "")
-        except (OSError, ValueError, AttributeError):
-            return ""
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+        except ValueError:
+            meta = {}
+        meta["deleted"] = time.time()
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        name = f"{path.name}-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.move(str(path), str(trash / name))
+        if live is not None:
+            self.runs.pop(live.id, None)
+        return name
+
+    @staticmethod
+    def _meta_of(folder: Path) -> dict[str, Any]:
+        try:
+            meta = json.loads((folder / "run_meta.json").read_text(encoding="utf-8"))
+            return meta if isinstance(meta, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    @classmethod
+    def _title_of(cls, folder: Path) -> str:
+        return str(cls._meta_of(folder).get("title") or "")
 
     def _resumable(self, run_id: str) -> Run:
         run = self.get(run_id)
@@ -498,22 +761,43 @@ class Runner:
 
     def decide(self, run_id: str, decision: Decision, comment: str) -> Run:
         run = self.get(run_id)
-        if run.status != "gate" or not run.gate:
-            raise RunError(409, "the run is not stopped at a gate")
+        changed = run.status == "decided" and run.after is not None
+        if changed:  # a change of mind before it goes on: the gate is decided again
+            run.gate = run.after[0]  # type: ignore[index]
+            run.holding = None
+        elif run.status != "gate" or not run.gate:
+            raise RunError(409, "the run already went on with its decision: open it to see "
+                                "what it did" if run.status in ("running", "done") else
+                           "the run is not stopped at a gate")
         if run.gate["kind"] != "human":
             raise RunError(409, "a stop gate cannot be approved; fix the cause and run again")
-        if self.active():
-            raise RunError(409, "a run is already in progress")
         gate = run.gate
+        reached = next((e.get("ts") for e in reversed(run.events)
+                        if e.get("type") == "gate" and e.get("gate") == gate["gate"]), None)
+        waited = round(time.time() - reached, 1) if reached else None
         record = {"ts": time.time(), "run": run.id, "session_id": run.session_id,
-                  "gate": gate["gate"], "decision": decision, "comment": comment}
+                  "gate": gate["gate"], "decision": decision, "comment": comment,
+                  "waited": waited, "via": "editor", **({"supersedes": True} if changed else {})}
         path = safe_artifact_path(settings.runs_dir, run.input, "decisions.jsonl")
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._emit(run, {"type": "decision", "gate": gate["gate"], "decision": decision,
-                         "comment": comment})
+                         "comment": comment, "waited": waited})
         io_tool.record_gate(run.input, gate["gate"], decision, comment)  # for `if` conditions
+        live = self.active()
+        if live is not None:  # never refused: the decision is kept, the run goes on next
+            run.status, run.after = "decided", (gate, decision, comment, time.time())
+            self._emit(run, {"type": "turn", "after": live.input})
+            self._emit(run, {"type": "end", "status": "decided", "gate": gate,
+                             "decision": decision, "comment": comment})
+            return run
+        return self._continue_gate(run, gate, decision, comment)
+
+    def _continue_gate(self, run: Run, gate: dict[str, Any], decision: Decision,
+                       comment: str) -> Run:
+        """After a human decision: the run goes on from its gate."""
+        run.after = None
         if run.engine is not None:  # graph mode: the engine follows the gate's edges
             run.status, run.gate = "running", None
             self._spawn(run, self._drive_graph(run, gate=gate["gate"]))
@@ -579,39 +863,264 @@ class Runner:
             raise RunError(404, f"the run {run_input!r} has no output {agent}.{name}")
         return values[name]
 
-    def past_runs(self, flow: str, limit: int = 30) -> list[dict[str, Any]]:
+    def _run_summary(self, d: Path) -> dict[str, Any] | None:
+        """What History shows of a run folder, cached by the size and time of its events file."""
+        f = d / "events.jsonl"
+        try:
+            st = f.stat()
+        except OSError:
+            return None
+        key = (st.st_mtime_ns, st.st_size)
+        hit = self._summaries.get(f)
+        if hit and hit[0] == key:
+            return hit[1]
+        every = _read_events(f)
+        events = _last_run(every)
+        if not events:
+            return None
+        start = events[0]
+        last_end = max((i for i, e in enumerate(events) if e.get("type") == "end"), default=-1)
+        last_go = max((i for i, e in enumerate(events)
+                       if e.get("type") in ("delegate", "resume", "continue", "decision")),
+                      default=-1)
+        end = events[last_end] if last_end >= 0 else None
+        # no end after the last thing it did: the studio stopped while it ran (crash, restart)
+        status = str(end.get("status")) if end and last_end > last_go else "lost"
+        gate = (end or {}).get("gate") or {}
+        failed = next((str(e.get("agent")) for e in reversed(events)
+                       if e.get("type") == "agent_done" and e.get("error")), None)
+        # the first run plus each resume / "run from step" / earlier run in the same folder
+        attempts = sum(1 for e in every if e.get("type") in ("start", "resume"))
+        out = {
+            "input": d.name, "run": start.get("run"), "flow": start.get("flow"),
+            "workspace": start.get("workspace") or workspaces.STUDIO,
+            "started": start.get("ts"), "ended": (end or {}).get("ts") if status != "lost" else None,
+            "mode": start.get("mode"), "target": start.get("target"),
+            "execution": start.get("execution"), "status": status, "gate": gate.get("label"),
+            "failed": failed if status == "error" else None,
+            "message": str((end or {}).get("message") or "")[:300] or None,
+            "cost": round(sum(float(e.get("cost") or 0) for e in every  # all attempts
+                              if e.get("type") == "result"), 4),
+            "attempts": max(1, attempts),
+        }
+        if status == "gate":  # since when it waits
+            out["since"] = (end or {}).get("ts")
+        if status == "decided":
+            out["decision"] = (end or {}).get("decision")
+        fq = next((e for e in events if e.get("type") == "from_queue"), None)
+        if fq:
+            out["from_queue"] = fq.get("queued")
+        out["waited"] = round(_waited(events, None if status == "gate" else (end or {}).get("ts")), 1)
+        self._summaries[f] = (key, out)
+        return out
+
+    def past_runs(self, flow: str, limit: int = 30, offset: int = 0) -> list[dict[str, Any]]:
         """The runs of a flow saved in runs/ (the last run in each folder), newest first."""
+        return self.past_page(flow, limit, offset)[0]
+
+    def past_stats(self, flow: str, days: int | None = None) -> dict[str, Any]:
+        """Totals of the saved runs of a flow: how many, how many failed, the median time of the
+        finished ones and what they cost. With `days`: only the runs started in that many last
+        days, and `prev`, the same totals for the period just before (to see a trend)."""
+        every = self._all_past(flow)
+        if not days:
+            return _totals(every)
+        now, span = time.time(), days * 86400
+        out = _totals([r for r in every if (r.get("started") or 0) >= now - span])
+        out["prev"] = _totals([r for r in every if now - 2 * span <= (r.get("started") or 0) < now - span])
+        out["days"] = days
+        return out
+
+    def past_page(self, flow: str, limit: int = 30, offset: int = 0, q: str = "",
+                  status: str = "") -> tuple[list[dict[str, Any]], int]:
+        """One page of the saved runs of a flow, newest first, and how many match. `q`: words to
+        find in the name, id, failed step, gate or message; `status`: only runs in that state."""
+        out = self._all_past(flow)
+        if status:
+            out = [r for r in out if r["status"] == status]
+        for word in q.lower().split():
+            out = [r for r in out if word in " ".join(str(r.get(k) or "") for k in (
+                "title", "input", "failed", "gate", "message", "mode", "target")).lower()]
+        return out[offset:offset + limit], len(out)
+
+    def waiting(self) -> list[dict[str, Any]]:
+        """The runs of this workspace (any flow) that wait for the person now: at a human gate,
+        paused between steps, or with a write to approve. Each has `since`; a gate waiting for
+        more than STALE_GATE seconds is `stale`, and the person may have `dismissed` it: the
+        editor leaves both out of its count, badge and notifications (they still wait)."""
+        here = workspaces.current().name
+        now = time.time()
+        out: list[dict[str, Any]] = []
+        for r in self.runs.values():
+            if (r.workspace or workspaces.STUDIO) != here:
+                continue
+            item: dict[str, Any] = {"id": r.id, "input": r.input, "flow": r.flow, "title": ""}
+            try:
+                meta = self._meta_of(safe_artifact_path(settings.runs_dir, r.input, "x").parent)
+                item["title"] = str(meta.get("title") or "")
+                item["dismissed"] = bool(meta.get("dismissed"))
+            except ValueError:
+                pass
+            since = next((e.get("ts") for e in reversed(r.events)
+                          if e.get("type") in ("gate", "end", "agent_done", "approval")), None)
+            item["since"] = since
+            if r.status == "gate" and r.gate and r.gate.get("kind") == "human":
+                out.append(item | {"kind": "gate",
+                                   "label": r.gate.get("label") or r.gate.get("gate")})
+            elif r.status == "paused":
+                out.append(item | {"kind": "paused", "label": r.target or ""})
+            for info, fut in list(r.pending.values()):
+                if not fut.done():
+                    out.append(item | {"kind": "approval", "dismissed": False,
+                                       "label": str(getattr(info, "summary", ""))[:120]})
+        known = {r.id for r in self.runs.values()}
+        out += [g for g in self._saved_gates(here) if g["run"] not in known]
+        for x in out:
+            x.pop("run", None)
+            x.pop("workspace", None)
+            x["stale"] = x["kind"] == "gate" and bool(x.get("since")) and \
+                now - float(x["since"]) > STALE_GATE
+        return out
+
+    def _saved_gates(self, here: str) -> list[dict[str, Any]]:
+        """Saved runs at a human gate (after a restart they are no longer in memory). The scan is
+        kept for GATE_SCAN seconds, and dropped when a run ends or a run's meta changes."""
+        root = workspaces.scoped(settings.runs_dir)
+        hit = self._gates.get(root)
+        if hit and time.time() - hit[0] < GATE_SCAN:
+            return [dict(g) for g in hit[1] if g["workspace"] == here]
+        items: list[dict[str, Any]] = []
+        for d in (root.iterdir() if root.is_dir() else []):
+            if not d.is_dir() or d.name.startswith((".", "@")) or d.name == "chats":
+                continue
+            s = self._run_summary(d)
+            if s and s["status"] == "gate":
+                meta = self._meta_of(d)
+                items.append({"id": None, "run": s["run"], "input": d.name, "flow": s["flow"],
+                              "title": str(meta.get("title") or ""), "kind": "gate",
+                              "label": s.get("gate") or "", "since": s.get("since"),
+                              "dismissed": bool(meta.get("dismissed")),
+                              "workspace": s["workspace"]})
+        self._gates[root] = (time.time(), items)
+        return [dict(g) for g in items if g["workspace"] == here]
+
+    def tool_call(self, run_id: str, tool_id: str) -> dict[str, Any]:
+        """One tool call of a run, read on demand from the agent's Claude Code session on this
+        machine (the run's events never keep arguments or results): its arguments and the start
+        of its result, with secret-like text masked. Nothing is stored."""
+        from claude_agent_sdk import get_session_messages
+
+        from .. import claude_sessions
+        run = self.get(run_id)
+        call = next((e for e in run.events if e.get("type") == "tool" and e.get("id") == tool_id), None)
+        if call is None:
+            raise RunError(404, "no tool call with this id in the run")
+        agent = call.get("agent")
+        sessions = [call["session"]] if call.get("session") else []
+        sessions += [str(e["session_id"]) for e in run.events if e.get("type") == "result"
+                     and e.get("agent") == agent and e.get("session_id")]
+        for sid in dict.fromkeys(sessions):
+            try:
+                messages = get_session_messages(sid)
+            except (OSError, ValueError):
+                continue
+            args = result = None
+            is_error = False
+            for m in messages:
+                content = (m.message or {}).get("content") if isinstance(m.message, dict) else None
+                for b in content if isinstance(content, list) else []:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use" and b.get("id") == tool_id:
+                        args = b.get("input")
+                    elif b.get("type") == "tool_result" and b.get("tool_use_id") == tool_id:
+                        is_error = bool(b.get("is_error"))
+                        c = b.get("content")
+                        result = c if isinstance(c, str) else "\n".join(
+                            str(x.get("text") or "") for x in (c or []) if isinstance(x, dict))
+            if args is not None or result is not None:
+                text = json.dumps(args, ensure_ascii=False, indent=1, default=str) if args is not None else ""
+                res = claude_sessions.mask(result or "")
+                return {"tool": call.get("tool"), "agent": agent, "session": sid,
+                        "input": claude_sessions.mask(text)[:20_000],
+                        "result": res[:20_000], "result_size": len(result or ""),
+                        "cut": len(res) > 20_000, "is_error": is_error}
+        raise RunError(404, "the session of this call is not on this machine any more")
+
+    def _all_past(self, flow: str) -> list[dict[str, Any]]:
+        """Every saved run of a flow in this workspace, newest first."""
         out = []
         root = workspaces.scoped(settings.runs_dir)  # the runs of this workspace
         if not root.is_dir():
             return []
+        here = workspaces.current().name
         for d in root.iterdir():
             if not d.is_dir() or d.name.startswith((".", "@")) or d.name == "chats":
                 continue
-            events = _last_run_events(d / "events.jsonl")
-            if not events or events[0].get("flow") != flow:
+            s = self._run_summary(d)
+            if s is None or s["flow"] != flow or s["workspace"] != here:
                 continue
-            if (events[0].get("workspace") or workspaces.STUDIO) != workspaces.current().name:
-                continue
-            start = events[0]
-            end = next((e for e in reversed(events) if e.get("type") == "end"), None)
-            gate = (end or {}).get("gate") or {}
-            out.append({
-                "input": d.name, "run": start.get("run"), "started": start.get("ts"),
-                "mode": start.get("mode"), "execution": start.get("execution"),
-                "status": (end or {}).get("status", "stopped"), "gate": gate.get("label"),
-                "cost": round(sum(float(e.get("cost") or 0) for e in events
-                                  if e.get("type") == "result"), 4),
-                "open": any(r.id == start.get("run") for r in self.runs.values()),
-                "title": self._title_of(d),
-            })
+            live = next((r for r in self.runs.values() if r.id == s["run"]), None)
+            item = {**s, "open": live is not None, "title": self._title_of(d)}
+            if live is not None and live.status == "running":
+                item |= {"status": "running", "ended": None}
+            out.append(item)
         out.sort(key=lambda x: -(x["started"] or 0))
-        return out[:limit]
+        return out
 
-    def open_past(self, run_input: str) -> Run:
+    def trash(self, flow: str | None = None) -> list[dict[str, Any]]:
+        """The deleted runs of this workspace (runs/.trash), of one flow if given, newest first."""
+        d = workspaces.scoped(settings.runs_dir) / ".trash"
+        if not d.is_dir():
+            return []
+        out = []
+        for t in d.iterdir():
+            events = _last_run_events(t / "events.jsonl") if t.is_dir() else []
+            if not events or (flow and events[0].get("flow") != flow):
+                continue
+            try:
+                meta = json.loads((t / "run_meta.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                meta = {}
+            out.append({"name": t.name, "input": t.name.rsplit("-", 2)[0],
+                        "title": meta.get("title") or "", "flow": events[0].get("flow"),
+                        "started": events[0].get("ts"),
+                        "deleted": meta.get("deleted") or t.stat().st_mtime})
+        return sorted(out, key=lambda x: -x["deleted"])
+
+    def restore_run(self, name: str) -> str:
+        """Brings a deleted run back from the trash (under its old id, or a free one)."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", name):
+            raise RunError(400, "not a run in the trash")
+        root = workspaces.scoped(settings.runs_dir)
+        src = root / ".trash" / name
+        if not src.is_dir():
+            raise RunError(404, "not a run in the trash")
+        base = name.rsplit("-", 2)[0]
+        target, n = base, 1
+        while (root / target).exists():
+            n += 1
+            target = f"{base}-{n}"
+        shutil.move(str(src), str(root / target))
+        return target
+
+    def empty_trash(self, flow: str | None = None) -> tuple[int, list[str]]:
+        """Deletes the runs in the trash (of one flow if given) for good. Returns how many were
+        deleted and the ones that could not be (a file in use…)."""
+        d = workspaces.scoped(settings.runs_dir) / ".trash"
+        done, failed = 0, []
+        for item in self.trash(flow):
+            try:
+                shutil.rmtree(d / item["name"])
+                done += 1
+            except OSError:
+                failed.append(item["name"])
+        return done, failed
+
+    def open_past(self, run_input: str, register: bool = True) -> Run:
         """A saved run again, as it ended (done, at a gate, stopped…): its log, its outputs and the
         session of each agent, so the person can look at it, ask for more or answer its gate. The
-        agents use the flow as it is now."""
+        agents use the flow as it is now. `register=False`: only to look at it (it is not kept)."""
         path = safe_artifact_path(settings.runs_dir, run_input, "events.jsonl")
         events = _last_run_events(path)
         if not events:
@@ -636,6 +1145,9 @@ class Runner:
         run.status = (end or {}).get("status") or "stopped"
         if run.status == "running":
             run.status = "stopped"  # the editor stopped while it ran
+        decided = run.status == "decided"
+        if decided:  # its decision is kept: it goes on when no run goes
+            run.status = "gate"  # restored at its gate, then decided again below
         run.gate = (end or {}).get("gate") if run.status == "gate" else None
         if run.status == "done" and (end or {}).get("gate"):
             run.gate = end["gate"]  # a stop with its message
@@ -654,7 +1166,16 @@ class Runner:
         else:
             orch = [e for e in results if not e.get("agent")]
             run.session_id = orch[-1]["session_id"] if orch else None
-        self.runs[run.id] = run
+        if decided and end and run.gate:
+            run.status = "decided"
+            run.after = (run.gate, end.get("decision") or "approve", str(end.get("comment") or ""),
+                         float(end.get("ts") or time.time()))
+            last_end = max(i for i, e in enumerate(events) if e.get("type") == "end")
+            hold = next((e for e in reversed(events[last_end:]) if e.get("type") == "hold"), None)
+            if hold and hold.get("on"):  # a change of decision was going on: still held
+                run.holding = float(hold.get("ts") or time.time())
+        if register:
+            self.runs[run.id] = run
         return run
 
     def askable(self, run_id: str) -> list[str]:
@@ -1056,6 +1577,7 @@ class Runner:
         with self._in(run):  # the task works in the run's workspace, whatever the request
             run.task = asyncio.create_task(coro)
         run.task.add_done_callback(finished)
+        run.task.add_done_callback(lambda _t: self._start_queued())
 
     def _log_decision(self, run: Run, record: dict[str, Any]) -> None:
         path = safe_artifact_path(settings.runs_dir, run.input, "decisions.jsonl")
@@ -1093,6 +1615,28 @@ class Runner:
             fut.set_result((ok, comment))
         return run
 
+    def hold(self, run_id: str, on: bool) -> Run:
+        """The person changes the decision of a decided run: it does not go on meanwhile (for at
+        most HOLD_FOR seconds); `on=False` keeps the recorded decision and lets it go on."""
+        run = self.get(run_id)
+        if run.status != "decided" or not run.after:
+            raise RunError(409, "the run already went on with its decision: open it to see "
+                                "what it did" if run.status in ("running", "done") else
+                           "the run has no decision waiting for its turn")
+        run.holding = time.time() if on else None
+        self._emit(run, {"type": "hold", "on": on})
+        if not on:
+            self._start_queued()
+        return run
+
+    def retry(self, run_id: str, node: str | None, action: Literal["now", "cancel"]) -> Run:
+        """A step waits to run again after a temporary error: run it now, or cancel the retry."""
+        run = self.get(run_id)
+        if run.engine is None or run.status != "running" or not run.engine.retry_control(
+                node, action):
+            raise RunError(409, "no step of this run waits to run again")
+        return run
+
     def stop(self, run_id: str) -> Run:
         run = self.get(run_id)
         for _, fut in list(run.pending.values()):
@@ -1100,9 +1644,11 @@ class Runner:
                 fut.cancel()
         if run.task and not run.task.done():
             run.task.cancel()
-        elif run.status in ("paused", "gate"):  # no task running: close the run
+        elif run.status in ("paused", "gate", "decided"):  # no task running: close the run
+            run.after = None
             run.status = "stopped"
             self._emit(run, {"type": "end", "status": "stopped"})
+            self._start_queued()
         return run
 
     # --- execution
@@ -1231,6 +1777,9 @@ class Runner:
                                   "cost": msg.total_cost_usd, "turns": msg.num_turns,
                                   "is_error": msg.is_error, "subtype": msg.subtype,
                                   "denials": len(msg.permission_denials or [])}
+            tokens = usage_tokens(getattr(msg, "usage", None))
+            if tokens:
+                ev["tokens"] = tokens
             if msg.is_error:  # the reason, so that a sign-in problem can be explained
                 ev["message"] = ("; ".join(msg.errors or []) or msg.result or "")[:500]
             self._emit(run, ev)
@@ -1251,9 +1800,8 @@ class Runner:
             await asyncio.sleep(0.25)
 
 
-def _last_run_events(path: Path) -> list[dict[str, Any]]:
-    """The events of the last run written in an events.jsonl (a folder can hold several runs
-    with the same run id); [] when there is none."""
+def _read_events(path: Path) -> list[dict[str, Any]]:
+    """Every event written in an events.jsonl (bad lines are skipped)."""
     if not path.is_file():
         return []
     events = []
@@ -1264,6 +1812,16 @@ def _last_run_events(path: Path) -> list[dict[str, Any]]:
             continue
         if isinstance(e, dict):
             events.append(e)
+    return events
+
+
+def _last_run_events(path: Path) -> list[dict[str, Any]]:
+    """The events of the last run written in an events.jsonl (a folder can hold several runs
+    with the same run id); [] when there is none."""
+    return _last_run(_read_events(path))
+
+
+def _last_run(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     starts = [i for i, e in enumerate(events) if e.get("type") == "start"]
     if not starts:
         return []
@@ -1283,6 +1841,30 @@ def _recorded_fingerprints(events: list[dict[str, Any]]) -> dict[str, str]:
     return out
 
 
+def _waited(events: list[dict[str, Any]], until: float | None) -> float:
+    """Seconds a run waited for the person at human gates (a gate still open counts until
+    `until`, or not at all when None)."""
+    total, open_at = 0.0, {}
+    for e in events:
+        if e.get("type") == "gate" and e.get("kind") == "human" and e.get("ts"):
+            open_at[e.get("gate")] = float(e["ts"])
+        elif e.get("type") == "decision" and e.get("gate") in open_at and e.get("ts"):
+            total += float(e["ts"]) - open_at.pop(e.get("gate"))
+    if until is not None:
+        total += sum(max(0.0, until - t) for t in open_at.values())
+    return total
+
+
+def _totals(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    took = sorted(r["ended"] - r["started"] for r in runs
+                  if r["status"] == "done" and r.get("ended") and r.get("started"))
+    return {"runs": len(runs),
+            "failed": sum(1 for r in runs if r["status"] == "error"),
+            "lost": sum(1 for r in runs if r["status"] == "lost"),
+            "median": took[len(took) // 2] if took else None,
+            "cost": round(sum(r["cost"] for r in runs), 4)}
+
+
 def _restore_engine(engine: GraphEngine, events: list[dict[str, Any]], run: Run) -> None:
     """The state of a graph run again, from its events: done/skipped/failed nodes, the decided
     edges, the gate it waits at, the agents' sessions (for "ask for more")."""
@@ -1291,7 +1873,9 @@ def _restore_engine(engine: GraphEngine, events: list[dict[str, Any]], run: Run)
     for e in events:
         t, node = e.get("type"), e.get("agent") or e.get("node") or e.get("gate")
         if t == "delegate" and node in engine.runs:
-            engine.runs[node] += 1
+            engine.runs[node] += 0 if e.get("retry") else 1
+            if e.get("task") != "follow-up":  # started: interrupted unless it ends below
+                engine.state[node] = "running"
         elif t == "agent_done" and node in engine.state:
             engine.state[node] = "failed" if e.get("error") else "done"
         elif t in ("skipped", "decided") and node in engine.state:

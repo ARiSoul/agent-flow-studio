@@ -1,0 +1,81 @@
+{
+  "note": "The states of a run, written once. tests/test_run_history.py checks the runner's Status type; editor/tests/round10.test.ts checks the editor has a text for each in every language. waits: counted as 'waits for you' (unless older than a day or dismissed). holds: keeps a queued run from starting.",
+  "states": {
+    "running": {
+      "means": "a session goes",
+      "waits": false,
+      "holds": true,
+      "next": [
+        "gate",
+        "paused",
+        "done",
+        "error",
+        "stopped"
+      ]
+    },
+    "gate": {
+      "means": "stopped at a human gate (or a stop gate's end)",
+      "waits": true,
+      "holds": true,
+      "next": [
+        "running",
+        "decided",
+        "stopped"
+      ]
+    },
+    "paused": {
+      "means": "a step-by-step test between two steps",
+      "waits": true,
+      "holds": true,
+      "next": [
+        "running",
+        "stopped"
+      ]
+    },
+    "decided": {
+      "means": "decided at its gate while another run went; goes on next, kept on disk",
+      "waits": false,
+      "holds": false,
+      "next": [
+        "running",
+        "decided",
+        "error",
+        "stopped"
+      ]
+    },
+    "done": {
+      "means": "finished",
+      "waits": false,
+      "holds": false,
+      "next": [
+        "running"
+      ]
+    },
+    "error": {
+      "means": "a step failed (Resume goes on)",
+      "waits": false,
+      "holds": false,
+      "next": [
+        "running"
+      ]
+    },
+    "stopped": {
+      "means": "stopped by the person",
+      "waits": false,
+      "holds": false,
+      "next": [
+        "running"
+      ]
+    }
+  },
+  "flags": {
+    "held": {
+      "of": "decided",
+      "means": "the person is changing the recorded decision",
+      "waits": false,
+      "holds": true,
+      "minutes": 15,
+      "survives_restart": true
+    }
+  }
+}

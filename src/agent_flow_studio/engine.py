@@ -27,6 +27,7 @@ orchestrator.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -46,7 +47,9 @@ from claude_agent_sdk import (
     query,
 )
 
+from . import pricing
 from .builder import expr
+from .builder.catalog import WRITE_TOOLS
 from .builder.compile import (
     DISALLOWED,
     CompiledGraph,
@@ -169,6 +172,42 @@ def make_llm_router(query_fn: QueryFn = query, model: str = ROUTER_MODEL) -> Rou
 
 
 # --- engine ------------------------------------------------------------------------------------
+def usage_tokens(usage: Any) -> dict[str, int]:
+    """Tokens of a session from the SDK's usage: in, out, cache read, cache write (non-zero)."""
+    if not isinstance(usage, dict):
+        return {}
+    keys = {"in": "input_tokens", "out": "output_tokens", "cache_read": "cache_read_input_tokens",
+            "cache_write": "cache_creation_input_tokens"}
+    out = {}
+    for k, src in keys.items():
+        v = usage.get(src)
+        if isinstance(v, (int, float)) and v > 0:
+            out[k] = int(v)
+    return out
+
+
+# A temporary failure of the model API (busy, rate limit, 5xx, network), in the forms the SDK and
+# the API give them: it usually goes away by itself, so a graph step that ends with one runs again
+# (FlowSpec.retry). A bare number ("HTTP 500 from a connector", "line 504"), a connector's own
+# connection error or a tool's timeout is not one. Same test as TRANSIENT in editor/src/runSteps.ts.
+_TRANSIENT = re.compile(r"api error:?\s*\(?(429|5\d\d)\b|api error:?\s*(overloaded|connection)"
+                        r"|overloaded_error|rate_limit_error|\boverloaded \(529\)",
+                        re.IGNORECASE)
+
+
+def is_transient(text: str) -> bool:
+    return bool(_TRANSIENT.search(text or ""))
+
+
+def _result_size(content: Any) -> int:
+    """The size in characters of a tool result (text blocks), without keeping it."""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(len(str(b.get("text") or "")) for b in content if isinstance(b, dict))
+    return 0
+
+
 def _short_tool(name: str) -> str:
     return name.split("__")[-1] if name.startswith("mcp__") else name
 
@@ -198,6 +237,7 @@ class _Result:
     ok: bool
     message: str = ""
     evals: list[tuple[int, bool, str, str | None]] | None = None  # (edge, fired, by, error)
+    transient: bool = False  # a temporary API error: worth running again
 
 
 def _audit_action(agent: str, connector: str, action: str, params: list[str]) -> None:
@@ -239,6 +279,7 @@ class GraphEngine:
         self.tasks: dict[asyncio.Task[_Result], str] = {}
         self.pending_gates: list[dict[str, Any]] = []
         self.stop_gate: dict[str, Any] | None = None
+        self.unapplied: list[str] = []  # finished nodes whose links a stop left undecided
         self.failure: str | None = None
         self.sessions: dict[str, str] = {}
         self.summaries: dict[str, str] = {}
@@ -247,6 +288,8 @@ class GraphEngine:
         self.until_set = self._leads_to(target) if mode == "until" and target else set()
         self.started = False
         self.nested = nested  # a subflow: its flow is registered by run id, not made active
+        self.retry_waits: dict[str, tuple[asyncio.Event, list[str]]] = {}  # node: (wake, choice)
+        self.wrote: set[str] = set()  # agents whose current attempt ran a write tool (not denied)
 
     # --- public
     def set_mode(self, mode: EngineMode) -> None:
@@ -263,6 +306,10 @@ class GraphEngine:
             assert first is not None
             self._make_ready(first)
         try:
+            unapplied, self.unapplied = self.unapplied, []
+            for n in unapplied:  # see prepare_resume
+                self.host.done_agents.add(n)
+                self._apply(n, await self._evaluate(n))
             while True:
                 self._launch()
                 if not self.tasks:
@@ -343,6 +390,13 @@ class GraphEngine:
         self.failure, self.stop_gate = None, None
         self.mode = "full"
         self.started = True
+        # a stop can come after an agent finished but before its links were decided: decide them
+        # first when the run goes on, or what comes after it would wait for ever
+        self.unapplied = [n for n in self.spec.agents
+                          if self.state[n] == "done" and n not in reset
+                          and any(self.decided.get(j) is None
+                                  for j, e in enumerate(self.spec.edges)
+                                  if e.from_ == n and j not in self.back)]
         if start_at is not None:  # whatever came before: the chosen node starts now
             self._make_ready(start_at)
         for n in [*self.spec.agents, *self.spec.gates]:  # start what has all its inputs decided
@@ -405,6 +459,16 @@ class GraphEngine:
                        "names": sorted(io_tool.outputs(self.run_id, name))})
         self.emit({"type": "agent_done", "agent": name, "error": False})
         return True
+
+    def retry_control(self, node: str | None, action: Literal["now", "cancel"]) -> list[str]:
+        """While steps wait to run again after a temporary error: run them now, or cancel the
+        retry (the step fails with its error). `node` None = every waiting step."""
+        hit = [n for n in self.retry_waits if node is None or n == node]
+        for n in hit:
+            wake, choice = self.retry_waits[n]
+            choice[0] = action
+            wake.set()
+        return hit
 
     async def cancel(self) -> None:
         for t in self.tasks:
@@ -590,6 +654,41 @@ class GraphEngine:
             return await self._action_node(name)
         if a.subflow is not None:
             return await self._subflow_node(name)
+        res = await self._agent_once(name)
+        policy, tries = self.spec.retry, 0
+        while not res.ok and res.transient and tries < policy.transient:
+            if name in self.wrote:  # it may have written already: running it again is the person's call
+                self.emit({"type": "retry_skipped", "agent": name, "why": "wrote"})
+                break
+            tries += 1
+            wait = min(policy.wait * 2 ** (tries - 1), 300)
+            if not await self._retry_wait(name, tries, policy.transient, wait, res.message):
+                break
+            self.emit({"type": "delegate", "agent": name, "task": a.description[:120],
+                       "retry": tries})
+            res = await self._agent_once(name)
+        return res
+
+    async def _retry_wait(self, name: str, attempt: int, most: int, wait: int,
+                          reason: str) -> bool:
+        """Waits before a step runs again; False when the person cancelled the retry."""
+        wake, choice = asyncio.Event(), ["wait"]
+        self.retry_waits[name] = (wake, choice)
+        self.emit({"type": "retry", "agent": name, "attempt": attempt, "max": most,
+                   "wait": wait, "at": time.time() + wait, "reason": reason[:300]})
+        try:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(wake.wait(), wait)
+        finally:
+            self.retry_waits.pop(name, None)
+        if choice[0] == "cancel":
+            self.emit({"type": "retry_cancelled", "agent": name})
+            return False
+        return True
+
+    async def _agent_once(self, name: str) -> _Result:
+        a = self.spec.agents[name]
+        self.wrote.discard(name)
         try:
             values, missing = io_tool.resolve_inputs(self.spec, self.run_id, name)
             if missing:
@@ -599,7 +698,7 @@ class GraphEngine:
             sid, error = await self._session(name, self._message(name, values),
                                              self.compiled.agent_options(name))
             if error:
-                return self._failed(name, error)
+                return self._failed(name, error, transient=is_transient(error))
             lacking = self._missing_outputs(name)
             if lacking and sid:
                 self.emit({"type": "follow_up", "agent": name, "missing": lacking})
@@ -621,7 +720,7 @@ class GraphEngine:
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 — the node fails, the run reports it
-            return self._failed(name, f"{type(e).__name__}: {e}")
+            return self._failed(name, f"{type(e).__name__}: {e}", transient=is_transient(str(e)))
         return _Result(True, evals=evals)
 
     async def _action_node(self, name: str) -> _Result:
@@ -756,9 +855,13 @@ class GraphEngine:
                 child.release(rid)
         return _Result(True, evals=evals)
 
-    def _failed(self, name: str, message: str) -> _Result:
-        self.emit({"type": "agent_done", "agent": name, "error": True, "message": message[:500]})
-        return _Result(False, message)
+    def _failed(self, name: str, message: str, transient: bool = False) -> _Result:
+        ev: dict[str, Any] = {"type": "agent_done", "agent": name, "error": True,
+                              "message": message[:500]}
+        if transient:
+            ev["transient"] = True
+        self.emit(ev)
+        return _Result(False, message, transient=transient)
 
     def _missing_outputs(self, name: str) -> list[str]:
         saved = io_tool.outputs(self.run_id, name)
@@ -802,6 +905,10 @@ class GraphEngine:
         sid: str | None = None
         error: str | None = None
         tools: dict[str, str] = {}  # tool_use_id → tool (to name the one that failed)
+        started: dict[str, float] = {}  # tool_use_id → when it was called
+        model: str | None = None  # the model that answered (from its messages)
+        seen: set[str] = set()  # API messages already counted
+        writes: set[str] = set()  # ids of write tool calls (they count once they ran, not denied)
         async for msg in self._query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
                 for b in msg.content:
@@ -816,14 +923,41 @@ class GraphEngine:
                         detail = tool_detail(b.name, b.input)
                         if detail:
                             ev["detail"] = detail
+                        ev["id"] = b.id
+                        if getattr(msg, "session_id", None):  # to read the call later, on demand
+                            ev["session"] = msg.session_id
                         tools[b.id] = _short_tool(b.name)
+                        if b.name in WRITE_TOOLS:
+                            writes.add(b.id)
+                        started[b.id] = time.time()
                         self.emit(ev)
+                if getattr(msg, "model", None):
+                    model = msg.model
+                live = usage_tokens(getattr(msg, "usage", None))
+                mid = getattr(msg, "message_id", None)
+                if live and msg.parent_tool_use_id is None and (mid is None or mid not in seen):
+                    if mid:  # one API message can come as several (one per block)
+                        seen.add(mid)
+                    uev: dict[str, Any] = {"type": "usage", "agent": name, "tokens": live}
+                    est = pricing.estimate(model, live)
+                    if est is not None:  # a live estimate; the session's result has the cost
+                        uev["est"] = est
+                    self.emit(uev)
             elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                 for b in msg.content:
-                    if isinstance(b, ToolResultBlock) and b.is_error:
+                    if not isinstance(b, ToolResultBlock):
+                        continue
+                    took = time.time() - started.pop(b.tool_use_id, time.time())
+                    if b.is_error:
                         self.emit({"type": "tool_error", "agent": name,
-                                   "tool": tools.get(b.tool_use_id),
-                                   "error": error_text(b.content)})
+                                   "tool": tools.get(b.tool_use_id), "id": b.tool_use_id,
+                                   "ms": round(took * 1000), "error": error_text(b.content)})
+                    else:  # only its size and time: never the content (it can hold anything)
+                        if b.tool_use_id in writes:  # a write that ran: no retry by itself
+                            self.wrote.add(name)
+                        self.emit({"type": "tool_result", "agent": name, "id": b.tool_use_id,
+                                   "tool": tools.get(b.tool_use_id), "ms": round(took * 1000),
+                                   "size": _result_size(b.content)})
             elif isinstance(msg, ResultMessage):
                 sid = msg.session_id
                 mark_ours(sid, getattr(options, "cwd", None))
@@ -836,6 +970,11 @@ class GraphEngine:
                     "type": "result", "agent": name, "session_id": sid,
                     "cost": msg.total_cost_usd, "turns": msg.num_turns, "is_error": msg.is_error,
                     "subtype": msg.subtype, "denials": len(msg.permission_denials or [])}
+                if model:
+                    ev["model"] = model
+                tokens = usage_tokens(getattr(msg, "usage", None))
+                if tokens:
+                    ev["tokens"] = tokens
                 if msg.is_error:
                     ev["message"] = ("; ".join(msg.errors or []) or msg.result or "")[:500]
                 self.emit(ev)

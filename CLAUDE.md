@@ -150,6 +150,25 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   events), then `GraphEngine.prepare_resume` keeps the done nodes and resets the failed/interrupted
   ones and everything after them (`forward_reach`); a finished node's `agent_done` carries `fp`
   (`CompiledGraph.fingerprint`) so nodes edited since are flagged, repeated unless `reuse_changed`), `yaml_io.py`, `validation.py`.
+- Runs and the Run panel. One run goes at a time across the studio (one io/artifact registry).
+  **Queue** (`Runner.enqueue/queue/unqueue/start_queued_now`, `/api/runs-queue`, saved in
+  `runs/.queue.json`): a queued run starts when `holds()` is empty — no run goes, and no run of its
+  workspace waits for the person (`waiting()` without gates older than `STALE_GATE` or dismissed in
+  `run_meta.json`; a decision being changed holds any workspace). **Decisions are never refused**:
+  decided while another run goes → status `decided` (an `end` event with the decision, restored by
+  `open_past`), it goes on first when nothing runs; it can be changed (`hold` = the run waits up to
+  `HOLD_FOR`, `supersedes` in decisions.jsonl). The server clock (`queue_clock`, lifespan, every
+  `QUEUE_TICK`) calls `Runner.tick()` (restores the queue and decided runs once, then moves them).
+  **Retry** (`FlowSpec.retry`, graph): a step whose session ends with a model API error
+  (`engine.is_transient`, same regex as `TRANSIENT` in runSteps.ts) runs again after a doubling
+  wait, never after a write that ran (`retry_skipped`); `retry_control` = now/cancel.
+  `pricing.py` (list prices) gives a live `est` on `usage` events. The run states are written once
+  in `editor/tests/fixtures/run_status.json` (checked against `Status` and the UI texts); the
+  shape of `waiting()` in `editor/tests/fixtures/waiting.json`. Editor: `RunPanel.tsx` (header,
+  views, actions via `runActions.ts`), `RunSetup`, `RunAttention` (cards: writes, retry, decided,
+  gate, change of decision), `RunStepsView`, `RunLog` + `runLines.ts`, `RunHistory` (totals per
+  period, Compare), `RunResults`, `attention.ts` (one count of what waits for you), `runSteps.ts`,
+  `runLink.ts` (`#flow=&run=&step=`), `useRunStream.ts`; pure parts tested with `npm test`.
 - `workspaces.py`: studio workspaces (`workspace.yaml`: roots, vars, environments with a `kind`;
   in a repo `<repo>/.agent-flow/` or in the studio `workspaces/<name>/`; registry
   `~/.agent-flow-studio/workspaces.json`). The current workspace/environment is a ContextVar

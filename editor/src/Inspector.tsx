@@ -757,6 +757,19 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
           <NumberInput value={s.max_parallel ?? 4} min={1} max={16} step={1}
             onChange={(v) => set((x) => { if (v === null) delete x.max_parallel; else x.max_parallel = v; })} />
         </Field>)}
+      {s.execution === "graph" && (
+        <Field label={t("insp.retry")} hint={`${t("insp.retryHint")}${(() => {
+          const writers = Object.entries(s.agents).filter(([, a]) => (a.tools ?? []).some((x) => WRITE_TOOL_NAMES.includes(x))).map(([n]) => n);
+          return writers.length ? ` ${t("insp.retryWriters", { names: writers.join(", ") })}` : "";
+        })()}`}>
+          <div className="row">
+            <NumberInput value={s.retry?.transient ?? 2} min={0} max={5} step={1} aria-label={t("insp.retryTimes")}
+              onChange={(v) => set((x) => { x.retry = { ...x.retry, transient: v ?? 2 }; })} />
+            <span className="small muted">{t("insp.retryWait")}</span>
+            <NumberInput value={s.retry?.wait ?? 15} min={1} max={300} step={5} aria-label={t("insp.retryWait")}
+              onChange={(v) => set((x) => { x.retry = { ...x.retry, wait: v ?? 15 }; })} />
+          </div>
+        </Field>)}
       <h3>{t("io.flowInputs")}</h3>
       {isTyped(s)
         ? <p className="muted small">{t("io.flowInputsHint")}</p>
@@ -854,6 +867,10 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
     </>
   );
 }
+
+/** The tools that write (the same as WRITE_TOOLS in builder/catalog.py): a step that ran one is
+ * not retried by itself after a temporary error. */
+const WRITE_TOOL_NAMES = ["workspace.edit", "workspace.write", "workspace.bash", "connections.http_write"];
 
 export function Inspector(p: Props) {
   const { t } = useI18n();

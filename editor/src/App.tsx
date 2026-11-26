@@ -15,6 +15,7 @@ import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
 import { AgentIcon, Icon, ICON_IDS } from "./icons";
 import { LibraryManager, locLabel } from "./LibraryManager";
+import { parseRunLink } from "./runLink";
 import { CONTEXT_NODE, edgeKey, RunPanel, type RunRequest, type Trace } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { Board } from "./Board";
@@ -125,6 +126,7 @@ function Editor() {
   const [showConns, setShowConns] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [runReq, setRunReq] = useState<RunRequest | null>(null);
+  const [runNeeds, setRunNeeds] = useState(0);  // gates and approvals that wait in the Run panel
   const [dims, setDims] = useState<Record<string, { width: number; height: number }>>({});
   const [showData, setShowData] = useState<boolean>(() => {
     try { return localStorage.getItem(DATA_LINKS_KEY) !== "0"; } catch { return true; }
@@ -197,10 +199,16 @@ function Editor() {
   // the last open flow (a preference of this browser), else the first one
   useEffect(() => {
     if (current || !flows.length) return;
+    const link = parseRunLink(location.hash);  // a link to a run (#flow=…&run=…&step=…) wins
+    if (link.flow && flows.some((f) => f.name === link.flow)) {
+      setCurrent(link.flow);
+      if (link.run) { setRunReq({ mode: "full", open: link.run, flow: link.flow, step: link.step, nonce: Date.now() }); setRight("run"); }
+      return;
+    }
     let last: string | null = null;
     try { last = localStorage.getItem(LAST_FLOW_KEY); } catch { /* storage not available */ }
     setCurrent(flows.some((f) => f.name === last) ? last : flows[0].name);
-  }, [flows, current]);
+  }, [flows, current]);  // eslint-disable-line react-hooks/exhaustive-deps -- setters only
   useEffect(() => {
     if (!current) return;
     try { localStorage.setItem(LAST_FLOW_KEY, current); } catch { /* storage not available */ }
@@ -796,6 +804,18 @@ function Editor() {
   const confirmDiscard = async () => !dirty || dialog.confirm({
     title: t("app.discardTitle"), message: t("app.discard"), ok: t("app.discardOk"), danger: true });
   const switchFlow = async (name: string) => { if (await confirmDiscard()) setCurrent(name); };
+  // a run link pasted in this tab: open that flow and run
+  useEffect(() => {
+    const go = async () => {
+      const link = parseRunLink(location.hash);
+      if (!link.flow || !link.run || !flows.some((f) => f.name === link.flow)) return;
+      if (link.flow !== current && !(await confirmDiscard())) return;
+      setCurrent(link.flow); setView("flow"); setRight("run");
+      setRunReq({ mode: "full", open: link.run, flow: link.flow, step: link.step, nonce: Date.now() });
+    };
+    window.addEventListener("hashchange", go);
+    return () => window.removeEventListener("hashchange", go);
+  });
   const createFlow = async (copyFrom?: string) => {
     if (!(await confirmDiscard())) return;
     const r = await dialog.form({
@@ -1037,7 +1057,9 @@ function Editor() {
           <button className={right === "props" ? "on" : ""} onClick={() => setRight("props")}>{t("tabs.properties")}</button>
           <button className={right === "chat" ? "on" : ""} onClick={() => setRight("chat")}>
             {t("tabs.assistant")}{assistBusy ? " ●" : ""}</button>
-          <button className={right === "run" ? "on" : ""} onClick={() => setRight("run")}>{t("tabs.run")}</button>
+          <button className={right === "run" ? "on" : ""} onClick={() => setRight("run")}
+            title={runNeeds ? t("rp.needsYouBody", { n: String(runNeeds) }) : undefined}>
+            {t("tabs.run")}{runNeeds > 0 && <span className="rp-count" aria-label={t("rp.needsYouBody", { n: String(runNeeds) })}>{runNeeds}</span>}</button>
         </div>
         {doc && <div className="right-body" hidden={right !== "props"}>
           <Inspector doc={doc} sel={sel} catalog={catalog} val={val} update={update} select={setSel} remove={remove}
@@ -1058,7 +1080,12 @@ function Editor() {
           }} />
         </div>}
         {doc && current && <div className="right-body" hidden={right !== "run"}>
-          <RunPanel key={current} flow={current} doc={doc} dirty={dirty} mock={catalog.mock} onTrace={setTrace} request={runReq} />
+          <RunPanel key={current} flow={current} doc={doc} dirty={dirty} mock={catalog.mock} onTrace={setTrace} request={runReq}
+            focus={sel?.kind === "node" ? sel.id : null} onFocusNode={(id) => setSel({ kind: "node", id })} onAttention={setRunNeeds}
+            onOpenRun={async (f, input) => {  // a run of another flow that waits: switch to that flow, then open it
+              if (f !== current && !(await confirmDiscard())) return;
+              setCurrent(f); setRunReq({ mode: "full", open: input, flow: f, nonce: Date.now() }); setRight("run");
+            }} />
         </div>}
       </aside>
 

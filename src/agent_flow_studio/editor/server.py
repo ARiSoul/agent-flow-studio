@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import html
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -69,6 +71,7 @@ PROMPT_PATH = re.compile(r"^prompts/[A-Za-z0-9_-]{1,60}\.md$")
 MAX_PROMPT = 100_000
 MODELS = ["inherit", "sonnet", "opus", "haiku"]
 CSRF_HEADER = "x-flow-editor"
+QUEUE_TICK = 10.0  # seconds between two looks of the queue's own clock
 SLUG_RE = re.compile(SLUG)
 # validation errors about secrets written in the flow: a flow is never saved with one of these
 SECRET_ERROR = re.compile(r"secrets? (stay|go) out|looks like a secret|\$\{VAR\}", re.IGNORECASE)
@@ -115,6 +118,15 @@ class RunBody(BaseModel):
     instruction: str = Field(default="", max_length=20_000)
     # where inputs came from ("Fill from a run"): input -> {flow, run, agent, output}
     handoff: dict[str, HandoffRef] = Field(default_factory=dict, max_length=50)
+
+
+class RetryBody(BaseModel):
+    action: Literal["now", "cancel"]
+    node: str | None = Field(default=None, max_length=64)
+
+
+class DismissBody(BaseModel):
+    dismissed: bool = True
 
 
 class OpenRunBody(BaseModel):
@@ -864,11 +876,107 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
                          given=body.given,
                          handoff={k: v.model_dump() for k, v in body.handoff.items()})
 
+    @app.post("/api/runs-queue", dependencies=[Depends(csrf)], status_code=201)
+    def queue_run(body: RunBody) -> dict[str, Any]:
+        """A run that starts by itself when the one running now stops."""
+        _flow_dir(fb(), body.flow)
+        try:
+            return runner.enqueue(body.flow, run_input=body.input, mode=body.mode,
+                                  target=body.target, instruction=body.instruction,
+                                  run_id=body.run_id, inputs=body.inputs, given=body.given,
+                                  handoff={k: v.model_dump() for k, v in body.handoff.items()})
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+        except FlowError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.get("/api/runs-queue")
+    def run_queue() -> dict[str, Any]:
+        return runner.queue()
+
+    @app.post("/api/runs-queue/{item_id}/start", dependencies=[Depends(csrf)])
+    async def start_queued_now(item_id: str) -> dict[str, Any]:
+        """A queued run starts now, even while other runs wait for the person."""
+        return _run_call(runner.start_queued_now, item_id)
+
+    @app.delete("/api/runs-queue/{item_id}", dependencies=[Depends(csrf)])
+    def unqueue_run(item_id: str) -> dict[str, Any]:
+        try:
+            runner.unqueue(item_id)
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+        return {"ok": True}
+
     @app.get("/api/flows/{flow}/runs")
-    def past_runs(flow: str) -> dict[str, Any]:
-        """The saved runs of a flow (runs/), newest first."""
+    def past_runs(flow: str, limit: int = 30, offset: int = 0, q: str = "",
+                  status: str = "", days: int = 0) -> dict[str, Any]:
+        """The saved runs of a flow (runs/), newest first, a page at a time; `q` and `status`
+        filter them; `stats` are the totals of all of them."""
         _flow_dir(fb(), flow)
-        return {"runs": runner.past_runs(flow)}
+        runs, total = runner.past_page(flow, max(1, min(limit, 200)), max(0, offset), q[:200],
+                                       status[:20])
+        return {"runs": runs, "total": total,
+                "stats": runner.past_stats(flow, max(0, min(days, 3650)) or None)}
+
+    @app.get("/api/runs/{run_id}/tools/{tool_id}")
+    def tool_call(run_id: str, tool_id: str) -> dict[str, Any]:
+        """A tool call's arguments and result, read now from the local session (never stored)."""
+        try:
+            return runner.tool_call(run_id, tool_id)
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
+    @app.get("/api/runs-waiting")
+    def runs_waiting() -> dict[str, Any]:
+        """The runs of this workspace that wait for the person (gates, paused, write approvals)."""
+        return {"runs": runner.waiting()}
+
+    async def queue_clock() -> None:
+        """The queue's own clock: decided runs and queued runs go on when nothing holds them,
+        with or without an editor open (a gate that turns older than a day releases them)."""
+        while True:
+            try:
+                runner.tick()
+            except Exception:  # the clock never stops; the next tick tries again
+                logging.getLogger(__name__).exception("queue clock")
+            await asyncio.sleep(QUEUE_TICK)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> Any:
+        clock = asyncio.create_task(queue_clock())
+        try:
+            yield
+        finally:
+            clock.cancel()
+
+    app.router.lifespan_context = lifespan
+
+    @app.get("/api/runs/{run_input}/from-plan")
+    def from_plan(run_input: str, node: str | None = None) -> dict[str, Any]:
+        """What "run from step" on a saved run would keep and run again (nothing runs)."""
+        try:
+            return runner.from_plan(run_input, node)
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+        except FlowError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.get("/api/runs-trash")
+    def runs_trash(flow: str | None = None) -> dict[str, Any]:
+        return {"runs": runner.trash(flow)}
+
+    @app.post("/api/runs-trash/{name}/restore", dependencies=[Depends(csrf)])
+    def restore_run(name: str) -> dict[str, Any]:
+        try:
+            return {"input": runner.restore_run(name)}
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
+    @app.delete("/api/runs-trash", dependencies=[Depends(csrf)])
+    def empty_runs_trash(flow: str | None = None) -> dict[str, Any]:
+        """Deletes the runs in the trash (of a flow) for good (the editor asks first)."""
+        done, failed = runner.empty_trash(flow)
+        return {"deleted": done, "failed": failed}
 
     @app.post("/api/runs/open", dependencies=[Depends(csrf)])
     def open_run(body: OpenRunBody) -> dict[str, Any]:
@@ -911,6 +1019,16 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         except RunError as e:
             raise HTTPException(e.status, e.detail) from e
 
+    @app.delete("/api/runs/{run_input}", dependencies=[Depends(csrf)])
+    def delete_run(run_input: str) -> dict[str, Any]:
+        """Moves a saved run to the trash (`runs/.trash/`); a running run is refused."""
+        try:
+            return {"input": run_input, "trash": runner.delete_run(run_input)}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
     @app.post("/api/runs/{run_id}/resume", dependencies=[Depends(csrf)])
     async def resume_run(run_id: str, body: ResumeBody) -> dict[str, Any]:
         return _run_call(runner.resume, run_id, body.reuse_changed)
@@ -922,6 +1040,28 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     @app.post("/api/runs/{run_id}/approvals/{approval_id}", dependencies=[Depends(csrf)])
     async def approve_write(run_id: str, approval_id: str, body: ApprovalBody) -> dict[str, Any]:
         return _run_call(runner.approve, run_id, approval_id, body.approve, body.comment)
+
+    @app.post("/api/runs/{run_id}/decision/hold", dependencies=[Depends(csrf)])
+    async def hold_decision(run_id: str, body: DismissBody) -> dict[str, Any]:
+        """While the person changes a recorded decision, its run does not go on (`dismissed`:
+        true holds it, false keeps the decision and lets it go on)."""
+        return _run_call(runner.hold, run_id, body.dismissed)
+
+    @app.post("/api/runs/{run_id}/retry", dependencies=[Depends(csrf)])
+    async def retry_run(run_id: str, body: RetryBody) -> dict[str, Any]:
+        """A step waiting to run again after a temporary error: now, or cancel the retry."""
+        return _run_call(runner.retry, run_id, body.node, body.action)
+
+    @app.put("/api/runs/{run_input}/dismissed", dependencies=[Depends(csrf)])
+    async def dismiss_run(run_input: str, body: DismissBody) -> dict[str, Any]:
+        """A waiting run out of (or back into) the "waits for you" count."""
+        try:
+            runner.dismiss(run_input, body.dismissed)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+        return {"input": run_input, "dismissed": body.dismissed}
 
     @app.post("/api/runs/{run_id}/stop", dependencies=[Depends(csrf)])
     async def stop_run(run_id: str) -> dict[str, Any]:

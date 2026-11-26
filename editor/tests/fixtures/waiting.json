@@ -1,0 +1,9 @@
+{
+  "note": "The shape of GET /api/runs-waiting items. tests/test_run_history.py checks the server gives these keys; editor/tests/round8.test.ts runs attention() on them.",
+  "runs": [
+    {"id": "r1", "input": "open", "flow": "release", "title": "", "kind": "gate", "label": "Approve", "since": 1795700000, "stale": false, "dismissed": false},
+    {"id": null, "input": "old", "flow": "release", "title": "", "kind": "gate", "label": "Approve", "since": 1795500000, "stale": true, "dismissed": false},
+    {"id": null, "input": "quiet", "flow": "release", "title": "Quiet", "kind": "gate", "label": "Approve", "since": 1795700000, "stale": false, "dismissed": true},
+    {"id": "r4", "input": "other", "flow": "notes", "title": "", "kind": "paused", "label": "writer", "since": 1795700000, "stale": false, "dismissed": false}
+  ]
+}

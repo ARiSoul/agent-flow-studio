@@ -156,6 +156,52 @@ def test_a_stopped_run_resumes_too(flows):
     assert ran(q).count("planner") == 1
 
 
+def test_a_stop_between_the_end_of_an_agent_and_its_links(flows, monkeypatch):
+    """The stop comes after researcher_b saved its work (`agent_done`) but before its links were
+    decided: the resume decides them, so the writer still runs (it used to wait for ever and the
+    run ended `done` without it), and the interrupted researcher_a is listed as redone."""
+    from agent_flow_studio.engine import GraphEngine
+
+    real = GraphEngine._evaluate
+    hold = {"on": True}
+
+    async def evaluate(self, node):
+        if node == "researcher_b" and hold["on"]:
+            await asyncio.Event().wait()  # until the stop cancels it
+        return await real(self, node)
+
+    monkeypatch.setattr(GraphEngine, "_evaluate", evaluate)
+
+    async def slow(rid, n):
+        await asyncio.sleep(5)
+        return PAR["researcher_a"]
+
+    q = agent_query({"researcher_a": lambda rid, n: slow(rid, n) if n == 1
+                     else PAR["researcher_a"]})
+    rn = Runner(flows, q)
+
+    async def go():
+        r = rn.start("parallel", inputs={"topic": "agents"}, run_id="r6")
+        while not any(e["type"] == "agent_done" and e.get("agent") == "researcher_b"
+                      for e in r.events):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        rn.stop(r.id)
+        await wait(r)
+        assert r.status == "stopped"
+        hold["on"] = False
+        plan = rn.resume_plan(r.id)
+        assert plan["redo"] == ["researcher_a", "writer"]
+        assert sorted(plan["reuse"]) == ["planner", "researcher_b"]
+        rn.resume(r.id)
+        await wait(r)
+        return r
+
+    r = run(go())
+    assert r.status == "gate" and r.done_agents == set(PAR)
+    assert ran(q).count("researcher_b") == 1 and ran(q).count("writer") == 1
+
+
 def test_only_errored_or_stopped_graph_runs_resume(flows):
     q = agent_query()
     rn = Runner(flows, q)
@@ -288,3 +334,26 @@ def test_rename_api(flows):
     assert r.status_code == 200 and r.json()["title"] == "Plan A"
     assert c.get("/api/flows/parallel/runs").json()["runs"][0]["title"] == "Plan A"
     assert c.put("/api/runs/nope3/title", json={"title": "x"}, headers=H).status_code == 404
+
+
+def test_past_runs_say_what_failed_and_when_it_ended(flows):
+    q = agent_query(_failing_a(99))  # researcher_a never saves its notes
+    rn = Runner(flows, q)
+    run(_start(rn, "p1"))
+    got = rn.past_runs("parallel")[0]
+    assert got["status"] == "error" and got["failed"] == "researcher_a"
+    assert got["ended"] >= got["started"] and "researcher_a" in (got["message"] or "")
+
+
+def test_delete_a_run_moves_it_to_the_trash(flows, tmp_path):
+    app = create_app(flows, allowed_hosts=["testserver"])
+    app.state.runner._query = agent_query()
+    c = TestClient(app)
+    run(_start(app.state.runner, "d1"))
+    assert c.delete("/api/runs/d1").status_code == 403  # no header
+    r = c.delete("/api/runs/d1", headers=H)
+    assert r.status_code == 200 and r.json()["trash"].startswith("d1-")
+    assert c.get("/api/flows/parallel/runs").json()["runs"] == []
+    assert (tmp_path / "runs" / ".trash" / r.json()["trash"] / "events.jsonl").is_file()
+    assert c.delete("/api/runs/d1", headers=H).status_code == 404
+    assert c.delete("/api/runs/bad%20id!", headers=H).status_code == 400

@@ -53,12 +53,12 @@ export function ListInput({ value, onCommit, placeholder, className }: {
 }
 
 /** A number or empty (null). */
-export function NumberInput({ value, onChange, min, max, step, placeholder }: {
+export function NumberInput({ value, onChange, min, max, step, placeholder, "aria-label": label }: {
   value: number | null | undefined; onChange: (v: number | null) => void; min?: number; max?: number;
-  step?: number | "any"; placeholder?: string;
+  step?: number | "any"; placeholder?: string; "aria-label"?: string;
 }) {
   return (
-    <input type="number" value={value ?? ""} min={min} max={max} step={step} placeholder={placeholder ?? "—"}
+    <input type="number" value={value ?? ""} min={min} max={max} step={step} placeholder={placeholder ?? "—"} aria-label={label}
       onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />
   );
 }

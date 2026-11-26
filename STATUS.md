@@ -4,7 +4,35 @@ Hand-over file between machines/accounts. **When you start:** read this. **When 
 update "Current state" and "Next steps", add a line to the "Log" (date, machine/account in generic
 terms — no emails —, what was done) and commit + push.
 
-## Where we stopped (2026-11-26, work machine / account A)
+## Where we stopped (2026-11-26, later, home machine / account B)
+**Run panel rewrite** (not committed when this was written; see the Log). Twelve review rounds by
+three critic agents (AI automation, DevOps, developer) until all scored ≥ 9.8. After you pull:
+`pip install -e ".[dev,web]"` (stop the editor first), `cd editor; npm run build`,
+restart the editor. New: `npm test` in `editor/` (Node 23.6+ runs the TypeScript tests directly; no new packages).
+
+- **Panel**: views New run / Current / History; a header that folds on scroll; the run in the URL
+  (`#flow=&run=&step=`); one count of what waits for you (`attention.ts`: Run tab badge, page
+  title, notifications); a popover of the other waiting runs (older than a day or dismissed apart)
+  and of the queue.
+- **Steps / Log / History**: what each step received, attempts, live tokens and a "≈ $" estimate
+  (`pricing.py`), tool calls read on demand from the local session (never stored), recovered
+  failures in amber; a compact log (one row per event where it fits, toggles kept); History totals
+  per period (7/30 days/all) with the period before, Compare with a run picker, deltas and steps.
+- **Retry** (`retry: {transient: 2, wait: 15}` in a graph flow, Properties → Retry): model API
+  errors only; never after a write that ran; cancel or run now from a card.
+- **Queue** (`runs/.queue.json`): one run at a time; a new run waits until no run goes or waits
+  for you; "Start anyway"; marked "from the queue" in History.
+- **Decisions never refused**: while another run goes a decision is kept (status `decided`, kept
+  across restarts) and goes on first; it can be changed (the run is held up to 15 min, a
+  superseding record in decisions.jsonl).
+- **Checked**: 617 backend tests, 31 in `tests/test_run_history.py`; 30 editor tests; the browser
+  on a check server with a fake model. **Not tried with the real model**: retries on a real 529,
+  the live cost estimate against real prices, the queue with real runs.
+- **Known limit (by design)**: one run at a time across the studio — the engine activates one
+  flow's io/artifact registry at a time; per-workspace slots need that registry per run first
+  (backlog).
+
+## Where we stopped earlier (2026-11-26, work machine / account A)
 The commit after `eeab0e5` holds this session (pushed). It builds on the home machine's two commits
 (history from past Claude Code sessions, the model on agent cards).
 
@@ -434,3 +462,6 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-26 · work machine (account A) · Gate answered with no matching link asks again; agents can read a gate's comment.
 - 2026-11-26 · work machine (account A) · Run from here (any step of a saved run) and renaming runs.
 - 2026-11-26 · work machine (account A) · Run panel layout for long input forms; STATUS hand-over rewritten.
+- 2026-11-26 · home machine (account B) · Run panel rewrite: views, steps/log/history, Compare,
+  retry of model API errors, live cost estimate, queue (saved), decisions never refused (decided,
+  changeable, kept across restarts), one count of what waits for you, run links; 12 critic rounds.

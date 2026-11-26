@@ -1,5 +1,5 @@
 // Run form: one field per typed value (flow inputs, or the inputs of the agent under test).
-import { useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { api, errorText } from "./api";
 import { useI18n } from "./i18n";
 import { typeTag } from "./nodes";
@@ -71,10 +71,14 @@ function readFiles(list: FileList): Promise<FileVal[]> {
 const kb = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 /** One field of the form, by type. */
-export function ValueField({ name, t, value, onChange, error, disabled, saved, extra }: {
+export function ValueField({ name, t, value, onChange, error, disabled, saved, extra, labelAction }: {
   name: string; t: IOTypeRaw; value: FormVal; onChange: (v: FormVal) => void; error?: string | null;
   disabled?: boolean; saved?: unknown; extra?: ReactNode;
+  /** A small action on the label's line (e.g. "From a run…"). */
+  labelAction?: ReactNode;
 }) {
+  const id = useId();
+  const hintId = `${id}-hint`;
   const { t: tr } = useI18n();
   const [readErr, setReadErr] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
@@ -92,14 +96,14 @@ export function ValueField({ name, t, value, onChange, error, disabled, saved, e
   } else if (k === "choice" && t.multiple) {
     const chosen = new Set(value as string[]);
     control = (
-      <div className="tools">{(t.options ?? []).map((o) => (
+      <div className="tools" role="group" aria-labelledby={`${id}-label`}>{(t.options ?? []).map((o) => (
         <label key={o} className="check"><input type="checkbox" checked={chosen.has(o)} disabled={disabled}
           onChange={(e) => { const n = new Set(chosen); if (e.target.checked) n.add(o); else n.delete(o); onChange((t.options ?? []).filter((x) => n.has(x))); }} />
           {o}</label>))}
       </div>);
   } else if (k === "choice") {
     control = (
-      <select className={bad} value={String(value)} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
+      <select id={id} aria-describedby={hintId} aria-invalid={!!error} className={bad} value={String(value)} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
         {(!required || !value) && <option value="">{tr("run.form.choose")}</option>}
         {(t.options ?? []).map((o) => <option key={o}>{o}</option>)}
       </select>);
@@ -108,7 +112,7 @@ export function ValueField({ name, t, value, onChange, error, disabled, saved, e
     const savedFiles = saved ? (Array.isArray(saved) ? saved : [saved]) as { name?: string }[] : [];
     control = (
       <>
-        <input type="file" className={bad} disabled={disabled} multiple={!!t.multiple}
+        <input id={id} aria-describedby={hintId} type="file" className={bad} disabled={disabled} multiple={!!t.multiple}
           accept={(t.accept ?? []).join(",") || undefined}
           onChange={(e) => {
             const list = e.target.files;
@@ -129,7 +133,7 @@ export function ValueField({ name, t, value, onChange, error, disabled, saved, e
       </>);
   } else if (k === "markdown" || k === "json" || t.multiple) {
     control = (
-      <textarea className={`${k === "json" ? "mono" : ""}${bad}`} rows={k === "markdown" || k === "json" ? 4 : 3}
+      <textarea id={id} aria-describedby={hintId} aria-invalid={!!error} className={`${k === "json" ? "mono" : ""}${bad}`} rows={k === "markdown" || k === "json" ? 4 : 3}
         disabled={disabled} value={String(value)} spellCheck={k !== "json"}
         placeholder={t.multiple ? tr(k === "markdown" ? "run.form.mdListHint" : "run.form.listHint") : undefined}
         onChange={(e) => onChange(e.target.value)} />);
@@ -137,21 +141,25 @@ export function ValueField({ name, t, value, onChange, error, disabled, saved, e
     const type = k === "number" || k === "integer" ? "number" : k === "date" ? "date"
       : k === "datetime" ? "datetime-local" : k === "url" ? "url" : "text";
     control = (
-      <input type={type} className={`${k === "path" ? "mono" : ""}${bad}`} disabled={disabled} value={String(value)}
+      <input id={id} aria-describedby={hintId} aria-invalid={!!error} type={type} className={`${k === "path" ? "mono" : ""}${bad}`} disabled={disabled} value={String(value)}
         {...(type === "number" ? { ...range, step: k === "integer" ? 1 : "any" } : {})}
         placeholder={k === "url" ? "https://" : k === "path" ? tr("run.form.pathHint") : undefined}
         onChange={(e) => onChange(e.target.value)} />);
   }
   return (
     <div className="field run-field">
-      <span className="field-label">
-        {k === "boolean" ? name : label}{required ? " *" : ""}
+      <span className="field-label-row">
+        {k === "boolean" || (k === "choice" && t.multiple)
+          ? <span className="field-label" id={`${id}-label`}>{k === "boolean" ? name : label}{required ? " *" : ""}</span>
+          : <label className="field-label" id={`${id}-label`} htmlFor={id}>{label}{required ? " *" : ""}</label>}
         <span className="port-tag">{typeTag(k, t.multiple)}</span>
+        <span className="grow" />
+        {labelAction}
       </span>
       {control}
       {extra}
-      {error ? <span className="field-err">{error}</span>
-        : t.description && k !== "boolean" && <span className="field-hint">{t.description}</span>}
+      {error ? <span className="field-err" id={hintId} role="alert">{error}</span>
+        : t.description && k !== "boolean" ? <span className="field-hint" id={hintId}>{t.description}</span> : null}
     </div>
   );
 }

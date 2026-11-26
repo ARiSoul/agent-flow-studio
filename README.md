@@ -83,6 +83,17 @@ approvals, connectors and writes with controlled autonomy.
   the agent that did a step to improve or change its output — it continues its own session,
   with the same tools and rules. **Past runs**: the Run panel lists the saved runs of the flow; open
   one to see its log and outputs again, ask for more or answer its gate (also after a restart).
+- **The Run panel**: three views — *New run*, *Current* (what needs you on top, then the steps or
+  the log, then the results) and *History* (totals per period, search, Compare two runs step by
+  step). The header keeps the run's name, state, time (with the time it waited for you), cost (an
+  estimate "≈" while sessions go) and the action that matters now. Steps show what each received,
+  its attempts, live tokens and each tool call (arguments and result read on demand from the local
+  session, never stored). A temporary model API error (busy, rate limit) runs the step again by
+  itself (`retry` in the flow, graph mode; never after a write). One run goes at a time: a new
+  run waits in a **queue** (kept across restarts) and starts when no run goes or waits for you. A
+  decision at a gate is **never refused**: while another run goes it is kept ("decided — goes on
+  next", kept across restarts, can be changed). The open run is in the page address
+  (`#flow=…&run=…&step=…`): reload or share the link to open it again.
 - **Connectors**: HTTP API, Azure Resource Manager, Azure DevOps, Microsoft Graph, GitHub, GitLab
   and Atlassian Cloud (Jira, Confluence), with environment, allowed paths, read/write access and
   "Test connection". Each connector can have **instructions for the agents** (how to use that

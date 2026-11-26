@@ -163,6 +163,7 @@ export interface FlowRaw {
   max_turns?: number;
   execution?: "orchestrator" | "graph";
   max_parallel?: number;
+  retry?: { transient?: number; wait?: number };  // graph: temporary API errors run again
   inputs?: Record<string, IOTypeRaw>;
   input?: { label?: string; pattern?: string };
   task?: string;

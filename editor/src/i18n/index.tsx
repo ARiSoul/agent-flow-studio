@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { en, type MessageKey, type Messages } from "./en";
 import { es } from "./es";
+import { pluralKey } from "./plural";
 import { pt } from "./pt";
 
 export const LANGS = {
@@ -37,7 +38,8 @@ export interface I18n {
   setLang: (l: Lang) => void;
   /** Text for a key, with {placeholders} filled from vars. */
   t: (key: MessageKey, vars?: Vars) => string;
-  /** Plural: uses `<key>.one` when n === 1, else `<key>.other`; {n} is filled. */
+  /** Plural: `<key>.<category>` from the language's plural rules (`one`, `other`…; `other` when the
+   * category has no text); {n} is filled. */
   tn: (key: string, n: number, vars?: Vars) => string;
   /** Dynamic key (e.g. a status from the server); returns fallback when the key is unknown. */
   tOr: (key: string, fallback: string, vars?: Vars) => string;
@@ -59,7 +61,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     return {
       lang, setLang,
       t: (key, vars) => fill(get(key) ?? key, vars),
-      tn: (key, n, vars) => fill(get(`${key}.${n === 1 ? "one" : "other"}`) ?? key, { n, ...vars }),
+      tn: (key, n, vars) => fill(get(pluralKey(LANGS[lang].html, key, n, (k) => get(k) !== undefined)) ?? key, { n, ...vars }),
       tOr: (key, fallback, vars) => fill(get(key) ?? fallback, vars),
     };
   }, [lang, setLang]);
