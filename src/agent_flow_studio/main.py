@@ -26,6 +26,7 @@ from . import workspaces
 from .builder import FlowError, load_flow, load_spec
 from .builder.compile import load_graph
 from .builder.spec import LEGACY_INPUT, FlowSpec
+from .claude_sessions import mark_ours
 from .engine import EngineMode, GraphEngine, Outcome, QueryFn, RouteFn
 from .extensions import LOADED
 from .hooks import DELEGATION_TOOLS
@@ -197,6 +198,7 @@ async def _print_messages(messages: AsyncIterator[Any], out: Out) -> None:
                         else None
                     out(f"  · {block.name}" + (f" → {sub}" if sub else ""))
         elif isinstance(msg, ResultMessage):
+            mark_ours(msg.session_id)
             cost = f"{msg.total_cost_usd:.4f}" if msg.total_cost_usd is not None else "?"
             out(f"\n[{msg.subtype}] session_id={msg.session_id} turns={msg.num_turns} "
                 f"cost≈{cost} USD")

@@ -48,3 +48,9 @@ def _workspaces(tmp_path, monkeypatch):
     monkeypatch.setenv("AFS_WORKSPACES_FILE", str(tmp_path / "workspaces.json"))
     monkeypatch.setenv("AFS_WORKSPACES_DIR", str(tmp_path / "workspaces"))
     monkeypatch.setenv("AFS_BROWSER_DIR", str(tmp_path / "browser"))
+
+
+@pytest.fixture(autouse=True)
+def _claude_config(tmp_path, monkeypatch):
+    """Safety net: Claude Code sessions and memory notes of the tests are a temporary folder."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))

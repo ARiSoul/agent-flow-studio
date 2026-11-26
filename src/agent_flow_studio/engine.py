@@ -58,6 +58,7 @@ from .builder.compile import (
 from .builder.graph import back_edges, forward_reach
 from .builder.spec import LEGACY_INPUT
 from .builder.types import check_value
+from .claude_sessions import mark_ours
 from .config import settings
 from .connections import actions as conn_actions
 from .connections.client import ConnectorError
@@ -725,6 +726,7 @@ class GraphEngine:
                                    "error": error_text(b.content)})
             elif isinstance(msg, ResultMessage):
                 sid = msg.session_id
+                mark_ours(sid, getattr(options, "cwd", None))
                 self.sessions[name] = sid
                 self.host.session_id = sid
                 self.host.cost += msg.total_cost_usd or 0.0

@@ -165,6 +165,13 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   root and the studio stores the section (the model never writes files). After a done full run,
   `FlowSpec.context_update` (`suggest` default · `always` = last system step in the same run ·
   `never`). `copying.move` = copy then remove the original (only the workspace's own items).
+  A root's **history** (`<root>.history` section, ≤ `MAX_HISTORY`, last in the prompt) comes from
+  past Claude Code sessions: `claude_sessions.py` lists/reads them with the SDK
+  (`list_sessions`, `get_session_messages`; text only, reminders stripped, secrets masked; kinds
+  person/studio/program — the studio tags its own sessions with `mark_ours`), and
+  `Runner.learn_context` runs `context.reader_flow()` per source (no tools) then
+  `historian_flow(root)` (read-only tools) and keeps a **draft** in `runs/@<ws>/.context/`; the
+  person saves it (`apply_draft`, records the learned sources) or discards it.
 - `extensions.py`: loads `extensions/<name>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
 - Frontend in `editor/` (Vite + React + @xyflow/react, i18n in `editor/src/i18n/`) → build in
   `src/agent_flow_studio/editor/static/`.

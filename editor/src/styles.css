@@ -757,3 +757,30 @@ td.ctx-running { color: var(--accent); font-weight: 600; }
 .board-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0 -14px -10px; }
 .board-settings[hidden], .board-chat[hidden] { display: none; }
 .chat-msg.limit { background: var(--panel-2); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font-size: 12px; }
+/* learning a root's history from past Claude Code sessions */
+.ctx-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.ctx-draft { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 8px 10px; border-radius: 8px;
+  border: 1px dashed var(--accent); background: var(--panel-2); }
+.ctx-draft p { margin: 0; }
+.ctx-draft textarea { width: 100%; }
+.learn-dialog { width: min(760px, 94vw); }
+.learn-body { overflow: auto; min-height: 0; padding: 0 16px; }
+.learn-body h3 { margin: 12px 0 4px; font-size: 13px; }
+.learn-privacy { padding: 6px 8px; border-radius: 6px; background: var(--human-soft); color: var(--text); }
+.learn-list { list-style: none; margin: 0; padding: 0; }
+.learn-row { display: flex; gap: 8px; align-items: center; padding: 4px 2px; border-bottom: 1px solid var(--border);
+  cursor: pointer; }
+.learn-row .grow { min-width: 0; flex: 1; }
+.learn-row input[type="checkbox"] { width: auto; flex: none; margin: 0; }
+.learn-row b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.learn-prompt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.learn-row > .muted { white-space: nowrap; }
+.badge.learn-new { background: var(--accent-soft); color: var(--accent); }
+.badge.learn-changed { color: var(--accent); }
+.badge.learn-learned { color: var(--ok); }
+.learn-others { margin: 10px 0; }
+.learn-foot { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--border); }
+.ctx-roots { width: 100%; table-layout: fixed; }
+.ctx-roots td { overflow-wrap: anywhere; vertical-align: top; }
+.ctx-roots td:last-child { width: 96px; }
+.ctx-roots .root-abs { max-width: 100%; }

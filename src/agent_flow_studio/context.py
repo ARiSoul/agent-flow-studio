@@ -27,11 +27,16 @@ from .messages import MsgError, msg
 CONTEXT_FILE = "context.md"
 STATE_FILE = "context.json"
 NOTES = "notes"
+HISTORY = ".history"  # `<root>.history`: what past Claude Code sessions taught about a root
 MAX_SECTION = 20_000
-MAX_PROMPT = 12_000  # what each agent gets (the rest stays in the file)
+MAX_HISTORY = 8_000
+MAX_PROMPT = 16_000  # what each agent gets (the rest stays in the file)
+MAX_NOTES = 150_000  # the readers' notes the history keeper gets
 KEEPER_FLOW = "workspace_context"
 KEEPER_AGENT = "context_keeper"
-_BEGIN = re.compile(r"^<!-- afs:begin ([a-z][a-z0-9_]{0,39}) -->$", re.MULTILINE)
+READER_AGENT = "history_reader"
+HISTORIAN_AGENT = "history_keeper"
+_BEGIN = re.compile(r"^<!-- afs:begin ([a-z][a-z0-9_]{0,39}(?:\.history)?) -->$", re.MULTILINE)
 _HEADING = re.compile(r"^(#{1,2})(\s)", re.MULTILINE)
 
 
@@ -81,12 +86,21 @@ def state(ws: workspaces.Workspace) -> dict[str, dict[str, Any]]:
     return roots if isinstance(roots, dict) else {}
 
 
-def _check(body: str) -> str:
+def history_of(root: str) -> str:
+    return root + HISTORY
+
+
+def root_of(name: str) -> str:
+    """The root a section belongs to (`app` for `app` and `app.history`)."""
+    return name.removesuffix(HISTORY)
+
+
+def _check(body: str, limit: int = MAX_SECTION) -> str:
     from .connections.model import _SECRET_LIKE
     body = body.strip()
-    if len(body) > MAX_SECTION:
+    if len(body) > limit:
         raise MsgError(msg("ctx.too_long", "a context section has at most {n} characters",
-                           n=MAX_SECTION))
+                           n=limit))
     if _SECRET_LIKE.search(body):
         raise MsgError(msg("ctx.secret", "the context looks like it has a secret; secrets never "
                            "go in the workspace context"))
@@ -101,12 +115,16 @@ def _render(ws: workspaces.Workspace, secs: dict[str, str]) -> str:
            ("<!-- Written by Agent Flow Studio. The agents of this workspace's flows read it as "
            "background. One section per root (folder or repository), kept by the context keeper; "
            "the notes section is yours. -->"), ""]
-    order = [NOTES, *[r for r in ws.spec.roots if r in secs],
-             *sorted(k for k in secs if k != NOTES and k not in ws.spec.roots)]
+    known = [n for r in ws.spec.roots for n in (r, history_of(r))]
+    order = [NOTES, *[n for n in known if n in secs],
+             *sorted(k for k in secs if k != NOTES and k not in known)]
     for name in order:
         if name not in secs:
             continue
-        title = "Notes" if name == NOTES else f"{name} — `{roots.get(name, '(not a root any more)')}`"
+        root = root_of(name)
+        title = ("Notes" if name == NOTES
+                 else f"{root} — history (from past sessions)" if name != root
+                 else f"{name} — `{roots.get(name, '(not a root any more)')}`")
         out += [f"<!-- afs:begin {name} -->", f"## {title}", "", secs[name].strip(), "",
                 f"<!-- afs:end {name} -->", ""]
     return "\n".join(out)
@@ -114,12 +132,12 @@ def _render(ws: workspaces.Workspace, secs: dict[str, str]) -> str:
 
 def set_section(ws: workspaces.Workspace, name: str, body: str, *, commit: str | None = None,
                 by: str | None = None) -> None:
-    """Writes one section (a root's, or the notes) and, for a root, its state."""
-    if name != NOTES and (ws.spec is None or name not in ws.spec.roots):
+    """Writes one section (a root's, its history, or the notes) and, for a root, its state."""
+    if name != NOTES and (ws.spec is None or root_of(name) not in ws.spec.roots):
         raise MsgError(msg("ctx.unknown_root", "{root} is not a root of the workspace {workspace}",
-                           root=repr(name), workspace=ws.name))
+                           root=repr(root_of(name)), workspace=ws.name))
     secs = sections(ws)
-    clean = _check(body)
+    clean = _check(body, MAX_HISTORY if name.endswith(HISTORY) else MAX_SECTION)
     if clean:
         secs[name] = clean
     else:
@@ -149,7 +167,9 @@ def follow_renames(ws: workspaces.Workspace, before: dict[str, str]) -> dict[str
         return {}
     secs, st = sections(ws), state(ws)
     moved = False
-    for old, to in renames.items():
+    pairs = [p for old, to in renames.items()
+             for p in ((old, to), (history_of(old), history_of(to)))]
+    for old, to in pairs:
         if old in secs and to not in secs:
             secs[to] = secs.pop(old)
             moved = True
@@ -174,6 +194,10 @@ def context_text(ws: workspaces.Workspace, limit: int = MAX_PROMPT) -> str:
     for r in ws.spec.roots:
         if secs.get(r):
             parts.append(f"### Root `{r}` — {roots.get(r, '')}\n{secs[r]}")
+    for r in ws.spec.roots:  # last, so that a cut drops them first
+        if secs.get(history_of(r)):
+            parts.append(f"### Root `{r}` — history (from past sessions; check the code before "
+                         f"relying on it)\n{secs[history_of(r)]}")
     text = "\n\n".join(parts)
     if len(text) > limit:
         text = (text[:limit].rsplit("\n", 1)[0]
@@ -217,7 +241,9 @@ def roots_state(ws: workspaces.Workspace) -> dict[str, dict[str, Any]]:
             since = int(n) if n and n.isdigit() else None
         out[r] = {"path": str(path), "exists": path.is_dir(), "git": (path / ".git").exists(),
                   "explored": bool(secs.get(r)), "updated": s.get("updated"),
-                  "commit": s.get("commit"), "commits_since": since}
+                  "commit": s.get("commit"), "commits_since": since,
+                  "history": {"exists": bool(secs.get(history_of(r))),
+                              "updated": (st.get(history_of(r)) or {}).get("updated")}}
     return out
 
 
@@ -254,6 +280,60 @@ def keeper_flow(root: str) -> dict[str, Any]:
                        for k in ("mode", "root", "current", "since", "changes")},
             "outputs": {"section": {"type": "markdown", "label": "Context of the root"},
                         "summary": {"type": "text", "label": "What changed in the context"}},
+        }},
+    }
+
+
+def _prompt(name: str) -> str:
+    return (Path(__file__).parent / f"{name}.md").read_text(encoding="utf-8")
+
+
+def reader_flow() -> dict[str, Any]:
+    """Reads ONE source (a past Claude Code session, or the memory notes) about a root and writes
+    what is worth keeping. It has no tools besides its inputs and outputs."""
+    return {
+        "version": 1, "name": KEEPER_FLOW, "title": "Workspace context",
+        "description": "Reads a past session about a root of the workspace.",
+        "execution": "graph", "task": "Read a past session and keep what matters.",
+        "start": READER_AGENT, "use_context": False, "context_update": "never",
+        "inputs": {"root": {"type": "text"},
+                   "kind": {"type": "choice", "options": ["session", "memory"]},
+                   "source": {"type": "markdown"}},
+        "agents": {READER_AGENT: {
+            "description": "Reads a past Claude Code session or memory notes and keeps the "
+                           "decisions, conventions, known problems and open work.",
+            "prompt": _prompt(READER_AGENT), "tools": [], "max_turns": 10,
+            "inputs": {k: {"from": f"input.{k}"} for k in ("root", "kind", "source")},
+            "outputs": {"notes": {"type": "markdown", "label": "What to keep"}},
+        }},
+    }
+
+
+def historian_flow(root: str) -> dict[str, Any]:
+    """Merges the readers' notes into the history section of ONE root, checking them against the
+    code (read-only tools on that root). The person reviews the result before it is saved."""
+    def opt(kind: str, label: str) -> dict[str, Any]:
+        return {"type": kind, "label": label, "required": False}
+    return {
+        "version": 1, "name": KEEPER_FLOW, "title": "Workspace context",
+        "description": "Writes what past sessions taught about a root of the workspace.",
+        "execution": "graph", "task": f"Keep the history of the workspace root `{root}`.",
+        "start": HISTORIAN_AGENT, "workspace": {"root": root}, "use_context": False,
+        "context_update": "never",
+        "inputs": {"root": {"type": "text"}, "notes": {"type": "markdown"},
+                   "current": opt("markdown", "The history section now"),
+                   "context": opt("markdown", "The context of the root")},
+        "agents": {HISTORIAN_AGENT: {
+            "description": "Merges notes from past sessions into the history of a root, "
+                           "checked against the code (read only).",
+            "prompt": _prompt(HISTORIAN_AGENT),
+            "tools": ["workspace.read", "workspace.glob", "workspace.grep", "workspace.git"],
+            "max_turns": 60,
+            "inputs": {k: {"from": f"input.{k}", **({} if k in ("root", "notes")
+                                                     else {"required": False})}
+                       for k in ("root", "notes", "current", "context")},
+            "outputs": {"section": {"type": "markdown", "label": "History of the root"},
+                        "summary": {"type": "text", "label": "What changed in the history"}},
         }},
     }
 

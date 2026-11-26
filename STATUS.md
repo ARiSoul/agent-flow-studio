@@ -4,9 +4,28 @@ Hand-over file between machines/accounts. **When you start:** read this. **When 
 update "Current state" and "Next steps", add a line to the "Log" (date, machine/account in generic
 terms — no emails —, what was done) and commit + push.
 
-## Where we stopped (2026-11-25, work machine / account A)
-Last pushed commit: `c7fb682`. The commit after it (this session, see the Log of 2026-11-24/25)
-holds everything below; the user pushes by hand.
+## Where we stopped (2026-11-25, home machine / account B)
+The commit after `dbd1c69` adds **history from past Claude Code sessions** (below). After you
+pull: `cd editor; npm run build; cd ..` and restart the editor (new routes under
+`/api/context/`); no new dependencies.
+
+**History from past Claude Code sessions (new, 2026-11-25, home machine)**
+- Board → Context → **Learn** on a root: lists the Claude Code sessions and memory notes about the
+  root's folder on this machine (`claude_sessions.py`, SDK `list_sessions` /
+  `get_session_messages`); the studio's own runs and other programs' sessions are set apart (tag
+  `agent-flow-studio` added to new studio sessions by `mark_ours`; older ones known by their first
+  prompt or `entrypoint`). Size estimate before starting.
+- One `history_reader` per source (no tools; text only, reminders stripped, secrets masked), then
+  `history_keeper` (read-only tools on the root) checks the notes against the code and drafts the
+  `<root>.history` section. The person edits and saves or discards the draft; nothing is saved by
+  the run. Learned sources are kept per machine in `runs/@<ws>/.context/learned.json`.
+- Agents get the history after all root sections (`MAX_PROMPT` now 16 000, history ≤ 8 000).
+- Checked with fake sessions and a fake model (tests + browser). **Not tried with the real model
+  or real sessions yet.** Known small issue (older): the roots table of the workspace settings
+  is about 30 px too wide for a narrow side panel.
+
+## Earlier stop (2026-11-25, work machine / account A)
+Commit `dbd1c69` holds everything below.
 
 **After you pull on the other machine**
 1. **Stop the editor first**, then `.\.venv\Scripts\python -m pip install -e ".[dev,web]"` (a
@@ -56,8 +75,10 @@ named read actions, human gates, a decision loop with `max_runs`, a final write 
 Missing: a **board of items** in the studio (cards from a connector action, columns from a field,
 a flow per column) and state per item across runs — see backlog item 11.
 
-**Next suggested task**: try the workspace assistant with the real model (e.g. "propose a flow
-for …" in a workspace); then item 1 of the backlog (sign in on the website connector and run the
+**Next suggested task**: on a real repository with past Claude Code sessions, open it as a
+workspace and use Board -> Context -> **Learn** with the real model (a few sessions first; read the
+draft for private data before saving). Then try the workspace assistant with the real model
+(e.g. "propose a flow for …" in a workspace); then item 1 of the backlog (sign in on the website connector and run the
 copied triage flow end to end from the workspace).
 
 **Earlier hand-overs (summary; details in the Log)**: 2026-11-20 agent library, assistant
@@ -68,7 +89,7 @@ environments, Board, hand-off, subflows, Copy to…, workspace context); 2026-11
 videos for agents.
 
 ## Current state
-Works and is tested (`pytest`: core 553 tests without extensions — 542 + 11 that need the `media` extra; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 563 tests without extensions — 552 + 11 that need the `media` extra; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -414,3 +435,6 @@ start the editor or the CLI (the studio does not read `.env`).
   person applies); Board top bar cleaned up and the Connectors window opens over the Board.
 - 2026-11-25 · work machine (account A) · Assistants: 60 turns, turn counter, Continue at the limit;
   short flow proposals filled in, all problems at once.
+- 2026-11-25 · home machine (account B) · History from past Claude Code sessions: Learn on a root
+  (sessions and memory notes of its folder, studio sessions set apart and tagged), readers + a
+  history keeper, a draft the person reviews, `<root>.history` in context.md.

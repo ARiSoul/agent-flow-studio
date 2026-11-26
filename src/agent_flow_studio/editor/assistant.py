@@ -31,6 +31,7 @@ from ..builder.catalog import BUILTIN_TOOLS, CONTRACTS
 from ..builder.compile import DISALLOWED
 from ..builder.library import LibraryError, agent_data, copy_into, list_agents, refresh_copy
 from ..builder.library import check as check_library_agent
+from ..claude_sessions import mark_ours
 from ..config import settings
 from ..hooks import DELEGATION_TOOLS, make_guard, make_hooks
 from ..tools.common import err, ok
@@ -678,6 +679,7 @@ async def stream(prompt: str, options: ClaudeAgentOptions, server: str, read_onl
             elif isinstance(msg, ResultMessage):
                 at_limit = msg.subtype == "error_max_turns"
                 finished = True
+                mark_ours(msg.session_id, getattr(options, "cwd", None))
                 yield {"type": "done", "session_id": msg.session_id, "cost": msg.total_cost_usd,
                        "turns": msg.num_turns, "max_turns": limit,
                        "is_error": msg.is_error and not at_limit, "limit": at_limit,

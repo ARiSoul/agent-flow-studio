@@ -319,9 +319,28 @@ export interface WorkspaceContext {
   file?: string | null;
   sections: Record<string, string>;  // root name or "notes" → Markdown
   roots: Record<string, { path: string; exists: boolean; git: boolean; explored: boolean;
-    updated: number | null; commit: string | null; commits_since: number | null }>;
+    updated: number | null; commit: string | null; commits_since: number | null;
+    history?: { exists: boolean; updated: number | null } }>;
   chars?: number;
   limit?: number;
+  drafts?: Record<string, HistoryDraft>;  // root → history learned from past sessions, to review
+}
+
+export type SourceState = "new" | "changed" | "learned";
+/** A past Claude Code session about a root's folder. */
+export interface SessionSource {
+  id: string; title: string; first_prompt: string; branch: string | null;
+  created: number | null; modified: number | null; size: number | null;
+  kind: "person" | "studio" | "program"; state: SourceState;
+}
+/** A Claude Code memory note about a root's folder. */
+export interface MemorySource {
+  file: string; name: string; description: string; size: number; modified: number; state: SourceState;
+}
+export interface ContextSources { root: string; folder: string; sessions: SessionSource[]; memory: MemorySource[] }
+export interface HistoryDraft {
+  root: string; run: string; section: string; summary: string;
+  sessions: Record<string, number>; memory: Record<string, number>; created: number;
 }
 
 export interface HandoffRun {

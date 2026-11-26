@@ -178,6 +178,16 @@ sometimes several folders), like a Postman workspace. Choose it in the top bar (
   run per flow `context_update`: `suggest` (a button in the Run panel, the default), `always` (a
   last system step, drawn on the canvas) or `never`. The studio stores the sections; the model
   never writes a file. `context.json` keeps the commit of each update.
+- **History from past Claude Code sessions**: **Learn** on a root of the board lists the Claude
+  Code sessions and memory notes about that folder on this machine (`~/.claude/projects/…` or
+  `CLAUDE_CONFIG_DIR`; this studio's own runs and other programs' sessions are set apart). You
+  pick what to read and see the size first. One reader per source (only the conversation text:
+  no tool output, injected reminders removed, secret-like text masked) keeps the decisions,
+  conventions, known problems and open work; then the **history keeper** (read-only tools on the
+  root) checks them against the code and drafts the root's **history** section. You review and
+  edit the draft before it is saved in `context.md` (`<root>.history`, after the root's section;
+  agents get it last, so a long context drops it first). Which sessions were learned is kept on
+  the machine (`runs/@<ws>/.context/`), so next time only new or changed ones are offered.
 - **Copy and duplicate**: **Copy to…** on a flow, an agent of a flow, a library agent, a connector
   or selected variables/environments copies it to another workspace (or duplicates it in the same
   one), after a check of what it uses that the target lacks (variables, roots, connectors, library

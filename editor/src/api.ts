@@ -1,5 +1,5 @@
 import type {
-  AgentRaw, BoardFlow, Catalog, ChatSummary, CopyItem, CopyPlan, CopyResult, Doc, FlowSummary, FlowTemplate,
+  AgentRaw, BoardFlow, Catalog, ChatSummary, ContextSources, CopyItem, CopyPlan, CopyResult, Doc, FlowSummary, FlowTemplate,
   HandoffRun, LibraryAgent, RunIO, SavedChat, SavedCommand, WorkspaceDetail, WorkspaceItem, WorkspaceNow,
   WorkspaceContext, WorkspaceSpecRaw,
   Validation,
@@ -218,6 +218,23 @@ export const api = {
     call<{ id: string; input: string; status: string }>("/api/context/update", {
       method: "POST", headers: MUTATE, body: JSON.stringify({ mode, roots: roots ?? null, after: after ?? null }) })
       .then((r) => r.data),
+  /** Past Claude Code sessions and memory notes about a root (sources for its history). */
+  contextSources: (root: string) =>
+    call<ContextSources>(`/api/context/sources/${encodeURIComponent(root)}`).then((r) => r.data),
+  contextEstimate: (root: string, sessions: string[], memory: string[]) =>
+    call<{ chars: number; tokens: number }>("/api/context/estimate", {
+      method: "POST", headers: MUTATE, body: JSON.stringify({ root, sessions, memory }) }).then((r) => r.data),
+  /** A run that reads the chosen sources and drafts the root's history (the person reviews it). */
+  learnContext: (root: string, sessions: string[], memory: string[]) =>
+    call<{ id: string; input: string; status: string }>("/api/context/learn", {
+      method: "POST", headers: MUTATE, body: JSON.stringify({ root, sessions, memory }) }).then((r) => r.data),
+  applyHistory: (root: string, section: string) =>
+    call<WorkspaceContext>(`/api/context/draft/${encodeURIComponent(root)}`, {
+      method: "POST", headers: MUTATE, body: JSON.stringify({ section }) })
+      .then((r) => { if (r.status === 422) throw msgError(r.data); return r.data; }),
+  discardHistory: (root: string) =>
+    call<WorkspaceContext>(`/api/context/draft/${encodeURIComponent(root)}`, {
+      method: "DELETE", headers: MUTATE }).then((r) => r.data),
   runs: () => call<{ id: string; input: string; status: string; flow: string }[]>("/api/runs").then((r) => r.data),
   move: (src: string, body: CopyItem & { to: string; new_name?: string | null; replace?: boolean;
     deps?: Record<string, string>; same_secrets?: boolean }) =>

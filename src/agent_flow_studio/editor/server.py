@@ -1271,7 +1271,51 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
             return {"studio": True, "sections": {}, "roots": {}}
         return {"studio": False, "file": str(ws.folder / context.CONTEXT_FILE) if ws.folder else None,
                 "sections": context.sections(ws), "roots": context.roots_state(ws),
-                "chars": len(context.context_text(ws, limit=10**9)), "limit": context.MAX_PROMPT}
+                "chars": len(context.context_text(ws, limit=10**9)), "limit": context.MAX_PROMPT,
+                "drafts": runner.drafts()}
+
+    # --- learning from past Claude Code sessions (see claude_sessions.py) -----------------------
+    def _learn_body(body: dict[str, Any]) -> tuple[str, list[str], list[str]]:
+        root, sessions, memory = body.get("root"), body.get("sessions") or [], body.get("memory") or []
+        if not isinstance(root, str) or not all(isinstance(x, list) for x in (sessions, memory)) \
+                or not all(isinstance(x, str) for x in [*sessions, *memory]):
+            raise HTTPException(400, "root: a root name; sessions, memory: lists of names")
+        return root, sessions[:200], memory[:200]
+
+    @app.get("/api/context/sources/{root}")
+    def context_sources(root: str) -> dict[str, Any]:
+        """The Claude Code sessions and memory notes about a root's folder."""
+        try:
+            return runner.sources(root)
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
+    @app.post("/api/context/estimate", dependencies=[Depends(csrf)])
+    def context_estimate(body: dict[str, Any]) -> dict[str, int]:
+        try:
+            return runner.estimate(*_learn_body(body))
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
+    @app.post("/api/context/learn", dependencies=[Depends(csrf)])
+    async def context_learn(body: dict[str, Any]) -> dict[str, Any]:
+        return _run_call(runner.learn_context, *_learn_body(body))
+
+    @app.post("/api/context/draft/{root}", dependencies=[Depends(csrf)])
+    def context_apply_draft(root: str, body: dict[str, Any]) -> dict[str, Any]:
+        """The person saves the reviewed history of a root (maybe edited)."""
+        try:
+            runner.apply_draft(root, str(body.get("section") or ""))
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+        except MsgError as e:
+            raise _ws_error(e) from e
+        return get_context()
+
+    @app.delete("/api/context/draft/{root}", dependencies=[Depends(csrf)])
+    def context_discard_draft(root: str) -> dict[str, Any]:
+        runner.discard_draft(root)
+        return get_context()
 
     @app.put("/api/context/{name}", dependencies=[Depends(csrf)])
     def set_context(name: str, body: dict[str, Any]) -> dict[str, Any]:
