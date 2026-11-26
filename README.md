@@ -159,6 +159,29 @@ sometimes several folders), like a Postman workspace. Choose it in the top bar (
   conversation history work as in the flow assistant. A new flow can be proposed short (agents
   with a description, gates, edges): the studio fills in graph execution, the start, a task with
   `{input}` and a prompt per agent, and gives every problem back at once.
+- **Human gates in graph mode**: the links out of a gate decide with `if: <gate>.decision == "approve"`
+  (also `"reject"` and `"answer"`). A reject with no matching link ends the run; **Answer and
+  continue** with no matching link asks again (it no longer ends the run with everything after
+  the gate skipped). An agent can read the person's words with `inputs: {feedback: {from:
+  <gate>.comment, required: false}}` (also `<gate>.decision`; empty until the gate was asked), so a
+  loop back to a planner can use what was answered or rejected.
+- **Resume a run**: a graph run that ended with an error (or was stopped) can be resumed from the
+  Run panel (**Resume**, also on a saved run opened from "Past runs", even after a restart). The
+  steps that finished well keep their work; the failed or interrupted step, and what depends on
+  it, run again in the same run folder (a failed attempt does not count for `max_runs`; human
+  approvals that depended on redone work are asked again). Each finished step records a
+  fingerprint of its definition and prompt: steps edited since they ran are shown and are repeated
+  unless you tick *keep the work of the edited steps*.
+- **Run from a step** (**Run from here** in a node's context menu, or the mode *From a step* in the
+  Run panel): goes on with a saved run from that step, whatever state the run ended in (even
+  done). The step and everything after it run again; the earlier steps keep their work (same run
+  folder and log). For the inputs of that step you choose: use the outputs the earlier steps saved,
+  or define them by hand (prefilled with the saved values). **Rename** a saved run with the ✎ in
+  "Past runs" (a name only; the folder and id do not change, `runs/<id>/run_meta.json`).
+- **Unused flow inputs**: an agent only receives the flow inputs it declares
+  (`inputs: {x: {from: input.x}}`) or that the `task` names (`{x}`). The Problems tab warns (⚠, the
+  flow still saves and runs) about a flow input nothing uses; the assistants fix it before they
+  propose or finish a flow.
 - **Assistant turns**: both assistants may take up to 60 model turns per message; while working the
   chat shows "turn n of 60". At the limit the chat says so (no error) and **Continue** goes on in
   the same session.

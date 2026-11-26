@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from ..builder.compile import FlowError, compile_flow, flow_section
 from ..builder.library import origin_status
 from ..builder.spec import FlowSpec
-from ..messages import Msg, MsgError, to_json
+from ..messages import Msg, MsgError, msg, to_json
 
 
 # --- structured errors (so the editor can highlight nodes) ----------------------------------------
@@ -97,8 +97,38 @@ def _check(raw: dict[str, Any], prompts: dict[str, str]) -> dict[str, Any]:
             cf = compile_flow(spec, Path(tmp), resolve_secrets=False, configure_artifacts=False)
     except FlowError as e:
         return {"ok": False, "errors": _structured(e, raw)}
-    return {"ok": True, "errors": [], "spec": spec, "flow_section": flow_section(spec),
+    return {"ok": True, "errors": [], "warnings": unused_inputs(spec, prompts), "spec": spec,
+            "flow_section": flow_section(spec),
             "allowed_tools": [t for t in cf.options.allowed_tools if t != "Agent"]}
+
+
+def unused_inputs(spec: FlowSpec, prompts: dict[str, str]) -> list[dict[str, Any]]:
+    """Warnings (the flow still runs): a typed flow input that nothing uses. In graph and
+    orchestrator mode an agent only gets the flow inputs it declares (`inputs: {x: {from:
+    input.x}}`) or that the `task` names (`{x}`), so an unused input never reaches a model."""
+    import json
+
+    if not spec.inputs:
+        return []
+    graph = json.dumps({"agents": {n: a.model_dump(mode="json", exclude={"description"})
+                                   for n, a in spec.agents.items()},
+                        "gates": {n: g.model_dump(mode="json") for n, g in spec.gates.items()},
+                        "edges": [e.model_dump(mode="json") for e in spec.edges]})
+    texts = [spec.task, spec.orchestrator.prompt or "", *prompts.values()]
+    out: list[dict[str, Any]] = []
+    for n, t in spec.inputs.items():
+        word = re.escape(n)
+        used = (re.search(rf"\binput\.{word}\b", graph)
+                or any(re.search(rf"\{{{word}\}}", x) for x in texts)
+                or any(o is not t and o.show_if and re.search(rf"\b{word}\b", o.show_if)
+                       for o in spec.inputs.values()))
+        if not used:
+            m = msg("validate.input_unused",
+                    "flow input `{name}` is not used: no agent has `inputs: {{{name}: {{from: "
+                    "input.{name}}}}}` and the task does not name it, so no agent receives it",
+                    name=n)
+            out.append(_entry(f"inputs.{n}", m, []))
+    return out
 
 
 def _public(result: dict[str, Any]) -> dict[str, Any]:

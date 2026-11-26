@@ -277,11 +277,108 @@ class GraphEngine:
             raise
         return self._outcome()
 
+    # --- resume after an error or a stop
+    def resume_plan(self, recorded: dict[str, str] | None = None,
+                    reuse_changed: bool = False, start_at: str | None = None) -> dict[str, Any]:
+        """What a resume would do: `reuse` (finished nodes whose work is kept), `redo` (the failed
+        or interrupted nodes, the ones changed since they ran unless `reuse_changed`, and
+        everything after them), `changed` (finished nodes whose definition or prompt is not the
+        one they ran with: `recorded` = node → fingerprint saved when it finished) and `gates`
+        (approvals that will be asked again because what they approved is redone).
+        `start_at`: "run from here": that node and everything after it run again, the rest keeps
+        its work (whatever the state of the run, even done)."""
+        if start_at is not None:
+            base, changed = {start_at}, []
+        else:
+            base = {n for n, st in self.state.items()
+                    if n in self.spec.agents and st in ("failed", "running")}
+            changed = sorted(n for n, fp in (recorded or {}).items()
+                             if n in self.spec.agents and self.state.get(n) == "done"
+                             and fp != self.compiled.fingerprint(n))
+        redo = set(base) | (set() if reuse_changed else set(changed))
+        reset: set[str] = set()
+        for n in redo:
+            reset |= forward_reach(self.spec, n, self.back)
+        unreached = {n for n in self.spec.agents if self.state[n] in ("waiting", "ready")}
+        reuse = sorted(n for n in self.spec.agents
+                       if self.state[n] == "done" and n not in reset)
+        return {"reuse": reuse,
+                "redo": sorted((reset & set(self.spec.agents)) | (base & set(self.spec.agents))),
+                "changed": changed, "unreached": sorted(unreached - reset),
+                "gates": sorted(g for g in self.spec.gates
+                                if g in reset and self.state[g] in ("done", "gate")
+                                and self.spec.gates[g].kind == "human")}
+
+    def prepare_resume(self, recorded: dict[str, str] | None = None,
+                       reuse_changed: bool = False, start_at: str | None = None) -> dict[str, Any]:
+        """Makes this (finished with an error, or stopped) run ready to go on: keeps the work of
+        the finished nodes whose result still holds and sets the rest to run again; then `run()`
+        starts from there. Returns the plan."""
+        plan = self.resume_plan(recorded, reuse_changed, start_at)
+        reset: set[str] = set()
+        redo_roots = ([start_at] if start_at is not None else
+                      [n for n in plan["redo"]
+                       if self.state[n] in ("failed", "running") or n in plan["changed"]])
+        for n in redo_roots:
+            reset |= forward_reach(self.spec, n, self.back)
+        for n in self.state:  # nodes that were ready but not started when it failed
+            if self.state[n] == "ready":
+                self.state[n] = "waiting"
+        self.ready.clear()
+        for n in sorted(reset):
+            if self.state[n] in ("failed", "running") and n in self.runs:
+                self.runs[n] = max(0, self.runs[n] - 1)  # the failed attempt does not count
+            self.state[n] = "waiting"
+            self.host.done_agents.discard(n)
+            self.reasons.pop(n, None)
+        self.pending_gates = [g for g in self.pending_gates if g["gate"] not in reset]
+        for j, e in enumerate(self.spec.edges):
+            if j not in self.back and e.from_ in reset:
+                self.decided.pop(j, None)
+        if start_at is not None:  # a gate it was waiting at is no longer waited for
+            for g in self.pending_gates:
+                if self.state.get(g["gate"]) == "gate":
+                    self.state[g["gate"]] = "done"
+            self.pending_gates = []
+        self.failure, self.stop_gate = None, None
+        self.mode = "full"
+        self.started = True
+        if start_at is not None:  # whatever came before: the chosen node starts now
+            self._make_ready(start_at)
+        for n in [*self.spec.agents, *self.spec.gates]:  # start what has all its inputs decided
+            if self.state[n] != "waiting":
+                continue
+            if n == self.spec.start and not self.fwd_in.get(n):
+                self._make_ready(n)
+            else:
+                self._check(n)
+        return plan
+
     async def resolve_gate(self, gate: str) -> None:
         """After a human decision (already in io `_gates.json`): follow the gate's edges."""
         self.pending_gates = [g for g in self.pending_gates if g["gate"] != gate]
         self.state[gate] = "done"
-        self._apply(gate, await self._evaluate(gate))
+        evals = await self._evaluate(gate)
+        decision = io_tool.scope(self.spec, self.run_id).get(gate, {}).get("decision")
+        if decision == "answer" and evals and not any(fired for _, fired, _, _ in evals):
+            # "answer and continue" matches no link out of the gate: asking again beats ending the
+            # run with everything after the gate skipped (a reject without a link does end it)
+            self._ask_again(gate)
+            return
+        self._apply(gate, evals)
+
+    def _ask_again(self, gate: str) -> None:
+        decision = "answer"
+        tos = ", ".join(self.spec.edges[i].to + (f" [{self.spec.edges[i].if_}]"
+                                                 if self.spec.edges[i].if_ else "")
+                        for i, e in enumerate(self.spec.edges) if e.from_ == gate)
+        g = self.spec.gates[gate]
+        info = {"gate": gate, "kind": g.kind, "label": g.label,
+                "reason": (f"The decision {decision!r} matches none of the links out of this gate "
+                           f"({tos}). Approve or reject, or add a link for that decision.")[:500]}
+        self.emit({"type": "gate", **info})
+        self.state[gate] = "gate"
+        self.pending_gates.append(info)
 
     def asked_agents(self) -> list[str]:
         """The agents of this run that can be asked something now (they ran in a session; an
@@ -518,7 +615,8 @@ class GraphEngine:
             if a.outputs:
                 self.emit({"type": "outputs", "agent": name,
                            "names": sorted(io_tool.outputs(self.run_id, name))})
-            self.emit({"type": "agent_done", "agent": name, "error": False})
+            self.emit({"type": "agent_done", "agent": name, "error": False,
+                       "fp": self.compiled.fingerprint(name)})
             evals = [] if self.mode == "agent" else await self._evaluate(name)
         except asyncio.CancelledError:
             raise
@@ -568,7 +666,8 @@ class GraphEngine:
             if a.outputs:
                 self.emit({"type": "outputs", "agent": name,
                            "names": sorted(io_tool.outputs(self.run_id, name))})
-            self.emit({"type": "agent_done", "agent": name, "error": False})
+            self.emit({"type": "agent_done", "agent": name, "error": False,
+                       "fp": self.compiled.fingerprint(name)})
             evals = [] if self.mode == "agent" else await self._evaluate(name)
         except asyncio.CancelledError:
             raise
@@ -645,7 +744,8 @@ class GraphEngine:
             if a.outputs:
                 self.emit({"type": "outputs", "agent": name,
                            "names": sorted(io_tool.outputs(self.run_id, name))})
-            self.emit({"type": "agent_done", "agent": name, "error": False})
+            self.emit({"type": "agent_done", "agent": name, "error": False,
+                       "fp": self.compiled.fingerprint(name)})
             evals = [] if self.mode == "agent" else await self._evaluate(name)
         except asyncio.CancelledError:
             raise

@@ -110,7 +110,7 @@ class RunBody(BaseModel):
     run_id: str | None = Field(default=None, max_length=40)  # typed flows (default: generated)
     inputs: dict[str, Any] = Field(default_factory=dict)  # typed flows; files {name, content_b64}
     given: dict[str, Any] = Field(default_factory=dict)  # agent mode: free inputs of the agent
-    mode: Literal["full", "step", "until", "agent"] = "full"
+    mode: Literal["full", "step", "until", "agent", "from"] = "full"  # from: an earlier run
     target: str | None = Field(default=None, max_length=40)
     instruction: str = Field(default="", max_length=20_000)
     # where inputs came from ("Fill from a run"): input -> {flow, run, agent, output}
@@ -128,6 +128,14 @@ class AskBody(BaseModel):
 
 class ContinueBody(BaseModel):
     how: Literal["step", "full"] = "step"
+
+
+class RunTitleBody(BaseModel):
+    title: str = Field(default="", max_length=200)
+
+
+class ResumeBody(BaseModel):
+    reuse_changed: bool = False  # keep the work of nodes edited since they ran
 
 
 class AllowPostBody(BaseModel):
@@ -882,6 +890,30 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     @app.post("/api/runs/{run_id}/continue", dependencies=[Depends(csrf)])
     async def continue_run(run_id: str, body: ContinueBody) -> dict[str, Any]:
         return _run_call(runner.continue_, run_id, body.how)
+
+    @app.get("/api/runs/{run_id}/resume-plan")
+    def resume_plan(run_id: str, reuse_changed: bool = False) -> dict[str, Any]:
+        """What resuming a run that ended with an error (or was stopped) would keep and repeat."""
+        try:
+            return runner.resume_plan(run_id, reuse_changed)
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+        except FlowError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.put("/api/runs/{run_input}/title", dependencies=[Depends(csrf)])
+    def rename_run(run_input: str, body: RunTitleBody) -> dict[str, Any]:
+        """A name for a saved run (its folder and id do not change)."""
+        try:
+            return {"input": run_input, "title": runner.rename(run_input, body.title)}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
+    @app.post("/api/runs/{run_id}/resume", dependencies=[Depends(csrf)])
+    async def resume_run(run_id: str, body: ResumeBody) -> dict[str, Any]:
+        return _run_call(runner.resume, run_id, body.reuse_changed)
 
     @app.post("/api/runs/{run_id}/decision", dependencies=[Depends(csrf)])
     async def decide(run_id: str, body: DecisionBody) -> dict[str, Any]:

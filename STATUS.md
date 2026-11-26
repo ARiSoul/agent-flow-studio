@@ -4,101 +4,73 @@ Hand-over file between machines/accounts. **When you start:** read this. **When 
 update "Current state" and "Next steps", add a line to the "Log" (date, machine/account in generic
 terms — no emails —, what was done) and commit + push.
 
-## Where we stopped (2026-11-25, home machine / account B)
-The commit after `dbd1c69` adds **history from past Claude Code sessions** (below). After you
-pull: `cd editor; npm run build; cd ..` and restart the editor (new routes under
-`/api/context/`); no new dependencies.
-
-**History from past Claude Code sessions (new, 2026-11-25, home machine)**
-- Board → Context → **Learn** on a root: lists the Claude Code sessions and memory notes about the
-  root's folder on this machine (`claude_sessions.py`, SDK `list_sessions` /
-  `get_session_messages`); the studio's own runs and other programs' sessions are set apart (tag
-  `agent-flow-studio` added to new studio sessions by `mark_ours`; older ones known by their first
-  prompt or `entrypoint`). Size estimate before starting.
-- One `history_reader` per source (no tools; text only, reminders stripped, secrets masked), then
-  `history_keeper` (read-only tools on the root) checks the notes against the code and drafts the
-  `<root>.history` section. The person edits and saves or discards the draft; nothing is saved by
-  the run. Learned sources are kept per machine in `runs/@<ws>/.context/learned.json`.
-- Agents get the history after all root sections (`MAX_PROMPT` now 16 000, history ≤ 8 000).
-- Checked with fake sessions and a fake model (tests + browser). **Not tried with the real model
-  or real sessions yet.
-
-**Then (2026-11-26, home machine)**
-- **Model on agent cards**: each agent card (all three styles) shows the model it runs with, under
-  its name: its own (accent colour), else the flow's, else the studio default
-  (`/api/catalog` → `default_model` = `AFS_MODEL`; "default model" when unset = the Claude CLI's).
-  Action and subflow nodes show none. The tooltip says where the model comes from.
-- **Model in the node context menu**: a row "flow · sonnet · opus · haiku · …"; "…" asks for a
-  full model ID. "flow" removes the agent's own model.
-- **Workspace settings fit a narrow side panel**: the roots table has a fixed layout, and long
-  paths in the "stored in" box wrap (the panel scrolled sideways before).
-
-## Earlier stop (2026-11-25, work machine / account A)
-Commit `dbd1c69` holds everything below.
+## Where we stopped (2026-11-26, work machine / account A)
+The commit after `eeab0e5` holds this session (pushed). It builds on the home machine's two commits
+(history from past Claude Code sessions, the model on agent cards).
 
 **After you pull on the other machine**
 1. **Stop the editor first**, then `.\.venv\Scripts\python -m pip install -e ".[dev,web]"` (a
-   running `agent-flow-studio-editor.exe` is locked on Windows: pip stops halfway and the package
-   disappears from the venv; fix: delete `.venv/Lib/site-packages/~gent_flow_studio-*` and install
-   again). No new dependencies in this session.
-2. `cd editor; npm run build; cd ..` and **restart** `agent-flow-studio-editor`: the server has
-   new routes (`POST /api/assist/workspace`); with an old server the editor says "restart".
-3. `.\.venv\Scripts\pytest` (all should pass; the 11 video/ffmpeg tests are skipped without the
-   `media` extra).
+   running `agent-flow-studio-editor.exe` is locked on Windows: pip stops halfway; if the package
+   disappears from the venv, delete `.venv/Lib/site-packages/~gent_flow_studio-*` and install
+   again). No new dependencies.
+2. `cd editor; npm run build; cd ..` and **restart** `agent-flow-studio-editor` (new routes:
+   `/api/runs/<id>/resume-plan`, `/resume`, `/title`, run mode `from`).
+3. `.\.venv\Scripts\pytest` — all pass. `tests/test_learn_sessions.py` **skips** 5 tests when the
+   Windows temp path is too long (long paths disabled: the fake session file goes over 260
+   characters); with a short `--basetemp` (e.g. `D:\ptmp`) all 10 pass. Not a studio limit.
 
-**What this session added (2026-11-24 → 25)**
-- **Workspace assistant** (Board → side panel → **Assistant** tab; `editor/ws_assistant.py` +
-  `ws_assistant.md`, `editor/src/WsProposals.tsx`). It reads the workspace (settings, context
-  sections, flows, connectors, templates, library), answers questions citing the context, and only
-  **proposes** — workspace settings, a new flow (from a template or a short spec that the studio
-  fills in), a connector (read-only, no secrets). Each proposal is a card the person applies
-  (PUT workspace / create + save the flow in the workspace / PUT connector with location
-  `workspace`); secrets, sign-in and write access stay in the Connectors window. Saved commands
-  and history (key `@workspace`) as in the flow assistant.
-- **Both assistants**: 60 model turns per message (was 30 / 40), "turn n of 60" while working, and
-  at the limit no error: a message with **Continue** (same session). Shared event loop
-  `assistant.stream`. `propose_flow` gives all problems at once (JSON with where each one is).
-- **Board**: the top bar shows only what works there (⋯ / Flow editor / New / Connectors); the
-  Connectors and library windows now open over the Board (before, only in the flow view).
-- **Workspace settings**: names with spaces or "-" become "_" (with a message), invalid or
-  repeated names are refused, order is kept; a root renamed with the same folder keeps its
-  explored context (`context.follow_renames`).
-- **Connectors in a workspace**: a new connector defaults to location "workspace", and the label
-  says "workspace" (it said "extension workspace").
-- **Tests**: the real-browser tests use `ThreadingHTTPServer` (the single-threaded one could hang
-  for ever on Edge's idle sockets); the whole suite takes about 2 min.
+**What this session added (2026-11-26)**
+- **Resume a run** that ended with an error or was stopped (graph mode): a Run panel card lists
+  what is kept and what runs again (the failed/interrupted step and what depends on it); works on a
+  run opened from "Past runs" after a restart. Each finished step records a fingerprint (`fp` in
+  `agent_done`): steps edited since they ran are flagged and repeated, unless you tick "keep".
+  A failed attempt does not count for `max_runs`.
+- **Run from here** (node context menu, or mode *From a step* in the Run panel): continue a saved
+  run, even a done one, from any step; that step and everything after it run again, the earlier
+  steps keep their work (same run folder and log). The step's inputs: use what the earlier steps
+  saved (shown as a short list) or define them by hand (prefilled). Waiting gates are dropped.
+- **Rename runs**: ✎ in "Past runs" (a name only, `runs/<id>/run_meta.json`; folder and id stay).
+- **Human gates (graph mode)**: *Answer and continue* with no matching link now asks the gate
+  again with a reason (it used to end the run `done` with everything after the gate skipped); a
+  reject with no link still ends the run. An agent input can be `from: <human gate>.comment` (or
+  `.decision`): empty until asked, never "missing" — so a loop back to a planner gets the answers.
+- **Unused flow inputs**: the validation returns **warnings** (⚠ in the Problems tab, not
+  blocking) for a flow input that no agent declares (`inputs: {x: {from: input.x}}`) and the task
+  does not name; `propose_flow` refuses such a flow; both assistant prompts state the rule.
+- **Run panel layout**: the setup area scrolls on its own (max 60% of the panel) with the run id
+  and **Run** button always on top, so long agent-input forms no longer cover the log.
 
-**Checked how**: unit/API tests, plus the browser with **simulated** assistant replies (cards
-applied in a temporary workspace, then removed; the limit message and Continue). **Not tried yet
-with the real model**: the workspace assistant, the turn counter and Continue.
+**How it was checked**: unit/API tests (`tests/test_resume.py`, `tests/test_gate_answer.py`,
+warnings in `tests/test_assistant.py` / `tests/test_ws_assistant.py`) and the browser on seeded
+saved runs (resume card, run-from form, rename). **Not tried with the real model yet**: resume,
+run from here, the gate that asks again, the `feedback` loop.
 
-**Local only (work machine, outside git)**: a studio workspace with the two local ticket flows
-copied into it (the originals are still in `flows/`); the local extension now uses the core's
-draft marker. The website connector's session expires after a few days: sign in again
-(Connectors → Sign in) before a run. Details in `CLAUDE.local.md` there.
+**Found with real use (work machine, local flows outside git)**: a PBI-implementation flow made
+by the workspace assistant had (a) a flow input no agent received, (b) a gate whose links did not
+handle *answer*, (c) a planner prompt using an undeclared artifact — all fixed in that local flow
+and, for (a) and (b), in the studio. The Azure DevOps connector there showed the next bug below.
 
-**Idea discussed, not started**: a flow that reads Azure DevOps boards/PBIs and follows each item
-through stages (analysis → refinement → approved → development ⇄ tests ⇄ review → final approval).
-Possible today as one flow per stage with the item id as input (the `azure_devops` connector with
-named read actions, human gates, a decision loop with `max_runs`, a final write with approval).
-Missing: a **board of items** in the studio (cards from a connector action, columns from a field,
-a flow per column) and state per item across runs — see backlog item 11.
+**Known bug, not fixed yet**: connector `allowed_paths` are plain prefixes — a `*` is taken
+literally (so `/<project>/_apis/wit/*` allows nothing), and "Test connection" fails with "path not
+allowed" when the type's test path (Azure DevOps: `/_apis/projects`) is not in the list. The studio
+should refuse `*` (or treat it as one path segment) and say which path the test used. Backlog 12.
 
-**Next suggested task**: on a real repository with past Claude Code sessions, open it as a
-workspace and use Board -> Context -> **Learn** with the real model (a few sessions first; read the
-draft for private data before saving). Then try the workspace assistant with the real model
-(e.g. "propose a flow for …" in a workspace); then item 1 of the backlog (sign in on the website connector and run the
-copied triage flow end to end from the workspace).
+**Next suggested task**: on the work machine, run the PBI flow with the real model and use
+**Run from here** / **Resume** on it; then fix backlog 12. Still open from the home machine: try
+Board → Context → **Learn** and the workspace assistant with the real model.
 
 **Earlier hand-overs (summary; details in the Log)**: 2026-11-20 agent library, assistant
 commands/history, connector actions and website connectors, local/extension/public locations;
 second machine: run links on the canvas, server messages in the UI language, action recording,
 decision/stop-message nodes, `previous.*`; 2026-11-22 studio workspaces (roots, vars,
 environments, Board, hand-off, subflows, Copy to…, workspace context); 2026-11-24 images and
-videos for agents.
+videos for agents; 2026-11-24/25 workspace assistant, 60 assistant turns with Continue, Board top
+bar fixes, workspace name rules, workspace connectors; 2026-11-25/26 (home machine) history from
+past Claude Code sessions (Board → Context → Learn, draft saved by the person), the model on agent
+cards and in the node context menu.
 
 ## Current state
-Works and is tested (`pytest`: core 563 tests without extensions — 552 + 11 that need the `media` extra; `ruff` clean; `npm run build`):
+Works and is tested (`pytest`: core 583 tests without extensions (567 pass, 16 skip) — some skip without the `media` extra or with long temp paths; `ruff` clean; `npm run build`):
 - **Repository in English**: code, messages, prompts, flows, tests and docs. Only the chat with the
   user is in Portuguese (rule in `CLAUDE.md`).
 - **Multilingual editor UI** (`pt`, `en`, `es`): selector in the toolbar, saved in the browser
@@ -134,6 +106,9 @@ Works and is tested (`pytest`: core 563 tests without extensions — 552 + 11 th
   from the order of the agents and gates); outputs view;
   artifacts; gates with a decision; live write approvals; a card with the `claude` → `/login`
   steps when the CLI is not signed in.
+- **Resume / run from a step / rename runs** (graph mode): Resume a run that failed or was stopped, Run from here (any step of a saved run, even done; inputs from the saved outputs or by hand), a name per saved run.
+- **Gates**: *answer* with no matching link asks again; agents can read `<gate>.comment|decision`.
+- **Validation warnings**: flow inputs that no agent receives (⚠, not blocking).
 - **Workspace assistant** in the Board (Assistant tab): reads the workspace and proposes settings,
   new flows and connectors as cards the person applies; never writes.
 - **Assistant limits**: 60 turns per message, turn counter, Continue at the limit (both assistants).
@@ -225,10 +200,15 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
    state per item; first step: an `azure_devops` connector with named read actions and one flow
    per stage. Check whether HTTP read actions can use POST (WIQL) or stay on saved queries (GET).
 
+12. [ ] Connector `allowed_paths`: refuse `*` (or treat it as one path segment) and, when "Test
+   connection" is refused, name the test path (Azure DevOps tests `/_apis/projects`).
+
+13. [ ] Resume / run from here for orchestrator-mode runs (today graph mode only).
+
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
 · editor polish · context menu · agent library · assistant commands/history · connector actions
 and website connectors · local by default / extensions / public · studio workspaces · workspace
-assistant (see the Log).
+assistant · resume / run from here (see the Log).
 
 ## Getting started on a new machine
 ```powershell
@@ -449,3 +429,8 @@ start the editor or the CLI (the studio does not read `.env`).
   history keeper, a draft the person reviews, `<root>.history` in context.md.
 - 2026-11-26 · home machine (account B) · Agent cards show their model (own / flow / studio
   default); model choice in the node context menu; workspace settings fit a narrow side panel.
+- 2026-11-26 · work machine (account A) · Unused flow inputs: validation warning, assistants fixed.
+- 2026-11-26 · work machine (account A) · Resume a failed or stopped graph run keeping the finished work.
+- 2026-11-26 · work machine (account A) · Gate answered with no matching link asks again; agents can read a gate's comment.
+- 2026-11-26 · work machine (account A) · Run from here (any step of a saved run) and renaming runs.
+- 2026-11-26 · work machine (account A) · Run panel layout for long input forms; STATUS hand-over rewritten.

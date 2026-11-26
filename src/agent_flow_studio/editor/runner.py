@@ -52,7 +52,7 @@ from ..trace import error_text, tool_detail
 from . import uploads
 
 Status = Literal["running", "gate", "paused", "done", "error", "stopped"]
-Mode = Literal["full", "step", "until", "agent"]
+Mode = Literal["full", "step", "until", "agent", "from"]
 STEP_HINT = ("\n\n(Step-by-step test mode: delegate to one agent at a time. After each agent, "
              "finish with a short summary and wait for the instruction to continue.)")
 CONTINUE = ("Continue the flow from where you stopped: delegate to the next agent, following the "
@@ -306,6 +306,8 @@ class Runner:
         free inputs of the target agent in agent mode."""
         if self.active():
             raise RunError(409, "a run is already in progress; wait or stop it")
+        if mode == "from":  # an earlier run of this id, from `target` on
+            return self.run_from((run_id or run_input or "").strip(), target or "", given or {})
         ws, env = workspaces.current(), workspaces.current_env()
         base = self.flows_base()
         compiled = load_flow(flow, base=base)  # validates flow and input before starting
@@ -383,6 +385,115 @@ class Runner:
             self._spawn(run, self._drive_graph(run))
             return run
         self._launch(run, CONTINUE + (STEP_HINT if how == "step" else ""), run.session_id)
+        return run
+
+    def run_from(self, run_input: str, node: str, given: dict[str, Any] | None = None) -> Run:
+        """"Run from here": goes on with a saved run (whatever state it ended in, even done) from
+        `node`: that node and everything after it run again, the earlier steps keep their work.
+        `given`: values for the node's inputs that replace what its sources saved (the rest keep
+        coming from the saved outputs). Same run folder; the log gets a `resume` event."""
+        if not RUN_ID.fullmatch(run_input or ""):
+            raise RunError(400, "give the id of an earlier run of this flow to start from")
+        try:
+            run = self.open_past(run_input)
+        except RunError as e:
+            if e.status == 404:
+                raise RunError(404, "there is no earlier run with this id to start from") from e
+            raise
+        if run.status == "running":
+            raise RunError(409, "this run is still running")
+        if self.active():
+            raise RunError(409, "a run is already in progress")
+        if run.engine is None:
+            raise RunError(409, "only graph runs can start from a step")
+        if node not in run.engine.state:
+            raise RunError(400, f"{node!r} is not a step of the flow")
+        spec = run.engine.spec
+        if given and node in spec.agents:
+            clean = check_given(spec, run.input, node, given)
+        else:
+            clean = {}
+        engine = self._fresh_engine(run)
+        io_tool.clear_given(run.input, list(spec.agents))  # the real outputs, but for `given`
+        if clean:
+            io_tool.save_given(run.input, node, clean)
+        with self._in(run):
+            plan = engine.prepare_resume(_recorded_fingerprints(run.events), True, start_at=node)
+        run.engine, run.mode, run.status, run.gate = engine, "full", "running", None
+        self._emit(run, {"type": "resume", "from": node, "reuse": plan["reuse"],
+                         "redo": plan["redo"], "changed": [], "given": sorted(clean)})
+        self._spawn(run, self._drive_graph(run))
+        return run
+
+    def rename(self, run_input: str, title: str) -> str:
+        """A name for a saved run (the folder and id stay): shown in the list of past runs."""
+        title = " ".join(title.split())[:80]
+        path = safe_artifact_path(settings.runs_dir, run_input, "run_meta.json")
+        if not _last_run_events(path.parent / "events.jsonl"):
+            raise RunError(404, "no saved run in this folder")
+        meta: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                meta = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                meta = {}
+        if title:
+            meta["title"] = title
+        else:
+            meta.pop("title", None)
+        path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return title
+
+    @staticmethod
+    def _title_of(folder: Path) -> str:
+        try:
+            return str(json.loads((folder / "run_meta.json").read_text(encoding="utf-8"))
+                       .get("title") or "")
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    def _resumable(self, run_id: str) -> Run:
+        run = self.get(run_id)
+        if run.status not in ("error", "stopped"):
+            raise RunError(409, "only a run that ended with an error or was stopped can be resumed")
+        if run.engine is None:
+            raise RunError(409, "only graph runs can be resumed")
+        if run.mode in ("agent", "until"):
+            raise RunError(409, "a single-agent or up-to-agent test cannot be resumed")
+        if self.active():
+            raise RunError(409, "a run is already in progress")
+        return run
+
+    def _fresh_engine(self, run: Run) -> GraphEngine:
+        """The engine of this run again, with the flow as it is now (what was edited since the
+        run stopped applies) and the state rebuilt from the saved events."""
+        with self._in(run):
+            graph = load_graph(run.flow, base=run.base)
+        graph.policy.approver = self._approver(run)
+        engine = GraphEngine(graph, run.input, host=run, emit=lambda ev: self._emit(run, ev),
+                             query_fn=self._query, route_fn=self._route, mode="full")
+        _restore_engine(engine, run.events, run)
+        return engine
+
+    def resume_plan(self, run_id: str, reuse_changed: bool = False) -> dict[str, Any]:
+        """What resuming would reuse and repeat (nothing runs, nothing changes)."""
+        run = self._resumable(run_id)
+        engine = self._fresh_engine(run)
+        return engine.resume_plan(_recorded_fingerprints(run.events), reuse_changed)
+
+    def resume(self, run_id: str, reuse_changed: bool = False) -> Run:
+        """Goes on with a run that ended with an error or was stopped, in the same run folder:
+        the finished nodes whose result still holds keep their work, the failed or interrupted
+        ones (and what depends on them, and the ones edited since unless `reuse_changed`) run
+        again."""
+        run = self._resumable(run_id)
+        engine = self._fresh_engine(run)
+        with self._in(run):
+            plan = engine.prepare_resume(_recorded_fingerprints(run.events), reuse_changed)
+        run.engine, run.mode, run.status, run.gate = engine, "full", "running", None
+        self._emit(run, {"type": "resume", "reuse": plan["reuse"], "redo": plan["redo"],
+                         "changed": plan["changed"], "reuse_changed": reuse_changed})
+        self._spawn(run, self._drive_graph(run))
         return run
 
     def decide(self, run_id: str, decision: Decision, comment: str) -> Run:
@@ -492,6 +603,7 @@ class Runner:
                 "cost": round(sum(float(e.get("cost") or 0) for e in events
                                   if e.get("type") == "result"), 4),
                 "open": any(r.id == start.get("run") for r in self.runs.values()),
+                "title": self._title_of(d),
             })
         out.sort(key=lambda x: -(x["started"] or 0))
         return out[:limit]
@@ -1159,6 +1271,18 @@ def _last_run_events(path: Path) -> list[dict[str, Any]]:
     return [e for e in events[starts[-1]:] if e.get("run") == last.get("run")]
 
 
+def _recorded_fingerprints(events: list[dict[str, Any]]) -> dict[str, str]:
+    """node → the fingerprint saved when it last finished well (older runs have none)."""
+    out: dict[str, str] = {}
+    for e in events:
+        if e.get("type") == "agent_done" and e.get("agent") and not e.get("sub"):
+            if e.get("error"):
+                out.pop(str(e["agent"]), None)
+            elif e.get("fp"):
+                out[str(e["agent"])] = str(e["fp"])
+    return out
+
+
 def _restore_engine(engine: GraphEngine, events: list[dict[str, Any]], run: Run) -> None:
     """The state of a graph run again, from its events: done/skipped/failed nodes, the decided
     edges, the gate it waits at, the agents' sessions (for "ask for more")."""
@@ -1182,6 +1306,19 @@ def _restore_engine(engine: GraphEngine, events: list[dict[str, Any]], run: Run)
                       and k not in engine.back), None)
             if i is not None:
                 engine.decided[i] = bool(e.get("fired"))
+        elif t == "loop":  # the nodes of a loop went back to waiting
+            part = {str(n) for n in e.get("nodes") or []}
+            for n in part & set(engine.state):
+                engine.state[n] = "waiting"
+            for j, ed in enumerate(spec.edges):
+                if j not in engine.back and ed.from_ in part and ed.to in part:
+                    engine.decided.pop(j, None)
+        elif t == "resume":  # an earlier resume reset these nodes
+            for n in set(e.get("redo") or []) & set(engine.state):
+                engine.state[n] = "waiting"
+            for j, ed in enumerate(spec.edges):
+                if j not in engine.back and ed.from_ in set(e.get("redo") or []):
+                    engine.decided.pop(j, None)
         elif t == "result" and e.get("agent") and e.get("session_id"):
             engine.sessions[str(e["agent"])] = str(e["session_id"])
     if run.status == "gate" and run.gate and run.gate.get("kind") == "human":
@@ -1195,7 +1332,7 @@ def list_artifacts(run_input: str) -> list[dict[str, Any]]:
     if not base.is_dir():
         return []
     return [{"name": p.name, "size": p.stat().st_size} for p in sorted(base.iterdir())
-            if p.is_file() and p.suffix in (".json", ".md", ".jsonl")]
+            if p.is_file() and p.suffix in (".json", ".md", ".jsonl") and p.name != "run_meta.json"]
 
 
 def read_artifact_text(run_input: str, name: str, limit: int = 200_000) -> str:

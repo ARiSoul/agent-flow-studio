@@ -276,3 +276,19 @@ def test_action_nodes_and_connectors(draft: Draft, tmp_path, monkeypatch):
     assert "connections.http_get" not in draft.spec["agents"]["triage"].get("tools", [])
     call(draft, "set_agent", name="triage", connections=["site", "api"])
     assert "connections.http_get" in draft.spec["agents"]["triage"]["tools"]
+
+
+def test_unused_flow_input_is_a_warning_not_an_error():
+    from agent_flow_studio.editor.validation import _validate
+    spec = {"version": 1, "name": "x", "title": "X", "execution": "graph", "start": "reader",
+            "task": "Read.", "inputs": {"work_item": {"type": "text"}, "other": {"type": "text"}},
+            "agents": {"reader": {"description": "Reads.", "prompt": "Read.",
+                                  "inputs": {"other": {"from": "input.other"}},
+                                  "outputs": {"item": {"type": "text"}}}}}
+    r = _validate(spec, {})
+    assert r["ok"] and [w["loc"] for w in r["warnings"]] == ["inputs.work_item"]
+    assert r["warnings"][0]["code"] == "validate.input_unused"
+    spec["task"] = "Read {work_item}."  # named in the task: it reaches the agents
+    assert _validate(spec, {})["warnings"] == []
+    d = Draft(spec | {"task": "Read."}, {})
+    assert "WARNING" in call(d, "set_agent", name="reader", description="Reads.")[1]

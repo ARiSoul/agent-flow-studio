@@ -294,6 +294,11 @@ class Proposals:
                                        **({"filled_in": filled} if filled else {}),
                                        "hint": "fix every problem listed here in one call"},
                                       ensure_ascii=False))
+            if r.get("warnings"):  # e.g. a flow input no agent receives: fix it before proposing
+                return err(json.dumps({"warnings": _problems(r["warnings"]),
+                                       "hint": "fix these in one call: a flow input must reach "
+                                               "an agent (inputs: {x: {from: input.x}})"},
+                                      ensure_ascii=False))
             data = spec_to_data(r["spec"])
             p.add("flow", name, {"title": title, "spec": data, "prompts": prompts,
                                  "agents": sorted(data.get("agents") or {}),

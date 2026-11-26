@@ -589,7 +589,7 @@ function Editor() {
 
   // ---- node operations (context menu and shortcuts)
   const showProps = (s: Selection) => { setSel(s); setRight("props"); };
-  const requestRun = (mode: "agent" | "until", target: string) => {
+  const requestRun = (mode: "agent" | "until" | "from", target: string) => {
     setRunReq({ mode, target, nonce: Date.now() });
     setRight("run");
   };
@@ -690,6 +690,7 @@ function Editor() {
     if (a) items.push(
       { label: t("insp.testAgent"), title: t("insp.testAgentTitle"), onSelect: () => requestRun("agent", id) },
       { label: t("insp.runUntil"), title: t("insp.runUntilTitle"), onSelect: () => requestRun("until", id) },
+      { label: t("insp.runFrom"), title: t("insp.runFromTitle"), onSelect: () => requestRun("from", id) },
       { kind: "sep" },
       { label: t("menu.rename"), hint: "F2", onSelect: () => renameDialog(id) },
       { label: t("menu.setStart"), disabled: isStart, onSelect: () => update((d) => { d.spec.start = id; }) },
@@ -873,6 +874,7 @@ function Editor() {
   if (!catalog) return <div className="loading">{t("app.loading")}</div>;
   const currentFlow = flows.find((f) => f.name === current);
   const errors = val?.errors ?? [];
+  const warnings = val?.warnings ?? [];
   // windows over the page: in the flow editor and in the Board alike
   const windows = <>
     {showLibrary && <LibraryManager library={library} locations={catalog.locations ?? ["local"]}
@@ -1062,17 +1064,23 @@ function Editor() {
 
       <footer className="bottom">
         <div className="tabs">
-          <button className={tab === "problems" ? "on" : ""} onClick={() => setTab("problems")}>{t("bottom.problems", { n: errors.length })}</button>
+          <button className={tab === "problems" ? "on" : ""} onClick={() => setTab("problems")}>{t("bottom.problems", { n: errors.length })}{warnings.length ? ` · ⚠ ${warnings.length}` : ""}</button>
           <button className={tab === "flow" ? "on" : ""} onClick={() => setTab("flow")}>{t("bottom.flow")}</button>
           {val?.allowed_tools && <span className="muted small">{t("bottom.allowedTools", { n: val.allowed_tools.length })}</span>}
         </div>
         <div className="tab-body">
-          {tab === "problems" && (errors.length === 0
+          {tab === "problems" && (errors.length === 0 && warnings.length === 0
             ? <p className="muted">{t("bottom.noProblems")} <code>agent-flow-studio-flows validate</code>.</p>
-            : <ul className="problems">{errors.map((e, i) => (
-              <li key={i} onClick={() => e.nodes[0] && setSel({ kind: "node", id: e.nodes[0] })} className={e.nodes.length ? "link" : ""}>
-                {e.loc && <code>{e.loc}</code>} {localizeServer(e, e.msg, lang)}
-              </li>))}</ul>)}
+            : <ul className="problems">
+              {errors.map((e, i) => (
+                <li key={i} onClick={() => e.nodes[0] && setSel({ kind: "node", id: e.nodes[0] })} className={e.nodes.length ? "link" : ""}>
+                  {e.loc && <code>{e.loc}</code>} {localizeServer(e, e.msg, lang)}
+                </li>))}
+              {warnings.map((e, i) => (
+                <li key={`w${i}`} className="warn-text">
+                  ⚠ {e.loc && <code>{e.loc}</code>} {localizeServer(e, e.msg, lang)}
+                </li>))}
+            </ul>)}
           {tab === "flow" && <pre className="mono">{val?.flow_section ?? t("bottom.flowPending")}</pre>}
         </div>
       </footer>

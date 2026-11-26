@@ -421,6 +421,8 @@ class FlowSpec(_Strict):
         root, name = ref.split(".", 1)
         if root == "input":
             return self.flow_inputs().get(name)
+        if root in self.gates:  # what the person decided or wrote at a human gate
+            return IOType(type="text")
         return self.agents[root].outputs.get(name) if root in self.agents else None
 
     def source_type(self, ref: str) -> str | None:
@@ -509,6 +511,14 @@ class FlowSpec(_Strict):
                                           "agent {agent}, input {name}: flow input {source} does not exist",
                                           agent=repr(an), name=repr(n), source=repr(src)))
                         continue
+                elif root in self.gates:  # a human gate's decision or comment (empty until asked)
+                    if self.gates[root].kind != "human" or src not in ("decision", "comment"):
+                        errors.append(msg("spec.from_gate",
+                                          "agent {agent}, input {name}: from a gate only "
+                                          "<human gate>.decision or <human gate>.comment, not "
+                                          "{source}", agent=repr(an), name=repr(n),
+                                          source=repr(i.from_)))
+                    continue
                 elif root not in self.agents:
                     errors.append(msg("spec.from_no_agent",
                                       "agent {agent}, input {name}: agent {source} does not exist",

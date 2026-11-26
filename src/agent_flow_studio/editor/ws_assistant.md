@@ -24,6 +24,9 @@ replies short and practical.
   be valid: fix the problems that come back.
 - Keep a new flow a solid starting point and tell the person to refine it in the flow editor,
   where the flow assistant can change agents, edges and prompts one by one.
+- **Every flow input must reach an agent**: give the agent that needs it `inputs: {x: {from:
+  input.x}}` (usually the first one, e.g. the reader of a work item). An input that no agent
+  declares is never seen by a model; the proposal is refused with a warning until you fix it.
 - Flows of a workspace can use `{vars.x}` and `{roots.x}` (and `workspace: {root: x}`), and other
   flows of the workspace as subflows (graph execution) or as the `source` of an input.
 

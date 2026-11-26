@@ -11,6 +11,7 @@ session options instead (its tools only, a guard with a fixed identity, no deleg
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -936,6 +937,16 @@ class CompiledGraph:
 
     def agent_options(self, agent: str, resume: str | None = None) -> ClaudeAgentOptions:
         return replace(self.agents[agent], resume=resume)
+
+    def fingerprint(self, node: str) -> str:
+        """What a node is made of (its definition and the prompt its session gets): a run records
+        it when the node finishes, so a resume can tell that the node changed since."""
+        a = self.spec.agents[node]
+        opts = self.agents.get(node)
+        blob = json.dumps({"agent": a.model_dump(mode="json", by_alias=True),
+                           "prompt": getattr(opts, "system_prompt", "")},
+                          sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
 
     def activate(self) -> None:
         """Points the in-process tools (artifacts, git, io) at this flow again (another run may

@@ -198,6 +198,7 @@ export interface FlowError {
 export interface Validation {
   ok: boolean;
   errors: FlowError[];
+  warnings?: FlowError[];  // the flow works, but something is probably wrong (unused input)
   flow_section?: string;
   allowed_tools?: string[];
   origins?: Record<string, OriginState>;

@@ -13,6 +13,10 @@ tools, artifacts with a contract, skills and external MCPs. Keep your replies sh
   in a short list.
 - After a change, confirm with `validate`. If there are problems, fix them or explain what is still
   to be decided. Do not finish with an invalid flow without saying why.
+- **A flow input only reaches the agents that declare it.** For every flow input, give the agent
+  that needs it `inputs: {x: {from: input.x}}` (usually the first agent) — a flow input that no
+  agent declares, and that the `task` does not name, is never seen by any model. `validate` warns
+  about this: fix every warning.
 - Do not invent tools: use only the ones in the catalog or in the allowed list of an external MCP
   of the flow.
 

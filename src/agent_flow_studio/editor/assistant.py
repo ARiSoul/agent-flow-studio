@@ -148,14 +148,15 @@ class Draft:
 
     def validation(self) -> dict[str, Any]:
         r = _validate(self.spec, self.prompts)
-        return {"ok": r["ok"], "errors": r["errors"], "flow_section": r.get("flow_section"),
-                "allowed_tools": r.get("allowed_tools")}
+        return {"ok": r["ok"], "errors": r["errors"], "warnings": r.get("warnings", []),
+                "flow_section": r.get("flow_section"), "allowed_tools": r.get("allowed_tools")}
 
     def _summary(self, what: str) -> dict:
         self.changed = True
         v = self.validation()
         state = "flow valid" if v["ok"] else "problems: " + "; ".join(e["msg"] for e in v["errors"])
-        return ok(f"{what}. State: {state}")
+        warn = "".join(f" WARNING: {w['msg']}." for w in v["warnings"])
+        return ok(f"{what}. State: {state}.{warn}")
 
     def _nodes(self) -> set[str]:
         return set(self.spec.get("agents") or {}) | set(self.spec.get("gates") or {})
@@ -172,7 +173,8 @@ class Draft:
         async def view_flow(_: dict) -> dict:
             v = d.validation()
             return ok({"flow": d.spec, "prompt_files": sorted(d.prompts),
-                       "valid": v["ok"], "problems": [e["msg"] for e in v["errors"]]})
+                       "valid": v["ok"], "problems": [e["msg"] for e in v["errors"]],
+                       "warnings": [w["msg"] for w in v["warnings"]]})
 
         @tool("view_catalog", "Built-in tools, contracts (with fields) and available models.",
               _schema({}))
@@ -551,7 +553,8 @@ class Draft:
               _schema({}))
         async def validate(_: dict) -> dict:
             v = d.validation()
-            return ok({"valid": v["ok"], "problems": [e["msg"] for e in v["errors"]]})
+            return ok({"valid": v["ok"], "problems": [e["msg"] for e in v["errors"]],
+                       "warnings": [w["msg"] for w in v["warnings"]]})
 
         return [view_flow, view_catalog, view_prompt, update_flow, set_agent, set_gate,
                 add_edge, remove_edge, rename_node, remove_node, set_orchestrator_prompt,

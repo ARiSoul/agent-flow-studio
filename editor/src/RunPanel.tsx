@@ -21,8 +21,10 @@ export type Trace = { nodes: Record<string, NodeRun>; edges: Record<string, Edge
 export const edgeKey = (from: string, to: string) => `${from}>${to}`;
 type Ev = { i: number; type: string; [k: string]: unknown };
 type RunInfo = { id: string; status: string; gate: { gate: string; kind: string; label: string; reason: string } | null; cost: number; input: string; mode?: string; target?: string | null;
-  workspace?: string; environment?: string | null };
-export type RunMode = "full" | "step" | "until" | "agent";
+  workspace?: string; environment?: string | null; execution?: string };
+/** What resuming a run that ended with an error would keep and repeat (GET /api/runs/<id>/resume-plan). */
+type ResumePlan = { reuse: string[]; redo: string[]; changed: string[]; unreached: string[]; gates: string[] };
+export type RunMode = "full" | "step" | "until" | "agent" | "from";  // from: an earlier run, from a step
 /** The system step after a run that updates the workspace context (drawn on the canvas). */
 export const CONTEXT_NODE = "__workspace_context";
 export type RunRequest = { mode: RunMode; target?: string; nonce: number };
@@ -67,6 +69,8 @@ export function traceOf(events: Ev[]): Record<string, NodeRun> {
     if (e.type === "continue" || e.type === "decision") {
       for (const k of Object.keys(s)) if (s[k] === "stopped") delete s[k];
     }
+    // a resume: the failed/interrupted nodes and what depends on them start over
+    if (e.type === "resume") for (const k of (e.redo as string[] | undefined) ?? []) delete s[k];
   }
   return s;
 }
@@ -87,6 +91,11 @@ export function edgeTraceOf(events: Ev[], links: { from: string; to: string }[])
     if (e.sub) continue;  // inside a subflow
     const a = e.agent as string | undefined;
     if (e.type === "start") { graph = e.execution === "graph"; continue; }
+    if (e.type === "resume") {  // the links out of the nodes that start over are decided again
+      const redo = new Set(((e.redo as string[] | undefined) ?? []));
+      for (const l of links) if (redo.has(l.from)) delete s[edgeKey(l.from, l.to)];
+      continue;
+    }
     if (graph) {
       if (e.type === "edge" && e.from && e.to) {
         const k = edgeKey(String(e.from), String(e.to));
@@ -141,6 +150,7 @@ function line(e: Ev, i18n: I18n): { cls: string; text: string } | null {
     case "approval": return { cls: "gate", text: t("run.ev.approval", { agent: String(e.agent), summary: String(e.summary) }) };
     case "approval_result": return { cls: e.approved ? "ok" : "err", text: `${t(e.approved ? "run.ev.approved" : "run.ev.rejected")}: ${e.summary}${e.comment ? ` — ${e.comment}` : ""}` };
     case "agent_blocked": return null;
+    case "resume": return { cls: "info", text: t("run.ev.resume", { keep: ((e.reuse as string[]) ?? []).join(", ") || "—", redo: ((e.redo as string[]) ?? []).join(", ") || "—" }) };
     case "continue": return { cls: "info", text: t(e.how === "full" ? "run.ev.continueFull" : e.how === "auto" ? "run.ev.continueAuto" : "run.ev.continueStep") };
     case "ask": return { cls: "you", text: `${t("run.ev.ask", { who: e.agent ? String(e.agent) : t("run.askFlow") })}\n${e.text}` };
     case "decision": return { cls: "info", text: `${t("run.ev.decision", { gate: String(e.gate), decision: tOr(`run.decision.${String(e.decision)}`, String(e.decision)) })}${e.comment ? ` — ${e.comment}` : ""}` };
@@ -357,10 +367,16 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const missing = needs.filter((n) => !inputs.includes(n));
 
   // agent mode: the target agent's inputs, prefilled from the saved run
-  const targetInputs = mode === "agent" && target && spec.agents[target] ? Object.keys(spec.agents[target].inputs ?? {}) : [];
+  const agentLike = mode === "agent" || mode === "from";  // the form of the target's own inputs
+  const targetInputs = agentLike && target && spec.agents[target] ? Object.keys(spec.agents[target].inputs ?? {}) : [];
+  // "from a step": use what the earlier steps saved, or define the inputs by hand
+  const [inputChoice, setInputChoice] = useState<"saved" | "manual">("saved");
+  const haveSaved = mode === "from" && !!target && targetInputs.every((n) =>
+    spec.agents[target].inputs![n].required === false || savedInput(spec, saved, target, n) !== undefined);
+  useEffect(() => { setInputChoice(haveSaved ? "saved" : "manual"); }, [mode, target, haveSaved]);
   const targetKey = `${target}|${targetInputs.join(",")}`;
   useEffect(() => {
-    if (mode !== "agent" || !target || !spec.agents[target]) { setGiven({}); return; }
+    if (!agentLike || !target || !spec.agents[target]) { setGiven({}); return; }
     setGiven(Object.fromEntries(targetInputs.map((n) =>
       [n, formValue(agentInputIO(spec, target, n), savedInput(spec, saved, target, n))])));
   }, [mode, targetKey, saved]);  // eslint-disable-line react-hooks/exhaustive-deps -- refill when the agent or the saved run changes
@@ -368,14 +384,14 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const collect = (): { body: Record<string, unknown> } | null => {
     const errs: Record<string, string> = {};
     const out: Record<string, unknown> = {};
-    if (typed && mode !== "agent") for (const [n, x] of Object.entries(spec.inputs ?? {})) {
+    if (typed && !agentLike) for (const [n, x] of Object.entries(spec.inputs ?? {})) {
       if (hiddenIn.has(n)) continue;  // hidden by show_if: not sent
       const r = sendValue(x, values[n] ?? formValue(x, x.default));
       if (r.error) errs[n] = t("run.form.badJson");
       else if (r.value !== undefined) out[n] = r.value;
     }
     const g: Record<string, unknown> = {};
-    for (const n of targetInputs) {
+    for (const n of mode === "from" && inputChoice === "saved" ? [] : targetInputs) {
       const x = agentInputIO(spec, target, n);
       if (x.type === "file") continue;  // an agent under test reads the saved file
       const r = sendValue(x, given[n] ?? "");
@@ -428,7 +444,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
   const start = async () => {
     setError(null); setRunIdErr(null);
     if (!rid && !typed) return;
-    if ((mode === "until" || mode === "agent") && !target) return setError(t("run.pickAgent"));
+    if ((mode === "until" || agentLike) && !target) return setError(t("run.pickAgent"));
     const c = collect();
     if (!c) return setError(t("run.form.fix"));
     if (usesExtensionTools(spec) && !mock && !(await dialog.confirm({ title: t("run.realTitle"), message: t("run.confirmReal"), ok: t("run.realOk"), danger: true }))) return;
@@ -454,12 +470,27 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
 
   // past runs of this flow (runs/): open one again to look at it, ask for more or answer its gate
   const [past, setPast] = useState<{ input: string; run: string; started: number; status: string;
-    gate?: string | null; cost: number; mode?: string }[]>([]);
+    gate?: string | null; cost: number; mode?: string; title?: string }[]>([]);
   const loadPast = useCallback(() => {
     fetch(`/api/flows/${encodeURIComponent(flow)}/runs`).then((r) => (r.ok ? r.json() : { runs: [] }))
       .then((d) => setPast(d.runs ?? [])).catch(() => setPast([]));
   }, [flow]);
   useEffect(() => { if (run?.status !== "running") loadPast(); }, [loadPast, run?.status]);
+  const renamePast = async (inp: string, current: string) => {
+    const r = await dialog.form({ title: t("run.renameTitle"), message: t("run.renameHelp", { id: inp }), ok: t("cmd.saveOk"),
+      fields: [{ key: "title", label: t("run.renameLabel"), value: current }] });
+    if (!r) return;
+    try {
+      const res = await fetch(`/api/runs/${encodeURIComponent(inp)}/title`, { method: "PUT", headers: MUTATE,
+        body: JSON.stringify({ title: r.title }) });
+      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { detail?: string }).detail ?? res.statusText);
+      loadPast();
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+  };
+  // "from a step" starts from an earlier run: pick the latest one when the id is not one
+  useEffect(() => {
+    if (mode === "from" && past.length && !past.some((p) => p.input === rid)) { if (idOnly) setRunId(past[0].input); else setInput(past[0].input); }
+  }, [mode, past]); // eslint-disable-line react-hooks/exhaustive-deps -- when the list arrives or the mode changes
   const openPast = async (inp: string) => {
     setError(null);
     try {
@@ -506,6 +537,29 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
     catch (e) { setError(String((e as Error).message)); }
   };
   const running = run?.status === "running";
+
+  // resume a run that ended with an error (or was stopped): keep the finished work, repeat the rest
+  const [plan, setPlan] = useState<ResumePlan | null>(null);
+  const [keepEdited, setKeepEdited] = useState(false);
+  const canResume = !!run && !running && (run.status === "error" || run.status === "stopped")
+    && run.execution === "graph" && run.mode !== "agent" && run.mode !== "until";
+  useEffect(() => {
+    if (!canResume || !run) { setPlan(null); return; }
+    let live = true;
+    fetch(`/api/runs/${run.id}/resume-plan?reuse_changed=${keepEdited}`).then((r) => (r.ok ? r.json() : null))
+      .then((p) => { if (live) setPlan(p); }).catch(() => { if (live) setPlan(null); });
+    return () => { live = false; };
+  }, [canResume, run?.id, run?.status, keepEdited]); // eslint-disable-line react-hooks/exhaustive-deps -- by run and state
+  const resume = async () => {
+    if (!run) return;
+    setError(null);
+    try {
+      const r = await post<RunInfo>(`/api/runs/${run.id}/resume`, { reuse_changed: keepEdited });
+      setRun(r); setKeepEdited(false);
+      await follow(r.id, run.input);
+    } catch (e) { setError(String((e as Error).message)); }
+  };
+
   // the setup block and the outputs/artifacts blocks can be collapsed, and a splitter sets how
   // much height the outputs take from the conversation (kept in this browser)
   const [headOpen, setHeadOpen] = useStored("afs.run.head", true);
@@ -620,8 +674,10 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
               {past.map((p) => (
                 <li key={p.input} className={run?.input === p.input ? "on" : undefined}>
                   <button className="small link" onClick={() => openPast(p.input)} title={t("run.pastOpenTitle")}>
-                    <span className="mono">{p.input}</span>
+                    {p.title ? <><b>{p.title}</b> <span className="mono muted">{p.input}</span></> : <span className="mono">{p.input}</span>}
                   </button>
+                  <button className="small link" title={t("run.renameTitle")} aria-label={t("run.renameTitle")}
+                    onClick={() => renamePast(p.input, p.title ?? "")}>✎</button>
                   <span className="muted small">{p.started ? new Date(p.started * 1000).toLocaleString(i18n.lang) : ""}</span>
                   <span className={`badge${p.status === "error" ? " warn" : ""}`}>{status(i18n, p.status)}{p.gate ? ` · ${p.gate}` : ""}</span>
                   {p.cost > 0 && <span className="muted small">≈ {p.cost.toFixed(3)} USD</span>}
@@ -635,14 +691,15 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             <option value="step">{t("run.opt.step")}</option>
             <option value="until">{t("run.opt.until")}</option>
             <option value="agent">{t("run.opt.agent")}</option>
+            <option value="from">{t("run.opt.from")}</option>
           </select>
-          {(mode === "until" || mode === "agent") && (
+          {(mode === "until" || agentLike) && (
             <select value={target} disabled={running} onChange={(e) => setTarget(e.target.value)}>
               <option value="">{t("run.agentOption")}</option>
               {agents.map((a) => <option key={a}>{a}</option>)}
             </select>)}
         </div>
-        {typed && mode !== "agent" && (
+        {typed && !agentLike && (
           <details className="run-form" open>
             <summary className="small">{t("run.form.inputs")}
               {savedInputs && <button className="small link" disabled={running} title={t("run.form.useSavedTitle")}
@@ -686,6 +743,38 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             <p className={`small ${missing.length ? "field-err" : "muted"}`}>
               {missing.length ? t("run.missingInputs", { input: rid || t("run.inputFolder"), names: missing.join(", ") })
                 : t("run.presentInputs", { names: needs.join(", ") })}</p>)}
+        </>}
+        {mode === "from" && <>
+          <p className="muted small">{t("run.fromHelp", { run: rid || t("run.inputFolder") })}</p>
+          {!past.some((p) => p.input === rid) && <p className="field-err small">{t("run.fromNoRun")}</p>}
+          {target && targetInputs.length > 0 && (
+            <details className="run-form" open>
+              <summary className="small">{t("run.form.agentInputs", { agent: target })}</summary>
+              <div className="field run-field from-choice">
+                <label className="small"><input type="radio" name="from-inputs" checked={inputChoice === "saved"}
+                  disabled={running || !haveSaved} onChange={() => setInputChoice("saved")} /> {t("run.fromSaved")}</label>
+                <label className="small"><input type="radio" name="from-inputs" checked={inputChoice === "manual"}
+                  disabled={running} onChange={() => setInputChoice("manual")} /> {t("run.fromManual")}</label>
+                {!haveSaved && <p className="muted small">{t("run.fromNoSaved")}</p>}
+              </div>
+              {inputChoice === "saved" ? (
+                <ul className="from-saved small">{targetInputs.map((n) => {
+                  const v = savedInput(spec, saved, target, n);
+                  const text = v === undefined ? "—" : typeof v === "string" ? v : JSON.stringify(v);
+                  return <li key={n} title={sourceLabel(spec, target, n, t).hint}><b>{n}</b>{" "}
+                    <span className="muted">{text.replace(/\s+/g, " ").slice(0, 120)}{text.length > 120 ? "…" : ""}</span></li>;
+                })}</ul>
+              ) : targetInputs.map((n) => {
+                const x = agentInputIO(spec, target, n);
+                const s = sourceLabel(spec, target, n, t);
+                return x.type === "file"
+                  ? <div key={n} className="field run-field"><span className="field-label">{s.label}</span>
+                    <span className="field-hint">{s.hint} · {t("run.form.agentFile")}</span></div>
+                  : <ValueField key={n} name={n} t={{ ...x, label: s.label, description: s.hint }} value={given[n] ?? ""}
+                    disabled={running} error={fieldErr[`given.${n}`]}
+                    onChange={(v) => { setGiven((p) => ({ ...p, [n]: v })); setFieldErr(({ [`given.${n}`]: _, ...rest }) => rest); }} />;
+              })}
+            </details>)}
         </>}
         {usesExtensionTools(spec) && (
           <span className={`badge ${mock ? "" : "warn"}`} title={t("run.mockTitle")}>{mock ? t("run.mock") : t("run.real")}</span>)}
@@ -743,6 +832,24 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request }: {
             </div>
           </div>
         )}
+        {canResume && plan && plan.redo.length > 0 && (
+          <div className="gate-card resume-card">
+            <b>{t("run.resumeTitle")}</b>
+            <p className="small">{t("run.resumeHelp")}</p>
+            <dl className="small">
+              <dt>{t("run.resumeKeep")}</dt><dd>{plan.reuse.join(", ") || "—"}</dd>
+              <dt>{t("run.resumeRedo")}</dt><dd>{plan.redo.join(", ")}</dd>
+            </dl>
+            {plan.changed.length > 0 && (
+              <label className="row small warn-text">
+                <input type="checkbox" checked={keepEdited} onChange={(e) => setKeepEdited(e.target.checked)} />
+                {t("run.resumeKeepEdited", { names: plan.changed.join(", ") })}
+              </label>)}
+            {plan.gates.length > 0 && <p className="muted small">{t("run.resumeGates", { names: plan.gates.join(", ") })}</p>}
+            <div className="row">
+              <button className="primary small" onClick={resume}>{t("run.resume")}</button>
+            </div>
+          </div>)}
         {gate && gate.kind === "human" && (
           <div className="gate-card">
             <b>{t("run.humanApproval", { label: gate.label })}</b>

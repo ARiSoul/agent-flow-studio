@@ -276,3 +276,15 @@ def test_other_errors_are_still_errors(ws, monkeypatch):
                                                 "terminal_reason": "api_error"}, exit_code=1)
     evs = _events(monkeypatch, _fake_query(error=err))
     assert [e["type"] for e in evs] == ["error"] and "overloaded" in evs[0]["message"]
+
+
+def test_a_flow_input_no_agent_declares_is_refused(ws):
+    spec = {"inputs": {"work_item": {"type": "text"}},
+            "agents": {"reader": {"description": "Reads the item.",
+                                  "outputs": {"item": {"type": "text"}}}}}
+    good, text = call(Proposals(), "propose_flow", name="reads", title="Reads", spec=spec)
+    assert not good and "work_item" in text and "warnings" in text
+    fixed = {**spec, "agents": {"reader": {**spec["agents"]["reader"],
+                                           "inputs": {"work_item": {"from": "input.work_item"}}}}}
+    p = Proposals()
+    assert call(p, "propose_flow", name="reads", title="Reads", spec=fixed)[0]

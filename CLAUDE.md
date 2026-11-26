@@ -134,13 +134,22 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   `WorkspaceSpec`, `_validate` and `Connection` — never `auto`, MCPs unapproved, connectors
   read-only without secrets; the done event carries `proposals`, the editor's cards apply them;
   chat history key `@workspace`; `propose_flow` fills a short spec with `fill_defaults` and
-  returns all problems as JSON with where they are). Both assistants stream through
+  returns all problems as JSON with where they are, and refuses a flow with `warnings`).
+  `validation.unused_inputs` gives the `warnings` of a validation (a flow input no agent declares
+  and the task does not name; editor: ⚠ in the Problems tab, not an error). Both assistants stream through
   `assistant.stream`: `turn` events (n of `MAX_TURNS` = 60) and, at the limit, a `done` with
   `limit: true` instead of an error (the editor offers Continue in the same session), `chats.py` (conversation history per
   flow in `runs/chats/<flow>/<id>.json`: the editor saves its items + session id after each reply;
   `/api/chats`), `runner.py` (full/step/until/agent runs,
   gates, live approvals, decisions in `runs/<id>/decisions.jsonl`; `ask` = ask an agent for more
-  after a run; `past_runs`/`open_past` = open a saved run again from its `events.jsonl`), `yaml_io.py`, `validation.py`.
+  after a run; `past_runs`/`open_past` = open a saved run again from its `events.jsonl`; `run_from` (mode `from`: any step of a saved run, even done,
+  via `prepare_resume(start_at=…)`, `given` = by-hand inputs) and `rename` (`run_meta.json`),
+  `resume_plan`/`resume`
+  (`GET /api/runs/<id>/resume-plan`, `POST …/resume`) go on with a graph run that ended in error or
+  was stopped: the engine is rebuilt with the flow as it is now plus `_restore_engine` (saved
+  events), then `GraphEngine.prepare_resume` keeps the done nodes and resets the failed/interrupted
+  ones and everything after them (`forward_reach`); a finished node's `agent_done` carries `fp`
+  (`CompiledGraph.fingerprint`) so nodes edited since are flagged, repeated unless `reuse_changed`), `yaml_io.py`, `validation.py`.
 - `workspaces.py`: studio workspaces (`workspace.yaml`: roots, vars, environments with a `kind`;
   in a repo `<repo>/.agent-flow/` or in the studio `workspaces/<name>/`; registry
   `~/.agent-flow-studio/workspaces.json`). The current workspace/environment is a ContextVar

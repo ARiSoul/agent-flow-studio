@@ -236,6 +236,10 @@ def resolve_inputs(spec: FlowSpec, run_id: str, agent: str) -> tuple[dict[str, A
                     continue
             elif root == "input":
                 v = flow_in.get(src)
+            elif root in spec.gates:  # a human gate's decision/comment: empty until it is asked
+                v = _read_json(_io_path(run_id, GATES_FILE)).get(root, {}).get(src)
+                if v is None or v == "":
+                    continue
             else:
                 cache.setdefault(root, outputs(run_id, root))
                 v = cache[root].get(src)

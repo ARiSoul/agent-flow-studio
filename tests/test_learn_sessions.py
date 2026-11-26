@@ -67,7 +67,12 @@ def write_session(folder: str, msgs: list[tuple[str, object]], *, entry: str = "
         lines.append(_j({"type": "custom-title", "customTitle": title, "sessionId": sid}))
     if tag:
         lines.append(_j({"type": "tag", "tag": tag, "sessionId": sid}))
-    (_pdir(folder) / f"{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path = _pdir(folder) / f"{sid}.jsonl"
+    if sys.platform == "win32" and len(str(path)) >= 260:
+        # Claude Code names the project folder after the whole path, so a deep temporary folder
+        # goes over the 260 characters of a Windows path (unless long paths are enabled)
+        pytest.skip(f"Windows path too long ({len(str(path))}): run with a short --basetemp")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return sid
 
 
