@@ -18,7 +18,7 @@ export type StepInput = { name: string; from?: string; value: unknown };
 export type ToolCall = { tool: string; input: string; result: string; result_size: number; cut: boolean; is_error: boolean };
 
 export function StepsList({ spec, steps, events, span, now, running, reveal, focus, graph, askable, model, inputsOf, promptOf,
-  onToolCall, onCanvas, onRunFrom, onAsk, onOutput, onLink }: {
+  onToolCall, onCanvas, onRunFrom, onAsk, onOutput, onLink, onClaude }: {
   spec: FlowRaw; steps: Step[]; events: Ev[]; span: [number, number] | null; now: number; running: boolean;
   /** A step to open and bring into view (a canvas click, a link): its nonce changes each time. */
   reveal: { node: string; nonce: number } | null;
@@ -32,6 +32,8 @@ export function StepsList({ spec, steps, events, span, now, running, reveal, foc
   onOutput: (agent: string, name: string) => void;
   /** A link to this step of this run (copied to the clipboard). */
   onLink?: (node: string) => string;
+  /** Go on with this step's session in Claude Code: a terminal there, or the command to copy. */
+  onClaude?: (node: string, how: "terminal" | "copy") => void;
 }) {
   const i18n = useI18n();
   const { t, lang } = i18n;
@@ -74,6 +76,9 @@ export function StepsList({ spec, steps, events, span, now, running, reveal, foc
       ...(graph && onRunFrom && s.kind !== "stop" ? [{ label: t("rp.runFromStep"), title: t("rp.fromHereTitle"), onSelect: () => onRunFrom(s.node) }] : []),
       ...(onAsk && askable.includes(s.node) ? [{ label: t("rp.askThis"), onSelect: () => onAsk(s.node) }] : []),
       ...(onLink ? [{ label: t(copied === `l-${s.node}` ? "run.outCopied" : "rp.copyStepLink"), onSelect: () => copy(onLink(s.node), `l-${s.node}`) }] : []),
+      ...(s.session && onClaude ? [{ kind: "sep" as const },
+        { label: t("rp.ccOpen"), title: t("rp.ccOpenTitle"), onSelect: () => onClaude(s.node, "terminal") },
+        { label: t("rp.ccCopy"), title: t("rp.ccCopyTitle"), onSelect: () => onClaude(s.node, "copy") }] : []),
       ...(s.session ? [{ label: t(copied === `s-${s.node}` ? "run.outCopied" : "rp.copySession"), title: s.session, onSelect: () => copy(s.session!, `s-${s.node}`) }] : []),
     ];
     return (

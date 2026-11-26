@@ -20,8 +20,10 @@ import { Attention } from "./RunAttention";
 import { Compare, HistoryView, type PastRun } from "./RunHistory";
 import { LogView } from "./RunLog";
 import { download, fullTime, MoreMenu, OutputViewer, pretty, StatusChip, useCopy, when } from "./RunParts";
-import { Results, type Shown } from "./RunResults";
+import { Results, useRunFiles, type Shown } from "./RunResults";
 import { attention as countNeeds, type Waiting } from "./attention";
+import { changedCount, ChangesView, useChanges } from "./RunChanges";
+import { PreviewView, usePreview } from "./RunPreview";
 import { runApi } from "./runActions";
 import { makeRunLink } from "./runLink";
 import { defaultRunId, runBody, SetupView, usesExtensionTools, type Prefill, type Queued, type QueueLog, type RunInfo, type RunMode } from "./RunSetup";
@@ -384,7 +386,15 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
   const review = () => { setView("run"); requestAnimationFrame(() => { body.current?.scrollTo({ top: 0, behavior: "smooth" }); attention.current?.focus(); }); };
 
   // steps or log; a node chosen on the canvas opens its step
-  const [runView, setRunView] = useStored<"steps" | "log">("afs.run.view", "steps");
+  const [runView, setRunView] = useStored<"steps" | "log" | "changes" | "preview">("afs.run.view", "steps");
+  const preview = usePreview();
+  // what the run changed in the workspace's git roots: again when a step ends or the state changes
+  const [chKey, setChKey] = useState(0);
+  const stepsEnded = events.filter((e) => e.type === "agent_done" || e.type === "approval_result").length;
+  const changes = useChanges(viewIn || undefined, `${run?.status}|${stepsEnded}|${chKey}`);
+  const nChanged = changedCount(changes);
+  const runFiles = useRunFiles(viewIn || undefined, `${run?.status}|${stepsEnded}`);
+  const showChanges = () => { setView("run"); setRunView("changes"); requestAnimationFrame(() => body.current?.querySelector(".rp-switch")?.scrollIntoView({ block: "start", behavior: "smooth" })); };
   const [reveal, setReveal] = useState<{ node: string; nonce: number } | null>(null);
   const showStep = (node: string) => { setView("run"); setRunView("steps"); setReveal({ node, nonce: Date.now() }); };
   useEffect(() => { if (focus && run && steps.some((s) => s.node === focus)) setReveal({ node: focus, nonce: Date.now() }); },
@@ -432,6 +442,18 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
     try { await ra.dismiss(w.input, on); loadWaiting(); } catch (e) { setRunErr(String((e as Error).message)); }
   };
   const [waitOpen, setWaitOpen] = useState(false);
+  // go on with a step's session in Claude Code (its own tools: images, browser, files)
+  const claudeCode = async (node: string, how: "terminal" | "copy") => {
+    setRunErr(null);
+    try {
+      const path = `/api/runs/${encodeURIComponent(viewIn)}/steps/${encodeURIComponent(node)}`;
+      if (how === "terminal") { await ra.call(`${path}/terminal`); return; }
+      const r = await fetch(`${path}/session`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : r.statusText);
+      copy(String(d.command), `cc-${node}`);
+    } catch (e) { setRunErr(String((e as Error).message)); }
+  };
   // change a recorded decision: the server holds the run (it does not go on with the old one)
   const startChange = async () => {
     if (!run) return;
@@ -606,23 +628,30 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
         gate={gate} waitedSince={gateStep?.start} now={now} gateOutputs={gateOutputs} typeOf={typeOf}
         note={gateNote} setNote={setGateNote} onDecide={decide} onStop={stop}
         paused={paused} pausedUntil={run.mode === "until" ? run.target : null} onContinue={cont}
-        ctxSuggest={ctxSuggest} onContext={updateContext} onShow={setShown} />
+        ctxSuggest={ctxSuggest} onContext={updateContext} onShow={setShown}
+        changed={changes?.available ? nChanged : null} onChanges={showChanges} runInput={viewIn} />
       {stopMessage && <div className="ev result-msg">■ {stopMessage.label}: {stopMessage.message}</div>}
       <div className="rp-switch" role="radiogroup" aria-label={t("rp.showAs")}>
         <button role="radio" aria-checked={runView === "steps"} className={runView === "steps" ? "on" : ""} onClick={() => setRunView("steps")}>
           {t("rp.steps")} <span className="muted">{doneCount}/{steps.length}</span></button>
         <button role="radio" aria-checked={runView === "log"} className={runView === "log" ? "on" : ""} onClick={() => setRunView("log")}>
           {t("rp.log")}</button>
+        {changes?.available && <button role="radio" aria-checked={runView === "changes"} className={runView === "changes" ? "on" : ""} onClick={() => setRunView("changes")}
+          title={t("rp.chTitle")}>{t("rp.changes")} <span className="muted">{nChanged}</span></button>}
+        {preview && <button role="radio" aria-checked={runView === "preview"} className={runView === "preview" ? "on" : ""}
+          onClick={() => setRunView("preview")} title={preview.url}>{t("rp.preview")}</button>}
       </div>
-      {runView === "steps" ? (
+      {runView === "preview" && preview ? <PreviewView preview={preview} />
+        : runView === "changes" && changes?.available ? <ChangesView data={changes} onRefresh={() => setChKey((k) => k + 1)} />
+        : runView !== "log" ? (
         <StepsList spec={spec} steps={steps} events={events} span={t0 && t1 ? [t0, t1] : null} now={now} running={running}
           reveal={reveal} focus={focus} graph={graph} askable={askable} model={modelOf} inputsOf={inputsOf} promptOf={promptOf}
           onToolCall={toolCall} onCanvas={onFocusNode} onRunFrom={running ? undefined : (n) => runFromStep(run.input, n)}
-          onAsk={running ? undefined : askStep} onLink={linkTo}
+          onAsk={running ? undefined : askStep} onLink={linkTo} onClaude={claudeCode}
           onOutput={(agent, name) => setHighlight({ agent, name, nonce: Date.now() })} />
       ) : (
         <LogView events={events} t0={t0} steps={steps.map((s) => s.node)} fileName={viewIn} onStep={showStep} />)}
-      <Results outputs={outputs} lastOut={lastOut} done={run.status === "done"} typeOf={typeOf} usedBy={usedBy} arts={arts} runDir={runDir}
+      <Results run={viewIn} files={runFiles} outputs={outputs} lastOut={lastOut} done={run.status === "done"} typeOf={typeOf} usedBy={usedBy} arts={arts} runDir={runDir}
         highlight={highlight} onShow={setShown} onFile={openFile} onFolder={openFolder} onStep={showStep} />
       {!running && askable.length > 0 && (
         <section className="rp-ask" ref={askRef}>
@@ -690,8 +719,15 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
         onOpenStep={(inp, node) => { setCompare(null); openStep(inp, node); }} />}
       {shown && <OutputViewer {...shown} copied={copied === shown.title} onClose={() => setShown(null)}
         onCopy={() => copy(pretty(shown.value), shown.title)}
-        onDownload={() => download(`${shown.title}${shown.md ? ".md" : typeof shown.value === "string" ? ".txt" : ".json"}`, pretty(shown.value),
-          shown.md ? "text/markdown" : "text/plain")} />}
+        onDownload={() => {
+          if (shown.media) {  // a run file: download it as it is
+            const a = document.createElement("a");
+            a.href = shown.media.url; a.download = shown.title; a.click();
+            return;
+          }
+          download(`${shown.title}${shown.md ? ".md" : typeof shown.value === "string" ? ".txt" : ".json"}`, pretty(shown.value),
+            shown.md ? "text/markdown" : "text/plain");
+        }} />}
     </div>
   );
 }

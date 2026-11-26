@@ -6,7 +6,7 @@ import { useState, type RefObject } from "react";
 import { GrowingTextarea } from "./fields";
 import { useI18n, type I18n } from "./i18n";
 import { Markdown } from "./Markdown";
-import { Clamp, oneLine, pretty } from "./RunParts";
+import { Clamp, fileUrl, mediaOf, oneLine, pretty } from "./RunParts";
 import { shortCause } from "./runLines";
 
 import type { Shown } from "./RunResults";
@@ -25,7 +25,7 @@ export function readReason(reason: string, t: I18n["t"]): string {
 export type GateInfo = { gate: string; label: string; reason: string };
 
 export function Attention({ refEl, authErr, pending, notes, setNotes, onAnswer, retrying, onRetry, retryPolicy, turn, onChange, changingFrom, onKeep, gate, waitedSince, now, gateOutputs, typeOf,
-  note, setNote, onDecide, onStop, paused, pausedUntil, onContinue, ctxSuggest, onContext, onShow }: {
+  note, setNote, onDecide, onStop, paused, pausedUntil, onContinue, ctxSuggest, onContext, onShow, changed, onChanges, runInput }: {
   refEl: RefObject<HTMLElement>;
   authErr?: Ev; pending: Ev[]; notes: Record<string, string>; setNotes: (f: (n: Record<string, string>) => Record<string, string>) => void;
   onAnswer: (id: string, ok: boolean) => void;
@@ -47,9 +47,14 @@ export function Attention({ refEl, authErr, pending, notes, setNotes, onAnswer, 
   /** The decision being changed (the run is held meanwhile), and keeping it. */
   changingFrom?: { decision: string; comment: string; key?: string; until?: number } | null; onKeep: () => void;
   ctxSuggest: boolean; onContext: () => void;
+  /** How many files the run changed in the workspace (null: no git roots), and opening them. */
+  changed?: number | null; onChanges?: () => void;
+  /** The run folder (image outputs are shown from it). */
+  runInput?: string;
   onShow: (s: Shown) => void;
 }) {
-  const { t } = useI18n();
+  const i18n = useI18n();
+  const { t } = i18n;
   const [help, setHelp] = useState(false);
   if (!authErr && !pending.length && !retrying.length && !turn && !gate && !paused && !ctxSuggest) return null;
   return (
@@ -119,12 +124,17 @@ export function Attention({ refEl, authErr, pending, notes, setNotes, onAnswer, 
             <button className="primary small" onClick={onKeep}>{t("rp.keepDecision")}</button>
           </div>}
           {gate.reason && <p className="small muted">{t("rp.gateReason", { reason: readReason(gate.reason, t) })}</p>}
+          {changed !== null && changed !== undefined && (changed > 0
+            ? <button className="link small rp-gate-changes" onClick={onChanges}>{i18n.tn("rp.chGate", changed)} ▸</button>
+            : <p className="small muted">{t("rp.chGateNone")}</p>)}
           {help && <p className="small muted">{t("rp.gateHelp")}</p>}
           {gateOutputs.map(({ node, name, value }, n) => (
             <div key={`${node}.${name}`} className="rp-gate-out">
               <div className="row small"><span className="mono"><b>{name}</b> · {node}</span><span className="grow" />
                 <button className="small" onClick={() => onShow({ title: `${node}.${name}`, value, md: ["markdown", "text"].includes(typeOf(node, name)) })}>{t("run.outOpen")}</button></div>
-              {n === 0 && !changingFrom ? <Clamp lines={5}>{typeof value === "string" ? <Markdown text={value} /> : <pre className="mono small">{pretty(value)}</pre>}</Clamp>
+              {mediaOf(value)?.kind === "image" && runInput
+                ? <img className="rp-gate-img checker" src={fileUrl(runInput, mediaOf(value)!.path)} alt={name} />
+                : n === 0 && !changingFrom ? <Clamp lines={5}>{typeof value === "string" ? <Markdown text={value} /> : <pre className="mono small">{pretty(value)}</pre>}</Clamp>
                 : <div className="small rp-gate-line">{oneLine(value, 140)}</div>}
             </div>))}
           <GrowingTextarea minRows={2} placeholder={t("rp.gateComment")} value={note} aria-label={t("rp.gateComment")}

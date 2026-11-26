@@ -14,7 +14,7 @@ from .config import settings
 if TYPE_CHECKING:
     from .policy import WritePolicy
 
-IO_PREFIX = "mcp__io__"  # io tools: the `agent` argument must be the calling agent
+IO_PREFIX = ("mcp__io__", "mcp__preview__")  # their `agent` argument must be the calling agent
 DELEGATION_TOOL = "Agent"
 # "Task" is the old name, still accepted as an alias by the CLI.
 DELEGATION_TOOLS = frozenset({DELEGATION_TOOL, "Task"})

@@ -169,6 +169,22 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   gate, change of decision), `RunStepsView`, `RunLog` + `runLines.ts`, `RunHistory` (totals per
   period, Compare), `RunResults`, `attention.ts` (one count of what waits for you), `runSteps.ts`,
   `runLink.ts` (`#flow=&run=&step=`), `useRunStream.ts`; pure parts tested with `npm test`.
+- Reviewing runs. `changes.py`: a `snapshot` of each git root at the start (`start` event `git`:
+  head, branch, files already dirty with a content hash — `hash-object` without `-w`, nothing
+  written) and `changes` (files that differ since; a file dirty before only when the run changed it
+  again); `GET /api/runs/{input}/changes`, editor `RunChanges.tsx` + `diffLines.ts`.
+  `GET /api/runs/{input}/files` and `/file?path=` (only `files/`, `outputs/`, `inputs/`; type from
+  the bytes; SVG/HTML as text; nosniff + sandbox CSP); `OutputViewer` shows images, videos, code.
+  `tools/preview.py` (`preview.screenshot`, write_local; the hook checks `agent` like `io`): the
+  workspace's `preview.url` (localhost only) headless, a PNG in `runs/<id>/files/<agent>/` and the
+  console errors; the page stays on its origin. The editor CSP allows framing/connecting only
+  `localhost`/`127.0.0.1` (the Preview tab, `RunPreview.tsx`).
+- Claude Code. Agent sessions get the workspace as `cwd` (also without native tools) so
+  `claude --resume` finds them; `claude_sessions.session_cwd/resume_command/open_terminal`,
+  `GET …/steps/{node}/session`, `POST …/steps/{node}/terminal`. `studio_mcp.py`
+  (`agent-flow-studio-mcp`, stdio, MCP 2 `MCPServer`) calls the local editor API: list_flows,
+  flow_inputs, start_run (queues on 409), run_status, run_outputs, run_changes — never a tool that
+  decides a gate or approves a write.
 - `workspaces.py`: studio workspaces (`workspace.yaml`: roots, vars, environments with a `kind`;
   in a repo `<repo>/.agent-flow/` or in the studio `workspaces/<name>/`; registry
   `~/.agent-flow-studio/workspaces.json`). The current workspace/environment is a ContextVar

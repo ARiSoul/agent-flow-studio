@@ -94,6 +94,26 @@ approvals, connectors and writes with controlled autonomy.
   decision at a gate is **never refused**: while another run goes it is kept ("decided — goes on
   next", kept across restarts, can be changed). The open run is in the page address
   (`#flow=…&run=…&step=…`): reload or share the link to open it again.
+- **Reviewing a run like in Claude Code**:
+  - *Changes*: what the run changed in the git folders of its workspace since it started (files,
+    +/−, the diff of each), also on a human gate ("This run changed 3 files ▸") — read only, and
+    earlier work of yours is not shown as the run's.
+  - *Previews*: images of the run (thumbnails, a viewer at fit or real size), videos, code and
+    text with line numbers; an image `file` output shows as an image in its row and on a gate.
+  - *Preview of your web app*: set Board → workspace settings → **Preview** (`preview.url`, e.g.
+    `http://localhost:5173/` for a game with three.js; only this machine). The Run panel shows it
+    in a *Preview* tab, and an agent with the tool `preview.screenshot` opens it headless (WebGL),
+    sees a screenshot and the console errors, and can hand the PNG over as a `file` output
+    (Playwright: `pip install -e ".[web]"`).
+- **Claude Code ↔ studio**:
+  - From a step (⋯ → **Continue in Claude Code**): a terminal opens in the step's folder with
+    `claude --resume <session>` — the agent's own session, with Claude Code's tools (images,
+    browser, files). "Copy the Claude Code command" gives the command instead.
+  - From Claude Code: `claude mcp add agent-flow-studio -- <venv>/Scripts/agent-flow-studio-mcp`
+    (the full path of the venv's program; the editor must run; see `operations.md`). Then a Claude Code session can list the flows, read a flow's inputs, start a run (queued
+    when one goes), follow it and read its outputs and changes; each answer has the run's link,
+    which opens the studio (also in Claude Code's browser pane). It has **no tool to decide a gate
+    or approve a write**: those stay with you in the studio.
 - **Connectors**: HTTP API, Azure Resource Manager, Azure DevOps, Microsoft Graph, GitHub, GitLab
   and Atlassian Cloud (Jira, Confluence), with environment, allowed paths, read/write access and
   "Test connection". Each connector can have **instructions for the agents** (how to use that
@@ -332,6 +352,9 @@ Python package that exposes `TOOL_GROUPS`, `CONTRACTS` and `REPORTS` (see
 [`extensions/README.md`](extensions/README.md) and `src/agent_flow_studio/extensions.py`).
 
 ## Getting started
+Everyday commands (start/stop the editor, update after a pull, tests, Claude Code) are in
+`operations.md`.
+
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"

@@ -4,7 +4,28 @@ Hand-over file between machines/accounts. **When you start:** read this. **When 
 update "Current state" and "Next steps", add a line to the "Log" (date, machine/account in generic
 terms — no emails —, what was done) and commit + push.
 
-## Where we stopped (2026-11-26, later, home machine / account B)
+## Where we stopped (2026-11-26, night, home machine / account B)
+**Reviewing runs like in Claude Code** (on top of the Run panel rewrite, commit `51b16fc`). After
+you pull: stop the editor, `pip install -e ".[dev,web]"` (new entry point `agent-flow-studio-mcp`;
+`mcp>=2` was already there through the SDK), `cd editor; npm run build`, restart the editor.
+- **Changes**: what a run changed in its workspace's git roots (Current → *Changes*, and on a
+  gate); a snapshot at the start, read only.
+- **Previews**: run files (images, video, code) in the Run panel; image outputs shown as images.
+- **Game preview**: workspace setting `preview.url` (localhost) → *Preview* tab; tool
+  `preview.screenshot` for agents (headless Chrome/Edge with WebGL, PNG + console errors).
+- **Claude Code ↔ studio**: step ⋯ → Continue in Claude Code (`claude --resume` in a terminal);
+  `claude mcp add` (see operations.md) drives the studio from Claude Code
+  (no tool decides gates or writes).
+- **Checked**: 627 backend tests (`tests/test_changes.py`, `test_run_files.py`,
+  `test_preview.py` with a real headless browser, `test_claude_code.py`), 31 editor tests, the
+  browser on the check server (Changes on a gate, the sprite preview, the Preview tab).
+  **Not tried for real**: the MCP server inside Claude Code, the terminal button on this machine,
+  `preview.screenshot` on the real game.
+- **Next**: a species flow for "Bugs in the Box" in the game's own workspace (outside this repo):
+  a planner, a writer with workspace write tools (approve), a checker with `preview.screenshot`,
+  a human gate with the Changes.
+
+## Where we stopped earlier (2026-11-26, later, home machine / account B)
 **Run panel rewrite** (not committed when this was written; see the Log). Twelve review rounds by
 three critic agents (AI automation, DevOps, developer) until all scored ≥ 9.8. After you pull:
 `pip install -e ".[dev,web]"` (stop the editor first), `cd editor; npm run build`,
@@ -465,3 +486,6 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-26 · home machine (account B) · Run panel rewrite: views, steps/log/history, Compare,
   retry of model API errors, live cost estimate, queue (saved), decisions never refused (decided,
   changeable, kept across restarts), one count of what waits for you, run links; 12 critic rounds.
+- 2026-11-26 · home machine (account B) · Reviewing runs: Changes (git diff since the start),
+  previews of run files, the workspace's web app (Preview tab, preview.screenshot), Continue in
+  Claude Code and the studio MCP server for Claude Code.

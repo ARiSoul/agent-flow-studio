@@ -258,6 +258,8 @@ export interface WorkspaceSpecRaw {
   vars: Record<string, string>;
   environments: Record<string, { kind: "dev" | "staging" | "prod"; vars?: Record<string, string> }>;
   default_environment?: string | null;
+  /** The web app the person runs locally (a game, a site): the Run panel shows it. */
+  preview?: { url: string; start?: string } | null;
 }
 
 export interface WorkspaceDetail {

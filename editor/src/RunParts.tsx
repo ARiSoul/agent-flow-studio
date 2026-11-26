@@ -7,6 +7,17 @@ import { Markdown } from "./Markdown";
 export const statusText = (i18n: I18n, s: unknown) => i18n.tOr(`run.status.${String(s)}`, String(s));
 export const RUN_ICON: Record<string, string> = { running: "●", gate: "⏸", paused: "⏸", decided: "⧗", error: "✗", stopped: "■", done: "✓", lost: "?" };
 export const pretty = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
+/** A file of a run (GET /api/runs/<run>/files) and how to show it. */
+export type RunFile = { path: string; size: number; kind: "image" | "video" | "text" | "other" };
+const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+const VIDEO = /\.(mp4|m4v|mov|webm)$/i;
+/** The URL of a run file's bytes (the server checks it stays in the run's files). */
+export const fileUrl = (run: string, path: string) => `/api/runs/${encodeURIComponent(run)}/file?path=${encodeURIComponent(path)}`;
+/** A `file` output ({name, path, size}) that is an image or a video: its kind and path. */
+export function mediaOf(v: unknown): { kind: "image" | "video"; path: string } | null {
+  const p = v && typeof v === "object" && typeof (v as { path?: unknown }).path === "string" ? (v as { path: string }).path : null;
+  return !p ? null : IMAGE.test(p) ? { kind: "image", path: p } : VIDEO.test(p) ? { kind: "video", path: p } : null;
+}
 export const oneLine = (v: unknown, n = 90) => { const s = pretty(v).replace(/\s+/g, " ").trim(); return s.length > n ? `${s.slice(0, n)}…` : s; };
 
 export function clock(ts: number | undefined, lang: string): string {
@@ -52,30 +63,47 @@ export function MoreMenu({ label, items, className, children }: { label: string;
 }
 
 /** One output (or file) in a large view: Markdown formatted (or the plain text), with copy and download. */
-export function OutputViewer({ title, value, md, copied, onClose, onCopy, onDownload }: {
+export function OutputViewer({ title, value, md, media, copied, onClose, onCopy, onDownload }: {
   title: string; value: unknown; md: boolean; copied: boolean; onClose: () => void; onCopy: () => void; onDownload: () => void;
+  /** A run file to show as it is: an image (fit or real size), a video, or text with line numbers. */
+  media?: { kind: "image" | "video" | "text"; url: string };
 }) {
   const { t } = useI18n();
   const [raw, setRaw] = useState(typeof value === "string" ? !md : false);
+  const [full, setFull] = useState(false);  // an image at its real size
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    if (media?.kind !== "text") return;
+    fetch(media.url).then((r) => (r.ok ? r.text() : "")).then((x) => setText(x.slice(0, 400_000))).catch(() => setText(""));
+  }, [media]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [onClose]);
-  const text = pretty(value);
+  const text0 = pretty(value);
   return (
     <div className="modal" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal-box out-viewer" role="dialog" aria-label={title}>
         <div className="panel-head">
           <h2><code>{title}</code></h2>
-          {(md || typeof value !== "string") && <button className="small" onClick={() => setRaw((x) => !x)}>{t(raw ? "run.viewFormatted" : "run.viewRaw")}</button>}
+          {!media && (md || typeof value !== "string") && <button className="small" onClick={() => setRaw((x) => !x)}>{t(raw ? "run.viewFormatted" : "run.viewRaw")}</button>}
           <button className="small" onClick={onCopy}>{t(copied ? "run.outCopied" : "run.outCopy")}</button>
           <button className="small" onClick={onDownload}>{t("run.outDownload")}</button>
           <button className="small" onClick={onClose}>{t("conn.close")}</button>
         </div>
         <div className="out-viewer-body">
-          {typeof value === "string" ? (raw ? <pre className="mono">{text}</pre> : <Markdown text={value} />)
-            : raw ? <pre className="mono">{text}</pre> : <JsonTree value={value} />}
+          {media?.kind === "image" ? (
+            <div className={`rp-img-view${full ? " full" : ""}`}>
+              <button className="small" onClick={() => setFull(!full)}>{t(full ? "rp.imgFit" : "rp.imgReal")}</button>
+              <img src={media.url} alt={title} className="checker" />
+            </div>)
+            : media?.kind === "video" ? <video src={media.url} controls className="rp-video" />
+            : media?.kind === "text" ? (text === null ? <p className="muted small">…</p> : (
+              <table className="rp-code mono small"><tbody>{text.replace(/\r?\n$/, "").split(/\r?\n/).map((l, n) => (
+                <tr key={n}><td className="ln">{n + 1}</td><td className="tx">{l}</td></tr>))}</tbody></table>))
+            : typeof value === "string" ? (raw ? <pre className="mono">{text0}</pre> : <Markdown text={value} />)
+            : raw ? <pre className="mono">{text0}</pre> : <JsonTree value={value} />}
         </div>
       </div>
     </div>

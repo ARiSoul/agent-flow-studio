@@ -25,12 +25,12 @@ from typing import Any, Literal
 import httpx
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .. import context, workspaces
+from .. import claude_sessions, context, workspaces
 from ..builder.catalog import BUILTIN_SERVERS, BUILTIN_TOOLS, CONTRACTS
 from ..builder.compile import FlowError, find_flow, flow_locations, flows_dir
 from ..builder.library import LibraryError, agents_dict, delete_agent, move_agent, save_local
@@ -61,7 +61,15 @@ from ..tools import io as io_tool
 from . import assistant, copying, uploads, ws_assistant
 from . import chats as assist_chats
 from . import commands as assist_commands
-from .runner import RunError, Runner, input_visible, list_artifacts, read_artifact_text
+from .runner import (
+    RunError,
+    Runner,
+    input_visible,
+    list_artifacts,
+    list_run_files,
+    read_artifact_text,
+    run_file,
+)
 from .validation import _atomic_write, _public, _structured, _validate
 from .yaml_io import dump_flow, dump_raw, spec_to_data
 
@@ -410,9 +418,13 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
     @app.middleware("http")
     async def headers(request: Request, call_next):  # type: ignore[no-untyped-def]
         resp = await call_next(request)
-        resp.headers["Content-Security-Policy"] = (
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        if "Content-Security-Policy" not in resp.headers:  # a run file keeps its stricter one
+            # the workspace preview (a local web app) may be framed and checked: this machine only
+            local = "http://localhost:* http://127.0.0.1:*"
+            resp.headers["Content-Security-Policy"] = (
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                f"connect-src 'self' {local}; frame-src {local}; frame-ancestors 'none'; "
+                "base-uri 'none'; form-action 'none'")
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "no-referrer"
         resp.headers["Cache-Control"] = "no-store"
@@ -926,6 +938,40 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         except RunError as e:
             raise HTTPException(e.status, e.detail) from e
 
+    @app.get("/api/runs/{run_input}/steps/{node}/session")
+    def step_session(run_input: str, node: str) -> dict[str, Any]:
+        """A step's Claude Code session: its id, folder and the command to go on with it."""
+        try:
+            return runner.step_session(run_input, node)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
+    @app.post("/api/runs/{run_input}/steps/{node}/terminal", dependencies=[Depends(csrf)])
+    def step_terminal(run_input: str, node: str) -> dict[str, Any]:
+        """Opens a terminal on this machine that goes on with the step's session in Claude Code."""
+        try:
+            s = runner.step_session(run_input, node)
+            claude_sessions.open_terminal(s["session_id"], s["cwd"])
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+        except OSError as e:
+            raise HTTPException(500, f"could not open a terminal: {e}") from e
+        return {"opened": True, **s}
+
+    @app.get("/api/runs/{run_input}/changes")
+    def run_changes(run_input: str) -> dict[str, Any]:
+        """What the run changed in the git roots of its workspace since it started (read only)."""
+        try:
+            return runner.run_changes(run_input)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
+
     @app.get("/api/runs-waiting")
     def runs_waiting() -> dict[str, Any]:
         """The runs of this workspace that wait for the person (gates, paused, write approvals)."""
@@ -1079,6 +1125,29 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
                 yield assistant.encode(ev)
 
         return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+    @app.get("/api/runs/{run_input}/files")
+    def run_files(run_input: str) -> dict[str, Any]:
+        """The files of a run (agents' files, outputs, inputs) for the previews."""
+        try:
+            return {"files": list_run_files(run_input)}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.get("/api/runs/{run_input}/file")
+    def run_file_bytes(run_input: str, path: str) -> FileResponse:
+        """One file of a run as it is (an image or a video for the preview, text as plain text,
+        never HTML: SVG and HTML come as text/plain)."""
+        try:
+            f, media_type = run_file(run_input, path)
+        except (ValueError, FileNotFoundError) as e:
+            raise HTTPException(404, "no such file in this run") from e
+        inline = media_type.split(";")[0] != "application/octet-stream"
+        return FileResponse(f, media_type=media_type, filename=f.name,
+                            content_disposition_type="inline" if inline else "attachment",
+                            headers={"X-Content-Type-Options": "nosniff",
+                                     "Cache-Control": "no-store",
+                                     "Content-Security-Policy": "default-src 'none'; sandbox"})
 
     @app.get("/api/artifacts/{run_input}")
     def artifacts_list(run_input: str) -> list[dict[str, Any]]:

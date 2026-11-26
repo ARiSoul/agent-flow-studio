@@ -2,7 +2,7 @@
 from claude_agent_sdk import create_sdk_mcp_server
 
 from .extensions import LOADED
-from .tools import artifacts, connections, git, io
+from .tools import artifacts, connections, git, io, preview
 
 _GROUPS = {
     "artifacts": [artifacts.save_artifact, artifacts.read_artifact],
@@ -10,6 +10,8 @@ _GROUPS = {
     # typed inputs/outputs of the agents, and the files of the run
     "io": [io.get_inputs, io.set_output, io.read_file, io.view_image, io.view_video],
     "workspace": [git.git],  # read-only git; the other workspace.* tools are native (catalog.py)
+    # a look at the workspace's web app (preview.url): a screenshot and its console errors
+    "preview": [preview.screenshot],
     **LOADED.tool_groups,
 }
 

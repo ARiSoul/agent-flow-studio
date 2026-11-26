@@ -79,6 +79,20 @@ class Environment(_Strict):
     _v = field_validator("vars")(classmethod(lambda cls, v: _check_vars(v)))
 
 
+class Preview(_Strict):
+    """The workspace's web app as the person runs it locally (a game, a site): the Run panel shows
+    it, and agents with `preview.screenshot` look at it. Only this machine (localhost)."""
+    url: str = Field(max_length=300)
+    start: str = Field(default="", max_length=200)  # how to start it, shown as a hint (never run)
+
+    @field_validator("url")
+    @classmethod
+    def _local(cls, v: str) -> str:
+        if not re.fullmatch(r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?(/\S*)?", v):
+            raise ValueError("preview.url must be a page on this machine (http://localhost:port/…)")
+        return v
+
+
 class WorkspaceSpec(_Strict):
     version: Literal[1] = 1
     name: str = Field(pattern=NAME.pattern)
@@ -88,6 +102,7 @@ class WorkspaceSpec(_Strict):
     vars: dict[str, str] = Field(default_factory=dict)
     environments: dict[str, Environment] = Field(default_factory=dict)
     default_environment: str | None = None
+    preview: Preview | None = None  # the web app the person runs locally (game, site)
 
     _v = field_validator("vars")(classmethod(lambda cls, v: _check_vars(v)))
 

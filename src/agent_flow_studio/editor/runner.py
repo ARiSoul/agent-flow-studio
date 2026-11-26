@@ -33,10 +33,17 @@ from claude_agent_sdk import (
     query,
 )
 
-from .. import claude_sessions, context, workspaces
+from .. import changes, claude_sessions, context, workspaces
 from ..builder import FlowError, expr, load_flow, load_spec
 from ..builder.catalog import CONTRACTS
-from ..builder.compile import GATE_TOOL, CompiledFlow, compile_graph, gate_message, load_graph
+from ..builder.compile import (
+    GATE_TOOL,
+    CompiledFlow,
+    _workspace_dir,
+    compile_graph,
+    gate_message,
+    load_graph,
+)
 from ..builder.spec import LEGACY_INPUT, FlowSpec
 from ..builder.types import IOType, check_value
 from ..builder.types import compatible as types_compatible
@@ -47,6 +54,7 @@ from ..messages import msg as m_
 from ..messages import reason, to_json
 from ..policy import ApprovalRequest
 from ..tools import io as io_tool
+from ..tools import media
 from ..tools.guards import safe_artifact_path
 from ..trace import error_text, tool_detail
 from . import uploads
@@ -369,6 +377,7 @@ class Runner:
                              "target": run.target, "mock": settings.mock,
                              "model": graph.model, "execution": spec.execution,
                              "workspace": ws.name, "environment": env,
+                             **({"git": git} if (git := _git_baseline(spec)) else {}),
                              **({"handoff": handoff} if handoff else {})})
             self._spawn(run, self._drive_graph(run))
             return run
@@ -378,6 +387,7 @@ class Runner:
                          "target": run.target, "mock": settings.mock,
                          "model": compiled.options.model, "execution": spec.execution,
                          "workspace": ws.name, "environment": env,
+                         **({"git": git} if (git := _git_baseline(spec)) else {}),
                          **({"handoff": handoff} if handoff else {})})
         self._launch(run, prompt, None)
         return run
@@ -1003,6 +1013,39 @@ class Runner:
                               "workspace": s["workspace"]})
         self._gates[root] = (time.time(), items)
         return [dict(g) for g in items if g["workspace"] == here]
+
+    def step_session(self, run_input: str, node: str) -> dict[str, Any]:
+        """The Claude Code session of a step (its last one), the folder it ran in and the command
+        that goes on with it in Claude Code — with its own tools: images, browser, files."""
+        events = _last_run_events(safe_artifact_path(settings.runs_dir, run_input, "events.jsonl"))
+        sid = next((str(e["session_id"]) for e in reversed(events) if e.get("type") == "result"
+                    and e.get("agent") == node and e.get("session_id") and not e.get("sub")), None)
+        if not sid:
+            raise RunError(404, "this step has no session on record")
+        cwd = claude_sessions.session_cwd(sid)
+        if not cwd:
+            raise RunError(404, "the session is not on this machine (Claude Code keeps sessions "
+                                "for a limited time)")
+        import sys
+        return {"session_id": sid, "cwd": cwd,
+                "command": claude_sessions.resume_command(sid, cwd, sys.platform == "win32")}
+
+    def run_changes(self, run_input: str) -> dict[str, Any]:
+        """What a run changed in the git roots of its workspace since it started (read only;
+        see changes.py). `available` False: the run has no git baseline (older run, no git)."""
+        events = _last_run_events(safe_artifact_path(settings.runs_dir, run_input, "events.jsonl"))
+        if not events:
+            raise RunError(404, "no saved run in this folder")
+        base = events[0].get("git") or {}
+        roots = []
+        for name, snap in base.items():
+            path = Path(str(snap.get("path") or ""))
+            if not path.is_dir():
+                roots.append({"name": name, "path": str(path), "missing": True, "files": []})
+                continue
+            roots.append({"name": name, "path": str(path), "branch": snap.get("branch"),
+                          "head": snap.get("head"), "files": changes.changes(path, snap)})
+        return {"available": bool(base), "roots": roots}
 
     def tool_call(self, run_id: str, tool_id: str) -> dict[str, Any]:
         """One tool call of a run, read on demand from the agent's Claude Code session on this
@@ -1841,6 +1884,24 @@ def _recorded_fingerprints(events: list[dict[str, Any]]) -> dict[str, str]:
     return out
 
 
+def _git_baseline(spec: FlowSpec) -> dict[str, Any]:
+    """The state of each git root of the run's workspace (and of the flow's own folder) at the
+    start of a run: what `run_changes` compares with later. Nothing is written to the roots."""
+    roots = dict(workspaces.resolved()[1])
+    try:
+        own = _workspace_dir(spec, check=False)
+    except Exception:  # noqa: BLE001 — a flow without a usable folder: only the roots
+        own = None
+    if own is not None and all(Path(p).resolve() != Path(own).resolve() for p in roots.values()):
+        roots["workspace"] = str(own)
+    out: dict[str, Any] = {}
+    for name, path in roots.items():
+        snap = changes.snapshot(Path(path))
+        if snap is not None:
+            out[name] = {"path": str(path), **snap}
+    return out
+
+
 def _waited(events: list[dict[str, Any]], until: float | None) -> float:
     """Seconds a run waited for the person at human gates (a gate still open counts until
     `until`, or not at all when None)."""
@@ -1917,6 +1978,61 @@ def list_artifacts(run_input: str) -> list[dict[str, Any]]:
         return []
     return [{"name": p.name, "size": p.stat().st_size} for p in sorted(base.iterdir())
             if p.is_file() and p.suffix in (".json", ".md", ".jsonl") and p.name != "run_meta.json"]
+
+
+# --- the files of a run, for the previews of the editor ------------------------------------------
+FILE_DIRS = ("files", "outputs", "inputs")  # what the editor may show of a run folder (not io/)
+TEXT_EXTS = frozenset({".txt", ".md", ".json", ".jsonl", ".yaml", ".yml", ".csv", ".log", ".js",
+                       ".mjs", ".ts", ".tsx", ".jsx", ".py", ".css", ".html", ".xml", ".glsl",
+                       ".vert", ".frag", ".svg", ".toml", ".ini", ".sh", ".ps1"})
+_VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+                ".webm": "video/webm"}
+
+
+def file_kind(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext in media.IMAGE_EXTS:
+        return "image"
+    if ext in _VIDEO_TYPES:
+        return "video"
+    return "text" if ext in TEXT_EXTS else "other"
+
+
+def list_run_files(run_input: str, limit: int = 300) -> list[dict[str, Any]]:
+    """The files of a run (the agents' files, outputs, inputs): path, size and kind."""
+    base = safe_artifact_path(settings.runs_dir, run_input, "x").parent
+    out: list[dict[str, Any]] = []
+    for top in FILE_DIRS:
+        root = base / top
+        if not root.is_dir():
+            continue
+        for f in sorted(root.rglob("*")):
+            if f.is_file() and not any(part.startswith(".") for part in f.relative_to(base).parts):
+                out.append({"path": f.relative_to(base).as_posix(), "size": f.stat().st_size,
+                            "kind": file_kind(f)})
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def run_file(run_input: str, rel: str) -> tuple[Path, str]:
+    """A file of a run to serve (inside files/, outputs/ or inputs/ only) and its media type:
+    images by their bytes, videos by extension, text (SVG too) as text/plain, else bytes."""
+    base = safe_artifact_path(settings.runs_dir, run_input, "x").parent.resolve()
+    parts = Path(rel).parts
+    if not parts or parts[0] not in FILE_DIRS or any(p in ("..", "") or p.startswith(".") for p in parts):
+        raise FileNotFoundError(rel)
+    f = (base / rel).resolve()
+    if not f.is_file() or not f.is_relative_to(base):
+        raise FileNotFoundError(rel)
+    kind = file_kind(f)
+    with f.open("rb") as fh:
+        head = fh.read(16)
+    if kind == "image":
+        return f, media.image_type(head) or "application/octet-stream"
+    if kind == "video":
+        return f, _VIDEO_TYPES[f.suffix.lower()]
+    return f, "text/plain; charset=utf-8" if kind == "text" else "application/octet-stream"
 
 
 def read_artifact_text(run_input: str, name: str, limit: int = 200_000) -> str:

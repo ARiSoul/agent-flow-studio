@@ -257,7 +257,8 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
     let added = Object.keys(spec.roots).filter((r) => !before.includes(r));
     try {
       const w = await api.updateWorkspace(name, { title: spec.title, description: spec.description, roots: spec.roots,
-        vars: spec.vars, environments: spec.environments, default_environment: spec.default_environment ?? null });
+        vars: spec.vars, environments: spec.environments, default_environment: spec.default_environment ?? null,
+        preview: spec.preview?.url ? spec.preview : null });
       if (w.spec) { setSpec(w.spec); setSaved(JSON.stringify(w.spec)); }
       setRoots(w.roots ?? {});
       // a root that only changed its name kept its explored context: nothing new to explore
@@ -359,6 +360,16 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
           </tr>))}
       </tbody></table>
       <button className="small" onClick={() => set((s) => { s.environments[uniq(Object.keys(s.environments), "env")] = { kind: "dev", vars: {} }; })}>{t("ws.addEnv")}</button>
+
+      <h3>{t("ws.preview")}</h3>
+      <p className="muted small">{t("ws.previewHint")}</p>
+      <div className="row ws-preview">
+        <input className="mono grow" value={spec.preview?.url ?? ""} placeholder="http://localhost:5173/" aria-label={t("ws.previewUrl")}
+          onChange={(e) => set((s) => { s.preview = { ...(s.preview ?? { url: "" }), url: e.target.value }; })} />
+        <input className="mono" value={spec.preview?.start ?? ""} placeholder="npm run dev" aria-label={t("ws.previewStart")}
+          title={t("ws.previewStartTitle")}
+          onChange={(e) => set((s) => { s.preview = { ...(s.preview ?? { url: "" }), start: e.target.value }; })} />
+      </div>
 
       <h3>{t("ws.vars")}</h3>
       <p className="muted small">{t("ws.varsHint")}</p>

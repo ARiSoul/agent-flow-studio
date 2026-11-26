@@ -28,3 +28,15 @@ test("changing a decision holds the run on the server first", async () => {
   await runApi(f).holdDecision("r1", false);
   assert.deepEqual(calls, [["/api/runs/r1/decision/hold", "POST", { dismissed: true }], ["/api/runs/r1/decision/hold", "POST", { dismissed: false }]]);
 });
+
+import { diffLines } from "../src/diffLines.ts";
+test("a unified diff as lines with their numbers", () => {
+  const d = ["diff --git a/x b/x", "index 1..2 100644", "--- a/x", "+++ b/x", "@@ -1,3 +1,3 @@", " a", "-b", "+B", " c",
+    String.fromCharCode(92) + " No newline at end of file", ""].join("\n");
+  const got = diffLines(d);
+  assert.deepEqual(got.filter((l) => l.kind !== "meta").map((l) => [l.kind, l.text, l.old ?? null, l.new ?? null]), [
+    ["hunk", "@@ -1,3 +1,3 @@", null, null], ["same", "a", 1, 1], ["del", "b", 2, null], ["add", "B", null, 2], ["same", "c", 3, 3]]);
+  assert.equal(got.filter((l) => l.kind === "meta").length, 5);  // the header and the "No newline" note
+  const added = diffLines("--- /dev/null\n+++ b/new.json\n@@ -0,0 +1,2 @@\n+{\n+}\n");
+  assert.deepEqual(added.filter((l) => l.kind === "add").map((l) => l.new), [1, 2]);
+});

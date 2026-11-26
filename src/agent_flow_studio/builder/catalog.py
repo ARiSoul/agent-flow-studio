@@ -33,7 +33,8 @@ class ToolInfo:
 BUILTIN_TOOLS: dict[str, ToolInfo] = {
     f"{server}.{t.name}": ToolInfo(
         f"{server}.{t.name}", server, t.name, t.description,
-        writes_local_only=(f"{server}.{t.name}" in ("artifacts.save_artifact", "io.set_output")),
+        writes_local_only=(f"{server}.{t.name}" in ("artifacts.save_artifact", "io.set_output",
+                                                      "preview.screenshot")),
     )
     for server, tools in _GROUPS.items()
     for t in tools

@@ -738,7 +738,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
     options = ClaudeAgentOptions(
         system_prompt=orch.rstrip() + ctx + "\n\n" + flow_section(spec),
         tools=[DELEGATION_TOOL, *natives],
-        cwd=str(ws) if ws and natives else None,
+        cwd=str(ws) if ws else None,  # also without native tools: `claude --resume` finds it
         mcp_servers=servers,
         allowed_tools=[*allowed, DELEGATION_TOOL],
         disallowed_tools=[d for d in DISALLOWED if d not in natives],
@@ -905,7 +905,7 @@ def compile_agent(spec: FlowSpec, flow_dir: Path, agent: str, *,
     return ClaudeAgentOptions(
         system_prompt=prompt,
         tools=natives,  # [] = no built-in tools at all
-        cwd=str(ws) if ws and natives else None,
+        cwd=str(ws) if ws else None,  # also without native tools: `claude --resume` finds it
         mcp_servers=servers,
         allowed_tools=list(tools),
         disallowed_tools=[d for d in DISALLOWED if d not in natives] + sorted(DELEGATION_TOOLS),

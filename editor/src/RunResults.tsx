@@ -1,15 +1,30 @@
 // The results of a run: the final result shown in full (the outputs of the step that saved last,
 // once the run is done), every output as one dense row (open, copy, download), the files of the
 // run and its folder. Available while the run goes on.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import { Markdown } from "./Markdown";
-import { Clamp, download, MoreMenu, oneLine, pretty, useCopy } from "./RunParts";
+import { Clamp, download, fileUrl, mediaOf, MoreMenu, oneLine, pretty, useCopy, type RunFile } from "./RunParts";
 import { kb } from "./runSteps";
 
-export type Shown = { title: string; value: unknown; md: boolean };
+export type Shown = { title: string; value: unknown; md: boolean; media?: { kind: "image" | "video" | "text"; url: string } };
 
-export function Results({ outputs, lastOut, done, typeOf, usedBy, arts, runDir, highlight, onShow, onFile, onFolder, onStep }: {
+/** The files of a run (agents' files, outputs, inputs), loaded again when `key` changes. */
+export function useRunFiles(input: string | undefined, key: unknown): RunFile[] {
+  const [files, setFiles] = useState<RunFile[]>([]);
+  useEffect(() => {
+    if (!input) { setFiles([]); return; }
+    let live = true;
+    fetch(`/api/runs/${encodeURIComponent(input)}/files`).then((r) => (r.ok ? r.json() : { files: [] }))
+      .then((d) => { if (live) setFiles(d.files ?? []); }).catch(() => { if (live) setFiles([]); });
+    return () => { live = false; };
+  }, [input, key]);
+  return files;
+}
+
+export function Results({ run, files, outputs, lastOut, done, typeOf, usedBy, arts, runDir, highlight, onShow, onFile, onFolder, onStep }: {
+  /** The run folder's name (for the URLs of its files) and the files to preview. */
+  run: string; files: RunFile[];
   outputs: [string, Record<string, unknown>][]; lastOut?: string; done: boolean;
   typeOf: (agent: string, name: string) => string;
   /** The steps that read an output ("writer.code"), from the flow's inputs. */
@@ -19,7 +34,8 @@ export function Results({ outputs, lastOut, done, typeOf, usedBy, arts, runDir, 
   highlight: { agent: string; name: string; nonce: number } | null;
   onShow: (s: Shown) => void; onFile: (name: string) => void; onFolder: () => void; onStep: (node: string) => void;
 }) {
-  const { t } = useI18n();
+  const i18n = useI18n();
+  const { t } = i18n;
   const [copied, copy] = useCopy();
   const refs = useRef<Record<string, HTMLLIElement | null>>({});
   useEffect(() => {
@@ -36,7 +52,11 @@ export function Results({ outputs, lastOut, done, typeOf, usedBy, arts, runDir, 
   const total = outputs.reduce((k, [, o]) => k + Object.keys(o).length, 0);
   const save = (key: string, v: unknown, isMd: boolean) =>
     download(`${key}${isMd ? ".md" : typeof v === "string" ? ".txt" : ".json"}`, pretty(v), isMd ? "text/markdown" : "application/json");
-  if (!total && !arts.length) return null;
+  if (!total && !arts.length && !files.length) return null;
+  const show = (f: RunFile) => onShow({ title: f.path.split("/").pop() ?? f.path, value: f.path, md: false,
+    media: f.kind === "other" ? undefined : { kind: f.kind, url: fileUrl(run, f.path) } });
+  const images = files.filter((f) => f.kind === "image");
+  const others = files.filter((f) => f.kind !== "image");
   return (
     <section className="rp-results" aria-label={t("rp.results")}>
       <h3>{t("rp.results")}</h3>
@@ -58,16 +78,19 @@ export function Results({ outputs, lastOut, done, typeOf, usedBy, arts, runDir, 
           <ul className="rp-outs">
             {outputs.flatMap(([agent, o]) => Object.entries(o).map(([n, v]) => {
               const key = `${agent}.${n}`, isMd = md(agent, n);
+              const m = mediaOf(v);
+              const open = () => onShow(m ? { title: key, value: v, md: false, media: { kind: m.kind, url: fileUrl(run, m.path) } } : { title: key, value: v, md: isMd });
               return (
                 <li key={key} ref={(el) => { refs.current[key] = el; }} className="rp-out">
-                  <button className="rp-out-main" onClick={() => onShow({ title: key, value: v, md: isMd })} title={t("run.outOpen")}>
+                  <button className="rp-out-main" onClick={open} title={t("run.outOpen")}>
+                    {m?.kind === "image" && <img className="rp-thumb checker" src={fileUrl(run, m.path)} alt="" loading="lazy" />}
                     <span className="mono"><b>{n}</b> <span className="muted">· {agent}</span></span>
                     <span className="port-tag">{typeOf(agent, n)}</span>
                     <span className="rp-preview-line muted small">{oneLine(v, 140)}</span>
                     {usedBy(agent, n).length > 0 && <span className="rp-used small muted">→ {usedBy(agent, n).join(", ")}</span>}
                   </button>
                   <MoreMenu label={t("rp.outputActions", { name: key })} items={[
-                    { label: t("run.outOpen"), onSelect: () => onShow({ title: key, value: v, md: isMd }) },
+                    { label: t("run.outOpen"), onSelect: open },
                     { label: t(copied === key ? "run.outCopied" : "run.outCopy"), onSelect: () => copy(pretty(v), key) },
                     { label: t("run.outDownload"), onSelect: () => save(key, v, isMd) },
                     { label: t("rp.showStep"), onSelect: () => onStep(agent) },
@@ -75,6 +98,19 @@ export function Results({ outputs, lastOut, done, typeOf, usedBy, arts, runDir, 
                 </li>);
             }))}
           </ul>
+        </details>)}
+      {files.length > 0 && (
+        <details open={images.length > 0}>
+          <summary>{i18n.tn("rp.runFiles", files.length)}</summary>
+          {images.length > 0 && <div className="rp-thumbs">{images.map((f) => (
+            <button key={f.path} className="rp-thumb-btn" onClick={() => show(f)} title={`${f.path} · ${kb(f.size)}`}>
+              <img className="checker" src={fileUrl(run, f.path)} alt={f.path} loading="lazy" />
+              <span className="small mono">{f.path.split("/").pop()}</span></button>))}</div>}
+          {others.length > 0 && <ul className="rp-files">{others.map((f) => (
+            <li key={f.path}>{f.kind === "other"
+              ? <a className="small mono" href={fileUrl(run, f.path)} download>{f.path}</a>
+              : <button className="link small mono" onClick={() => show(f)}>{f.path}</button>}
+              <span className="muted small">{kb(f.size)}</span></li>))}</ul>}
         </details>)}
       {arts.length > 0 && (
         <details>

@@ -42,6 +42,63 @@ def config_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+SESSION_ID = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+
+
+def session_cwd(session_id: str) -> str | None:
+    """The folder a Claude Code session ran in (its file's `cwd`), to resume it there; None when
+    this machine has no such session."""
+    if not SESSION_ID.fullmatch(session_id or ""):
+        return None
+    for f in (config_dir() / "projects").glob(f"*/{session_id}.jsonl"):
+        try:
+            with f.open(encoding="utf-8", errors="replace") as fh:
+                for _ in range(50):
+                    line = fh.readline()
+                    if not line:
+                        break
+                    m = re.search(r'"cwd"\s*:\s*("(?:[^"\\]|\\.)*")', line)
+                    if m:
+                        import json
+                        return str(json.loads(m.group(1)))
+        except OSError:
+            continue
+    return None
+
+
+def resume_command(session_id: str, cwd: str, windows: bool) -> str:
+    """The command that goes on with a session in Claude Code (PowerShell on Windows)."""
+    if windows:
+        return f"Set-Location -LiteralPath '{cwd.replace(chr(39), chr(39) * 2)}'; claude --resume {session_id}"
+    import shlex
+    return f"cd {shlex.quote(cwd)} && claude --resume {session_id}"
+
+
+def open_terminal(session_id: str, cwd: str) -> None:
+    """Opens the system terminal in `cwd`, going on with the session in Claude Code."""
+    import shutil
+    import subprocess
+    import sys
+    if not SESSION_ID.fullmatch(session_id) or not Path(cwd).is_dir():
+        raise ValueError("no such session or folder on this machine")
+    resume = f"claude --resume {session_id}"
+    if sys.platform == "win32":
+        wt = shutil.which("wt")
+        if wt:
+            subprocess.Popen([wt, "-d", cwd, "powershell", "-NoExit", "-Command", resume])
+        else:
+            subprocess.Popen(["powershell", "-NoExit", "-Command", resume], cwd=cwd,
+                             creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+    elif sys.platform == "darwin":
+        script = resume_command(session_id, cwd, False).replace("\\", "\\\\").replace('"', '\\"')
+        subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "{script}"'])
+    else:
+        term = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("xterm")
+        if not term:
+            raise ValueError("no terminal found: run the command yourself")
+        subprocess.Popen([term, "-e", "bash", "-lc", f"{resume_command(session_id, cwd, False)}; exec bash"])
+
+
 def _key(folder: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", folder)
 
