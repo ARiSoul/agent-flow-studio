@@ -784,7 +784,7 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         return _public(_validate(body.spec, {**_disk_prompts(d), **body.prompts}))
 
     @app.put("/api/flows/{name}", dependencies=[Depends(csrf)])
-    def save(name: str, body: FlowBody) -> JSONResponse:
+    async def save(name: str, body: FlowBody) -> JSONResponse:
         d = _flow_dir(fb(), name)
         _check_prompts(body.prompts)
         if body.spec.get("name") != name:
@@ -811,7 +811,9 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         shutil.copyfile(flow, d / "flow.yaml.bak")
         if result["ok"]:
             _atomic_write(flow, dump_flow(result["spec"]))
-            return JSONResponse(_public(result) | {"saved": True,
+            # runs of this flow that are not over take its autonomy now (also mid-step)
+            refreshed = runner.refresh_autonomy(name)
+            return JSONResponse(_public(result) | {"saved": True, "runs_updated": refreshed,
                                                    "spec": spec_to_data(result["spec"])})
         _atomic_write(flow, dump_raw(body.spec, name))  # with problems: as it is
         return JSONResponse(_public(result) | {"saved": True, "with_problems": True,

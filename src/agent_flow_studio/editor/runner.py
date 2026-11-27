@@ -112,6 +112,7 @@ class Run:
     tool_names: dict[str, str] = field(default_factory=dict)  # tool_use_id → tool (for errors)
     after: tuple[dict[str, Any], Any, str, float] | None = None  # a decision waiting its turn
     holding: float | None = None  # the person is changing that decision: it does not go on
+    policy: Any = None  # orchestrator mode: the write policy of the segment that runs now
     pending: dict[str, tuple[ApprovalRequest, asyncio.Future[tuple[bool, str]]]] = field(
         default_factory=dict)
     engine: GraphEngine | None = None  # graph mode: the engine state (continue/decide resume it)
@@ -592,6 +593,7 @@ class Runner:
         if self.active():
             raise RunError(409, "a run is already in progress")
         run.mode, run.status = how, "running"
+        self._refresh_policy(run)  # what was changed in the flow while it paused applies
         self._emit(run, {"type": "continue", "how": how})
         if run.engine is not None:
             run.engine.set_mode(how)
@@ -808,6 +810,7 @@ class Runner:
                        comment: str) -> Run:
         """After a human decision: the run goes on from its gate."""
         run.after = None
+        self._refresh_policy(run)  # what was changed in the flow while it waited applies
         if run.engine is not None:  # graph mode: the engine follows the gate's edges
             run.status, run.gate = "running", None
             self._spawn(run, self._drive_graph(run, gate=gate["gate"]))
@@ -1658,6 +1661,46 @@ class Runner:
             fut.set_result((ok, comment))
         return run
 
+    def refresh_autonomy(self, flow: str) -> list[str]:
+        """The flow was saved: its runs in memory that are not over take its autonomy now (the
+        flow's and each agent's), also while a step runs. Returns the runs that changed."""
+        changed = []
+        for run in list(self.runs.values()):
+            if run.flow == flow and run.status not in ("done", "error", "stopped") \
+                    and self._refresh_policy(run):
+                changed.append(run.id)
+        return changed
+
+    def _refresh_policy(self, run: Run) -> bool:
+        """The run's write policy takes the autonomy of the flow as saved now. A write approval
+        that waits and that the new autonomy no longer asks for is approved by it (and logged)."""
+        policy = run.engine.compiled.policy if run.engine is not None else run.policy
+        if policy is None:
+            return False
+        try:
+            with self._in(run):
+                spec, _ = load_spec(run.flow, base=run.base)
+        except (FlowError, OSError):
+            return False
+        agents = {n: a.autonomy for n, a in spec.agents.items() if a.autonomy}
+        if (policy.flow_autonomy, policy.agent_autonomy) == (spec.autonomy, agents):
+            return False
+        policy.flow_autonomy, policy.agent_autonomy = spec.autonomy, agents
+        self._emit(run, {"type": "autonomy", "flow": spec.autonomy, "agents": agents})
+        for req_id, (req, fut) in list(run.pending.items()):
+            level = policy.level(req.agent)
+            if fut.done() or not (level == "auto" or (level == "approve_prod"
+                                                      and req.environment != "prod")):
+                continue
+            note = f"approved by the autonomy now set ({level})"
+            self._log_decision(run, {"type": "write", "agent": req.agent, "tool": req.tool,
+                                     "environment": req.environment, "summary": req.summary,
+                                     "decision": "approve", "comment": note, "by": "autonomy"})
+            self._emit(run, {"type": "approval_result", "id": req_id, "approved": True,
+                             "summary": req.summary, "comment": note})
+            fut.set_result((True, note))
+        return True
+
     def hold(self, run_id: str, on: bool) -> Run:
         """The person changes the decision of a decided run: it does not go on meanwhile (for at
         most HOLD_FOR seconds); `on=False` keeps the recorded decision and lets it go on."""
@@ -1702,6 +1745,7 @@ class Runner:
         policy = compiled.policy
         assert policy is not None
         policy.approver = self._approver(run)
+        run.policy = policy
         if run.mode == "agent":
             assert run.target is not None
             policy.limit_segment(1, frozenset({run.target}))

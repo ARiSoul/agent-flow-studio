@@ -4,7 +4,25 @@ Hand-over file between machines/accounts. **When you start:** read this. **When 
 update "Current state" and "Next steps", add a line to the "Log" (date, machine/account in generic
 terms — no emails —, what was done) and commit + push.
 
-## Where we stopped (2026-11-26, night, home machine / account B)
+## Where we stopped (2026-11-27, home machine / account B)
+Notes from real use on the work machine (a PBI flow: analyse, plan, implement, test, review),
+three fixed (not committed when this was written; see the Log):
+- **Markdown tables** in the output viewer and on gates: a table right after a line of text (no
+  blank line), single-dash separators, no outer pipes, `\|` and pipes in code. The parser is now
+  `editor/src/markdownParse.ts` (tested in `editor/tests/markdown.test.ts`).
+- **Autonomy changes reach the runs**: saving the flow updates the write policy of its runs in
+  memory (also mid-step: `Runner.refresh_autonomy`), continue and gate decisions take it too, and
+  a waiting write approval the new autonomy no longer asks for is approved (logged "by autonomy").
+  Resume and re-run already reloaded the flow. **The likely cause of what was seen**: the agents
+  had their *own* autonomy, which wins over the flow's — Properties now lists them with
+  "Use the flow's autonomy for all".
+- **workspace.git** when the workspace folder is not a repository: it uses the repositories one
+  level down and the workspace roots that are repositories; `repo` (a root name or a sub-folder)
+  chooses when there are several (the error lists them).
+- **Planned, not done** (backlog 13 and 14): pause a running agent and go on from the same place;
+  other models and providers.
+
+## Where we stopped earlier (2026-11-26, night, home machine / account B)
 **Reviewing runs like in Claude Code** (on top of the Run panel rewrite, commit `51b16fc`). After
 you pull: stop the editor, `pip install -e ".[dev,web]"` (new entry point `agent-flow-studio-mcp`;
 `mcp>=2` was already there through the SDK), `cd editor; npm run build`, restart the editor.
@@ -253,6 +271,22 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
    connection" is refused, name the test path (Azure DevOps tests `/_apis/projects`).
 
 13. [ ] Resume / run from here for orchestrator-mode runs (today graph mode only).
+14. [ ] **Pause a running agent and go on from the same place** (graph mode). Engine `pause(node |
+    None)`: cancel the running agent tasks, keep each one's live session id (the messages carry
+    it), mark the node `paused`, cancel its waiting write approvals; the run ends `paused`. Going
+    on: the paused nodes run with `resume=<session>` and a short "you were paused, continue from
+    where you stopped; do not redo finished work" message; the policy is refreshed first (the
+    autonomy changed meanwhile applies). Editor: Pause in the header and on a running step; a
+    "Paused by you" card with Go on / Stop. Tests with the fake SDK (a slow agent paused, its
+    session resumed, nothing redone).
+15. [ ] **Other models and providers.** The runtime stays the Claude Agent SDK (the guard hook,
+    the write policy, the io tools all live there). Step 1: providers as data (studio settings:
+    name, an Anthropic-compatible base URL, the key as `${VAR}` or keyring, the models it offers)
+    — Amazon Bedrock / Google Vertex / Microsoft Foundry through the CLI's own switches, any other
+    model (OpenAI, Gemini, local Ollama…) through a gateway that speaks the Anthropic API (e.g.
+    LiteLLM). An agent or flow model becomes `provider/model`; `compile` sets the session's `env`
+    (`ANTHROPIC_BASE_URL`, token from the env/keyring, never in files). The model picker groups by
+    provider; no cost estimate for unknown prices. Step 2 only if needed: a second runtime.
 
 Done: multilingual UI · themes · connectors phase 2 · code flow templates · typed IO + graph engine
 · editor polish · context menu · agent library · assistant commands/history · connector actions
@@ -489,3 +523,6 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-26 · home machine (account B) · Reviewing runs: Changes (git diff since the start),
   previews of run files, the workspace's web app (Preview tab, preview.screenshot), Continue in
   Claude Code and the studio MCP server for Claude Code.
+- 2026-11-27 · home machine (account B) · Notes from real use: Markdown tables after text, saved
+  autonomy reaches runs (and a warning for agents with their own), workspace.git finds repos;
+  pause and other providers planned (backlog 14, 15).

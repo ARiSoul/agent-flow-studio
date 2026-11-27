@@ -686,3 +686,29 @@ def test_a_held_decision_holds_the_queue_and_survives_a_restart(flows):
         assert not again.active() and [i["name"] for i in again.queued] == ["k3"]
 
     run(later())
+
+
+def test_a_saved_autonomy_reaches_the_runs_in_memory(flows):
+    """The person changes the flow's autonomy while a run waits (or runs): the run takes it now,
+    and a write approval that waits and that the new autonomy no longer asks for is approved."""
+    from agent_flow_studio.policy import ApprovalRequest
+    rn = Runner(flows, agent_query())
+
+    async def go():
+        r = await _start(rn, "au1")
+        policy = r.engine.compiled.policy
+        assert policy.flow_autonomy == "approve"
+        fut = asyncio.get_running_loop().create_future()
+        r.pending["w1"] = (ApprovalRequest("writer", "Edit", "dev", "edit a.md", {}), fut)
+        assert rn.refresh_autonomy("parallel") == []  # nothing changed yet
+        f = flows / "parallel" / "flow.yaml"
+        f.write_text(f.read_text(encoding="utf-8").replace("max_parallel: 4", "max_parallel: 4\nautonomy: approve_prod"),
+                     encoding="utf-8")
+        assert rn.refresh_autonomy("parallel") == [r.id]
+        assert policy.flow_autonomy == "approve_prod"
+        assert fut.done() and fut.result()[0] is True  # a dev write no longer needs approval
+        ev = [e for e in r.events if e["type"] == "autonomy"]
+        assert ev and ev[-1]["flow"] == "approve_prod"
+        assert any(e["type"] == "approval_result" and "autonomy" in e["comment"] for e in r.events)
+
+    run(go())

@@ -206,3 +206,36 @@ def test_git_tool_reports_errors_as_tool_errors(repo):
     finally:
         git_tool.configure(None)
     assert not (repo / "x").exists()
+
+
+@needs_git
+def test_git_finds_the_repos_below_a_folder_that_is_not_one(tmp_path):
+    """A workspace folder holding several repositories: with one the tool uses it; with several,
+    `repo` chooses and the error lists them; a folder outside the workspace is refused."""
+    def init(d):
+        d.mkdir()
+        g = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+        subprocess.run(["git", "init", "-q"], cwd=d, check=True)
+        (d / "a.txt").write_text(d.name, encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=d, check=True)
+        subprocess.run([*g, "commit", "-q", "-m", f"first in {d.name}"], cwd=d, check=True)
+
+    top = tmp_path / "work"
+    top.mkdir()
+    init(top / "apps")
+    (top / "docs").mkdir()  # not a repository
+    git_tool.configure(top)
+    try:
+        assert set(git_tool.repos()) == {"apps"}
+        r = asyncio.run(git_tool.run_git("log", ["--oneline"]))  # the only one
+        assert "first in apps" in r["output"]
+        init(top / "srv")
+        with pytest.raises(ValueError, match="several git repositories: pass repo, one of apps, srv"):
+            asyncio.run(git_tool.run_git("log", ["--oneline"]))
+        r = asyncio.run(git_tool.run_git("log", ["--oneline"], repo="srv"))
+        assert "first in srv" in r["output"]
+        for bad in ("../work/apps", "docs", str(top / "apps")):
+            with pytest.raises(ValueError):
+                asyncio.run(git_tool.run_git("status", [], repo=bad))
+    finally:
+        git_tool.configure(None)

@@ -30,6 +30,8 @@ export function line(e: Ev, i18n: Pick<I18n, "t" | "tOr" | "tn">, self = true): 
       of: String(Number(e.max ?? 1) + 1) }) };
     case "retry_cancelled": return { kind: "flow", cls: "info", text: t("rp.ev.retryCancelled") };
     case "retry_skipped": return { kind: "flow", cls: "gate", text: t("rp.ev.retrySkipped") };
+    case "autonomy": return { kind: "flow", cls: "info", text: t("rp.ev.autonomy", { level: tOr(`autonomy.${String(e.flow)}`, String(e.flow)),
+      own: Object.entries((e.agents ?? {}) as Record<string, string>).map(([a, l]) => `${a}: ${tOr(`autonomy.${l}`, l)}`).join(", ") || "—" }) };
     case "turn": return { kind: "flow", cls: "info", text: t("rp.ev.turn", { after: String(e.after ?? "") }) };
     case "tool": return { kind: "tools", cls: "tool", text: `${who}${e.tool}${e.detail ? ` — ${e.detail}` : e.artifact ? ` (${e.artifact})` : ""}` };
     case "tool_error": return e.id ? null  // shown on its tool's line

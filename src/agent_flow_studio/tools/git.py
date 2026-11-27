@@ -5,6 +5,11 @@ Not a shell: fixed subcommands, options from a closed list, no `-c`/`--output`/e
 textconv tools, fsmonitor and hooks off, no pager, no prompts. The compiler sets the workspace
 (`configure`); without one the tool refuses. Writing with git (commit, push) stays in
 `workspace.bash`, which follows the flow autonomy.
+
+Which repository: the workspace folder when it is one; otherwise the repositories one level down
+in it and the roots of the studio workspace (e.g. apps, src…) that are repositories. With one,
+it is used; with several, `repo` chooses (a root name or a sub-folder of the workspace); the
+error lists them.
 """
 from __future__ import annotations
 
@@ -81,9 +86,54 @@ def check_args(command: str, args: list[str]) -> list[str]:
     return args
 
 
-async def run_git(command: str, args: list[str]) -> dict[str, Any]:
+def _is_repo(p: Path) -> bool:
+    return (p / ".git").exists()
+
+
+def repos() -> dict[str, Path]:
+    """The repositories the tool can read: name → folder."""
+    if _workspace is None:
+        return {}
+    found: dict[str, Path] = {}
+    if _is_repo(_workspace):
+        found["."] = _workspace
+    else:
+        for sub in sorted(_workspace.iterdir()) if _workspace.is_dir() else []:
+            if sub.is_dir() and not sub.name.startswith(".") and _is_repo(sub):
+                found[sub.name] = sub
+    from .. import workspaces  # the roots of the studio workspace (folders the person declared)
+    for name, path in workspaces.resolved()[1].items():
+        root = Path(path)
+        if _is_repo(root) and root.resolve() not in {f.resolve() for f in found.values()}:
+            found[name] = root
+    return found
+
+
+def pick_repo(repo: str | None) -> Path:
+    """The repository to run git in (see the module note)."""
     if _workspace is None:
         raise ValueError("this flow has no workspace")
+    found = repos()
+    if repo:
+        if repo in found:
+            return found[repo]
+        if ".." in Path(repo).parts or Path(repo).is_absolute():
+            raise ValueError("repo must be a root name or a folder inside the workspace")
+        p = (_workspace / repo).resolve()
+        if p.is_relative_to(_workspace.resolve()) and _is_repo(p):
+            return p
+        raise ValueError(f"{repo!r} is not a git repository here; repos: {', '.join(found) or 'none'}")
+    if "." in found:
+        return found["."]
+    if len(found) == 1:
+        return next(iter(found.values()))
+    if not found:
+        raise ValueError("no git repository in the workspace or its roots (or one level down)")
+    raise ValueError("several git repositories: pass repo, one of " + ", ".join(found))
+
+
+async def run_git(command: str, args: list[str], repo: str | None = None) -> dict[str, Any]:
+    cwd = pick_repo(repo)
     exe = shutil.which("git")
     if not exe:
         raise ValueError("git is not installed or not on PATH")
@@ -91,7 +141,7 @@ async def run_git(command: str, args: list[str]) -> dict[str, Any]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env |= {"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "GIT_OPTIONAL_LOCKS": "0"}
     proc = await asyncio.create_subprocess_exec(
-        exe, *argv, cwd=str(_workspace), env=env, stdin=asyncio.subprocess.DEVNULL,
+        exe, *argv, cwd=str(cwd), env=env, stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         out, errb = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
@@ -108,15 +158,19 @@ async def run_git(command: str, args: list[str]) -> dict[str, Any]:
     "git",
     "Read-only git in the flow workspace. 'command' is one of: status, diff, log, show, branch, "
     "ls-files, blame. 'args' are options and revisions/paths, e.g. ['main...HEAD', '--stat'] or "
-    "['-n', '20', '--oneline']. Put paths after '--'. It cannot commit, push or change files.",
+    "['-n', '20', '--oneline']. Put paths after '--'. It cannot commit, push or change files. "
+    "When the workspace folder is not a repository, it uses the repositories one level down and "
+    "the workspace roots: pass 'repo' (a root name or a sub-folder) when there are several; the "
+    "error lists them.",
     {"type": "object", "properties": {
         "command": {"type": "string", "enum": list(COMMANDS)},
         "args": {"type": "array", "items": {"type": "string"}},
+        "repo": {"type": "string"},
     }, "required": ["command"]},
 )
 async def git(args):
     try:
-        r = await run_git(args["command"], list(args.get("args") or []))
+        r = await run_git(args["command"], list(args.get("args") or []), args.get("repo") or None)
     except ValueError as e:
         return err(str(e))
     return ok(r)

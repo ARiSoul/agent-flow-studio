@@ -822,6 +822,15 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
         </select>
       </Field>
       {s.autonomy === "auto" && <p className="field-err">{t("insp.autoWarning")}</p>}
+      {(() => {  // agents with their own autonomy do not follow the flow's: say so, and offer to clear it
+        const own = Object.entries(s.agents).filter(([, a]) => a.autonomy && a.autonomy !== (s.autonomy ?? "approve"));
+        if (!own.length) return null;
+        return <div className="warn-box small">
+          <p>{t("insp.ownAutonomy", { list: own.map(([n, a]) => `${n} (${t(`autonomy.${a.autonomy as "approve"}`)})`).join(", ") })}</p>
+          <button className="small" onClick={() => set((x) => { for (const [n] of own) delete x.agents[n].autonomy; })}>
+            {t("insp.ownAutonomyClear")}</button>
+        </div>;
+      })()}
       <label className="check">
         <input type="checkbox" checked={!!s.workspace} onChange={(e) => set((x) => {
           if (e.target.checked) x.workspace = roots.length ? { root: roots[0], environment: "dev" } : { path: "", environment: "dev" };
