@@ -38,6 +38,7 @@ artifacts = ["src/agent_flow_studio/editor/static/**"]
 pythonpath = ["src", "extensions"]
 testpaths = ["tests", "extensions/*/tests"]
 addopts = "--import-mode=importlib"
+markers = ["e2e: end-to-end tests in a real browser (tests/e2e; skipped without Playwright, a browser or the built editor)"]
 
 [tool.ruff]
 line-length = 100

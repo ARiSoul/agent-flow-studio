@@ -72,3 +72,42 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+
+  e2e:
+    name: E2E (editor in a browser)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AFS_NO_EXTENSIONS: "1"
+      AFS_E2E_REQUIRED: "1"  # a missing browser or build fails the job (never a silent skip)
+      AFS_E2E_SHOTS: e2e-shots  # a screenshot of each failing test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: editor/package-lock.json
+      - name: Build the editor
+        working-directory: editor
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install (with Playwright and its Chromium)
+        run: |
+          python -m pip install -e ".[dev,web]"
+          python -m playwright install --with-deps chromium
+      - name: E2E tests
+        run: python -m pytest tests/e2e -q
+      - name: Keep the screenshots of failed tests
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-shots
+          path: e2e-shots
+          if-no-files-found: ignore

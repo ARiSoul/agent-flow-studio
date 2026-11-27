@@ -11,7 +11,12 @@ terms — no emails —, what was done) and commit + push.
   built editor path (`api/common.STATIC`).
 - **CI** (GitHub Actions, `.github/workflows/ci.yml`): ruff + core tests on Linux (Python 3.10,
   3.13) and Windows (3.12), editor typecheck + tests + build, on every push to main and every
-  pull request. Next suggested: Playwright E2E for the main paths, then a real provider check.
+  pull request.
+- **E2E tests** (`tests/e2e`, Playwright, fake model): open a flow, run to the gate and approve
+  (with the Markdown table), pause and go on, stop, add a provider from the model field, change
+  the language; a CI job runs them on Linux (required, screenshots on failure). Next suggested:
+  a real provider check (e.g. LiteLLM in front of a local Ollama), more E2E paths (write
+  approvals, resume after an error, the Board).
 Notes from real use on the work machine (a PBI flow: analyse, plan, implement, test, review),
 three fixed (not committed when this was written; see the Log):
 - **Markdown tables** in the output viewer and on gates: a table right after a line of text (no
@@ -566,3 +571,5 @@ start the editor or the CLI (the studio does not read `.env`).
   routers; runner.py → Runner + editor/runs/ mixins; no behaviour change, same routes, tests pass.
 - 2026-11-27 · home machine (account B) · CI on GitHub Actions: ruff, core tests (Linux 3.10/3.13,
   Windows 3.12), editor typecheck, tests and build.
+- 2026-11-27 · home machine (account B) · E2E tests with Playwright (6 main paths) and a CI job
+  that runs them on Linux.

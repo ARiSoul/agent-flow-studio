@@ -46,9 +46,20 @@ cd editor; npx tsc --noEmit -p .; cd ..                   # editor types
 One test file: `.\.venv\Scripts\python -m pytest -q tests\test_run_history.py`.
 Long Windows temp paths can skip some tests: add `--basetemp D:\ptmp` (any short folder).
 
+**E2E tests** (`tests/e2e`): the built editor in a headless browser with Playwright, a fake
+model and temporary folders — open a flow, run it to its gate and approve, pause and go on,
+stop, add a provider from the model field, change the language. They need
+`pip install -e ".[web]"`, a Chromium (an installed Chrome/Edge, or
+`python -m playwright install chromium`) and `npm run build`; otherwise they are skipped.
+```powershell
+$env:AFS_NO_EXTENSIONS = "1"; .\.venv\Scripts\python -m pytest tests\e2e -q; Remove-Item Env:AFS_NO_EXTENSIONS
+```
+A failing E2E test leaves a screenshot when `AFS_E2E_SHOTS` names a folder.
+
 CI (`.github/workflows/ci.yml`) runs the same on every push to `main` and every pull request:
 ruff + the core tests (Python 3.10 and 3.13 on Linux, 3.12 on Windows) and the editor (types,
-tests, build). See the runs in the repository's **Actions** tab, or:
+tests, build), and the E2E tests on Linux (a failing one leaves a screenshot artifact). See the
+runs in the repository's **Actions** tab, or:
 ```powershell
 gh run list --limit 5
 gh run view --log-failed
