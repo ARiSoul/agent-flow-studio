@@ -242,7 +242,12 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   every model field (`openProviders`); the assistant's `view_catalog` lists the providers.
 - `extensions.py`: loads `extensions/<name>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
 - Frontend in `editor/` (Vite + React + @xyflow/react, i18n in `editor/src/i18n/`) → build in
-  `src/agent_flow_studio/editor/static/`.
+  `src/agent_flow_studio/editor/static/`. `App.tsx` is the Editor (state, canvas handlers, layout)
+  with its parts as hooks in `editor/src/appParts/` (`graph`: canvas nodes/links from the flow;
+  `nodeActions`, `libraryActions`, `menus`, `flowFiles`); each hook takes a `Pick<EditorCtx, …>`
+  (`appParts/shared.tsx`) of exactly what it uses. `Inspector.tsx` picks the panel; the panels
+  are in `editor/src/inspectorPanels/` (`AgentPanel`, `GatePanel`, `FlowPanel`, `shared`). Folder
+  names never equal a file name in another case (`App.tsx` vs `app/` look alike on Windows).
 
 ## Conventions
 - Python ≥ 3.10, typing, `ruff` (line 100). Flow prompts in `flows/<flow>/prompts/*.md`.

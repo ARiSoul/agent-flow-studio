@@ -109,3 +109,47 @@ def test_the_interface_language_changes(page):
     language.select_option("es")
     expect(page.get_by_role("button", name="Propiedades", exact=True)).to_be_visible()
     assert page.errors == []
+
+
+def test_the_node_menu_duplicates_and_renames_and_undo_goes_back(page):
+    canvas = page.get_by_role("application")
+    canvas.locator(".react-flow__node[data-id='writer']").click(button="right")
+    menu = page.get_by_role("menu")
+    expect(menu.get_by_role("menuitem", name="Properties")).to_be_visible()
+    menu.get_by_role("menuitem", name="Duplicate").click()
+    copy = canvas.locator(".react-flow__node[data-id='writer_2']")
+    expect(copy).to_be_visible()
+    copy.click(button="right")
+    page.get_by_role("menu").get_by_role("menuitem", name="Rename…").click()
+    form = page.get_by_role("dialog", name="Rename writer_2")
+    form.get_by_role("textbox").fill("editor")
+    form.get_by_role("button", name="Rename").click()
+    expect(canvas.locator(".react-flow__node[data-id='editor']")).to_be_visible()
+    expect(page.get_by_role("button", name="Save", exact=True)).to_be_enabled()  # changed, not saved
+    page.get_by_role("button", name="Undo").click()
+    page.get_by_role("button", name="Undo").click()
+    expect(canvas.locator(".react-flow__node[data-id='editor']")).to_have_count(0)
+    expect(canvas.locator(".react-flow__node[data-id='writer_2']")).to_have_count(0)
+    assert page.errors == []
+
+
+def test_a_library_agent_is_copied_into_the_flow(page):
+    page.locator(".pal.lib").filter(has_text="Summarizer").click()  # the palette entry
+    canvas = page.get_by_role("application")
+    expect(canvas.locator(".react-flow__node[data-id='summarizer']")).to_be_visible()
+    expect(page.get_by_text("Summarizer copied from the library.")).to_be_visible()
+    assert page.errors == []
+
+
+def test_a_new_blank_flow_is_created_and_opened(page):
+    page.get_by_role("button", name="New", exact=True).click()
+    form = page.get_by_role("dialog", name="New flow")
+    form.get_by_role("textbox", name=re.compile(r"^Name")).fill("e2e-flow")
+    form.get_by_role("textbox", name=re.compile(r"^Title")).fill("E2E flow")
+    form.get_by_role("button", name="Next").click()
+    expect(page.get_by_text("Flow e2e-flow created.")).to_be_visible()
+    expect(page.get_by_role("combobox", name="Flow")).to_have_value("e2e-flow")
+    # a new flow runs on the graph engine (the recommended mode)
+    page.get_by_role("button", name="Properties", exact=True).click()
+    expect(page.get_by_role("combobox", name="Execution")).to_have_value("graph")
+    assert page.errors == []
