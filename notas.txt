@@ -1,5 +1,0 @@
-o markdown não mostra tabelas (nas janelas de open)
-permitir mais IAs e seus modelos
-When the root isn't a repository, workspace.git could find the repos one level down, or use the workspace roots (apps, srs…), and accept a repo parameter
-permitir pausar um agente em execução e retomar do mesmo sítio
-um flow que tenha o require write approve always e enquanto está a correr uma run se alterar para não pedir aprovações nunca, a run não assume e continua a pedir aprovações. Mesmo parando a execução e alterando o flow e retomar a execução, continua a pedir aprovação. Todas as retomas, re-runs, resumes, after pause (novo), deverão assumir as possíveis alterações feitas entretanto no flow. 
