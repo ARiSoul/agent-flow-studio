@@ -113,6 +113,7 @@ class Run:
     after: tuple[dict[str, Any], Any, str, float] | None = None  # a decision waiting its turn
     holding: float | None = None  # the person is changing that decision: it does not go on
     policy: Any = None  # orchestrator mode: the write policy of the segment that runs now
+    priced: bool = True  # orchestrator mode: False on a gateway provider (cost unknown)
     pending: dict[str, tuple[ApprovalRequest, asyncio.Future[tuple[bool, str]]]] = field(
         default_factory=dict)
     engine: GraphEngine | None = None  # graph mode: the engine state (continue/decide resume it)
@@ -1764,6 +1765,7 @@ class Runner:
         assert policy is not None
         policy.approver = self._approver(run)
         run.policy = policy
+        run.priced = compiled.priced
         if run.mode == "agent":
             assert run.target is not None
             policy.limit_segment(1, frozenset({run.target}))
@@ -1877,9 +1879,10 @@ class Runner:
         elif isinstance(msg, ResultMessage):
             run.session_id = msg.session_id
             claude_sessions.mark_ours(msg.session_id)
-            run.cost += msg.total_cost_usd or 0.0
+            cost = msg.total_cost_usd if run.priced else None  # never a guess
+            run.cost += cost or 0.0
             ev: dict[str, Any] = {"type": "result", "session_id": msg.session_id,
-                                  "cost": msg.total_cost_usd, "turns": msg.num_turns,
+                                  "cost": cost, "turns": msg.num_turns,
                                   "is_error": msg.is_error, "subtype": msg.subtype,
                                   "denials": len(msg.permission_denials or [])}
             tokens = usage_tokens(getattr(msg, "usage", None))

@@ -61,6 +61,8 @@ cd editor; npm run build                                  # the build the studio
 .\.venv\Scripts\agent-flow-studio-flows templates
 .\.venv\Scripts\agent-flow-studio-flows agents             # agent library
 .\.venv\Scripts\agent-flow-studio-flows new <flow> --template <id> --set <param>=<value>
+.\.venv\Scripts\agent-flow-studio-flows providers          # model providers (providers.yaml)
+.\.venv\Scripts\agent-flow-studio-flows provider-key <name> # save a provider key in the keyring
 .\.venv\Scripts\agent-flow-studio <input> --flow <flow> [--workspace <ws>] [--env <env>]
 ```
 From the command line, writes that need an approval are denied (nobody can approve them).
@@ -96,4 +98,5 @@ Before you push: nothing internal to companies or clients (see `CLAUDE.md`, rule
 - Workspaces registry: `~\.agent-flow-studio\workspaces.json`; browser profiles of website
   connectors: `~\.agent-flow-studio\browser\`.
 - Claude Code sessions: `~\.claude\projects\` (or `CLAUDE_CONFIG_DIR`).
+- Model providers: `providers.yaml` (copy `providers.example.yaml`; keys only `${VAR}` or keyring).
 - Hand-over between machines: `STATUS.md`.

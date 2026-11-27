@@ -11,6 +11,7 @@ import {
 import { api, currentWorkspaceName, errorText } from "./api";
 import { Chat } from "./Chat";
 import { Connections } from "./Connections";
+import { Providers } from "./Providers";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
 import { AgentIcon, Icon, ICON_IDS } from "./icons";
@@ -124,6 +125,7 @@ function Editor() {
   const [trace, setTrace] = useState<Trace>({ nodes: {}, edges: {} });
   const [assistBusy, setAssistBusy] = useState(false);
   const [showConns, setShowConns] = useState(false);
+  const [showProviders, setShowProviders] = useState<{ focus?: string } | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
   const [runReq, setRunReq] = useState<RunRequest | null>(null);
   const [runNeeds, setRunNeeds] = useState(0);  // gates and approvals that wait in the Run panel
@@ -903,6 +905,11 @@ function Editor() {
         setShowConns(false);
         api.catalog().then(setCatalog).catch(() => undefined);
         if (doc && current) api.validate(current, tidy(doc)).then(setVal).catch(() => undefined);
+      }} />}
+    {showProviders && <Providers focus={showProviders.focus ?? null} onClose={() => {
+        setShowProviders(null);
+        api.catalog().then(setCatalog).catch(() => undefined);
+        if (doc && current) api.validate(current, tidy(doc)).then(setVal).catch(() => undefined);
       }} />}  </>;
   const board = view === "board" && !!catalog.workspace;
   const header = (
@@ -1064,6 +1071,7 @@ function Editor() {
         {doc && <div className="right-body" hidden={right !== "props"}>
           <Inspector doc={doc} sel={sel} catalog={catalog} val={val} update={update} select={setSel} remove={remove}
             flows={flows.map((f) => f.name)}
+            openProviders={(focus) => setShowProviders({ focus })}
             library={{ state: libState, update: updateFromLibrary, detach: detachFromLibrary, save: saveToLibrary,
               has: (lib) => library.some((l) => l.id === lib) }}
             testAgent={(id) => {

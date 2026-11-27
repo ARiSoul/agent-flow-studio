@@ -34,6 +34,7 @@ from ..builder.library import check as check_library_agent
 from ..claude_sessions import mark_ours
 from ..config import settings
 from ..hooks import DELEGATION_TOOLS, make_guard, make_hooks
+from ..providers import summary as provider_summary
 from ..tools.common import err, ok
 from .validation import _validate
 
@@ -182,7 +183,15 @@ class Draft:
             return ok({
                 "tools": {t.id: t.description for t in BUILTIN_TOOLS.values()},
                 "contracts": {c: _contract_fields(c) for c in CONTRACTS},
-                "models": ["inherit", "sonnet", "opus", "haiku"],
+                "models": ["inherit", "sonnet", "opus", "haiku"]
+                + [f"{pv['name']}/{m}" for pv in provider_summary() if not pv.get("error")
+                   for m in pv["models"]],
+                "providers": [{k: pv.get(k) for k in ("name", "kind", "title", "key", "priced")}
+                              for pv in provider_summary() if not pv.get("error")],
+                "model_rules": "A model `<provider>/<model>` runs on that provider of this "
+                               "machine; without a prefix it runs on the default sign-in. Only "
+                               "use a provider listed here, and only when the person asks for "
+                               "it. Orchestrator flows: all agents on the flow's provider.",
                 "configured_connections": _connections_info(),
                 "flow_external_mcps": {n: m.get("tools", [])
                                        for n, m in (d.spec.get("mcp_servers") or {}).items()},

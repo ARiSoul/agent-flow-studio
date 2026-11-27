@@ -329,11 +329,31 @@ the autonomy. When a write needs approval, the run pauses and the editor shows t
 content, the command or the HTTP request. The hook always denies paths outside the workspace, force
 pushes or pushes to protected branches, and destructive commands.
 
+## Models and providers
+Agents run on the Claude Agent SDK, and a model can come from another **provider**. Manage them
+in the **Providers** window: the "Providers…" link under every model field (flow and agent) opens
+it — add, change, check and delete providers, and set a key (saved in the system keyring, or read
+from an environment variable). They are data in `providers.yaml` (this machine, outside git; see
+[`providers.example.yaml`](providers.example.yaml)) or `extensions/<name>/providers.yaml`
+(read-only in the editor):
+- `anthropic` (another API key), `bedrock`, `vertex` and `foundry` use the Claude CLI's own
+  switches; `gateway` sends the calls to anything that speaks the Anthropic Messages API — e.g.
+  LiteLLM in front of OpenAI, Gemini or a local Ollama.
+- A flow or agent model written `<provider>/<model>` (e.g. `litellm/gpt-5`) runs there; a model
+  without a prefix runs on the CLI's sign-in, as before. The model picker lists each provider's
+  models, and Properties says where a model runs, if its key is missing and if its cost is unknown.
+- Keys are only `${VAR}` or `keyring` (`agent-flow-studio-flows provider-key <provider>`); the
+  session environment blanks this machine's Anthropic key, so it never reaches another provider.
+- In **graph** flows each agent can use its own provider. In **orchestrator** flows every agent
+  runs on the flow's provider (one session).
+- A gateway's cost is unknown (shown as such, never a guess). Tools, the write policy and the
+  hook are the same on every provider; a model that is not Claude may follow tool rules less well.
+
 ## Where things live (public repo, this machine, extensions)
 Nothing you create in the editor goes to the public repository by default:
 - **Flows** live in `flows/`, which git ignores except the public examples listed one by one in
   `.gitignore` (today `flows/repo-review/`). The flow picker marks a public flow with **public (git)**.
-- **Connectors** (`connections.yaml`), **library agents** (`agents/`), saved assistant
+- **Connectors** (`connections.yaml`), **model providers** (`providers.yaml`), **library agents** (`agents/`), saved assistant
   commands, conversations and runs stay on this machine.
 - **Extensions** (`extensions/<name>/`) are the other place: "Where to keep it" (new flow, save to
   library, connector) can put a flow, an agent or a connector definition there, so the extension

@@ -1160,4 +1160,7 @@ button.small.warn { color: var(--human); border-color: var(--human); }
 .exec-modes { display: grid; gap: 6px; margin: 2px 0 8px; }
 .exec-modes > div { border-left: 3px solid var(--border); padding: 4px 8px; border-radius: 4px; }
 .exec-modes > div.on { border-left-color: var(--accent); background: var(--panel-2); }
+.plain-set { border: 0; padding: 0; margin: 0; min-width: 0; }
+.prov-key { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 4px; }
+.prov-key .field button { margin-top: 4px; align-self: flex-start; }
 .warn-box { border-left: 3px solid var(--human); background: var(--human-soft); padding: 6px 8px; border-radius: 4px; margin: 4px 0; }

@@ -30,7 +30,16 @@ three fixed (not committed when this was written; see the Log):
   graph engine has (resume, run from a step, retry, pause, action/subflow nodes) and when the
   orchestrator fits. New blank flows and the chat assistant now default to `graph` (templates
   already did); flows without `execution` still mean orchestrator.
-- **Planned, not done** (backlog 15): other models and providers.
+- **Other models and providers** (backlog 15, step 1 done): `providers.yaml` (see
+  `providers.example.yaml`), models `<provider>/<model>`, the session env per agent (Bedrock,
+  Vertex, Foundry through the CLI switches; anything else through an Anthropic-API gateway such as
+  LiteLLM), keys only `${VAR}`/keyring, the machine's Anthropic key blanked for other providers,
+  unknown cost on a gateway, the picker and a note in Properties; CLI `providers` and
+  `provider-key`; the **Providers window** (from "Providers…" under every model field: add,
+  change, check, delete, key in the keyring or an env var) and the assistant's catalog. **Not
+  tried with a real provider yet.** Not done: opening a provider session in Claude Code
+  (`claude --resume` uses the default sign-in), the assistants and the `when` router stay on the
+  default model.
 
 ## Where we stopped earlier (2026-11-26, night, home machine / account B)
 **Reviewing runs like in Claude Code** (on top of the Run panel rewrite, commit `51b16fc`). After
@@ -289,7 +298,7 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
     autonomy changed meanwhile applies). Editor: Pause in the header and on a running step; a
     "Paused by you" card with Go on / Stop. Tests with the fake SDK (a slow agent paused, its
     session resumed, nothing redone).
-15. [ ] **Other models and providers.** The runtime stays the Claude Agent SDK (the guard hook,
+15. [x] **Other models and providers** (step 1). The runtime stays the Claude Agent SDK (the guard hook,
     the write policy, the io tools all live there). Step 1: providers as data (studio settings:
     name, an Anthropic-compatible base URL, the key as `${VAR}` or keyring, the models it offers)
     — Amazon Bedrock / Google Vertex / Microsoft Foundry through the CLI's own switches, any other
@@ -541,3 +550,8 @@ start the editor or the CLI (the studio does not read `.env`).
   card, `paused` events restored after a restart; tests with the fake SDK.
 - 2026-11-27 · home machine (account B) · Flow properties compare the two execution modes; new
   blank flows and the assistant default to the graph engine.
+- 2026-11-27 · home machine (account B) · Model providers (step 1): providers.yaml, `provider/model`,
+  session env per agent, keys from env/keyring, unknown gateway cost, picker and Properties note,
+  CLI providers/provider-key; tests with the fake SDK.
+- 2026-11-27 · home machine (account B) · Providers window in the editor (from every model field), providers API
+  (save, delete, key, check), assistant catalog lists the providers.

@@ -1015,12 +1015,14 @@ class GraphEngine:
                 mark_ours(sid, getattr(options, "cwd", None))
                 self.sessions[name] = sid
                 self.host.session_id = sid
-                self.host.cost += msg.total_cost_usd or 0.0
+                # a gateway's models have no price the CLI knows: unknown, never a guess
+                cost = None if name in self.compiled.unpriced else msg.total_cost_usd
+                self.host.cost += cost or 0.0
                 if msg.result:
                     self.summaries[name] = msg.result
                 ev: dict[str, Any] = {
                     "type": "result", "agent": name, "session_id": sid,
-                    "cost": msg.total_cost_usd, "turns": msg.num_turns, "is_error": msg.is_error,
+                    "cost": cost, "turns": msg.num_turns, "is_error": msg.is_error,
                     "subtype": msg.subtype, "denials": len(msg.permission_denials or [])}
                 if model:
                     ev["model"] = model

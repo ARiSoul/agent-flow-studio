@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions, create_sdk_mcp_server, tool
 
+from .. import providers as providers_mod
 from ..config import settings
 from ..connections import store as connection_store
 from ..connections.actions import describe_action
@@ -80,6 +81,7 @@ class CompiledFlow:
     options: ClaudeAgentOptions
     agent_tools: dict[str, list[str]]  # subagent → SDK names
     policy: WritePolicy | None = None  # the editor runner attaches the `approver` to it
+    priced: bool = True  # False: the flow's provider is a gateway (the cost is unknown)
 
     def task(self, run_input: str) -> str:
         """Legacy flows (no typed `inputs`): the one input is also the run id."""
@@ -403,6 +405,41 @@ def _external_config(name: str, m: ExternalMcp) -> dict[str, Any]:
     return cfg
 
 
+def _agent_model_ref(spec: FlowSpec, a: AgentSpec | None) -> str | None:
+    """The model an agent (or, with None, the flow) is written to use: maybe `provider/model`."""
+    if a is not None and a.model and a.model != "inherit":
+        return a.model
+    return spec.model or settings.model
+
+
+def _model_on(ref: str | None, *, resolve_secrets: bool,
+              known: dict[str, Any] | None = None) -> tuple[str | None, str | None, dict[str, str]]:
+    """(provider, model id, session environment) of a model reference (see `providers.py`)."""
+    try:
+        known = providers_mod.load() if known is None else known
+        prov, model = providers_mod.split(ref, known)
+        if prov is None:
+            return None, model, {}
+        return prov, model, providers_mod.session_env(prov, known[prov], model or "",
+                                                      resolve_secrets=resolve_secrets)
+    except providers_mod.ProviderError as e:
+        raise FlowError(*e.msgs) from e
+
+
+def unpriced(spec: FlowSpec) -> set[str]:
+    """The agents whose provider the CLI cannot price (a gateway): their cost is unknown."""
+    try:
+        known = providers_mod.load()
+        out = set()
+        for n, a in spec.agents.items():
+            prov, _ = providers_mod.split(_agent_model_ref(spec, a), known)
+            if prov is not None and not known[prov].is_priced:
+                out.add(n)
+        return out
+    except providers_mod.ProviderError:
+        return set()
+
+
 def _connections(spec: FlowSpec) -> dict[str, Any]:
     wanted = {c for a in spec.agents.values() for c in (*a.connections, *a.write_connections)}
     wanted |= {a.action.connector for a in spec.agents.values() if a.action}
@@ -692,6 +729,23 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
     ws = _workspace_dir(spec, check=configure_artifacts)
     _check_subflows(spec, flow_dir)
     ctx = _context_section(spec)
+    known = _known_providers()
+    # a graph flow's sessions are compiled per agent (compile_agent): no secret needed here
+    flow_prov, flow_model, flow_env = _model_on(
+        _agent_model_ref(spec, None), known=known,
+        resolve_secrets=resolve_secrets and spec.execution != "graph")
+    sub_models: dict[str, str | None] = {}
+    for name, a in spec.agents.items():
+        if a.runs_itself:
+            continue
+        prov, model, _ = _model_on(a.model if a.model != "inherit" else None,
+                                   resolve_secrets=False, known=known)
+        if prov is not None and prov != flow_prov and spec.execution != "graph":
+            raise FlowError(msg("compile.provider_orch",
+                                "agent {agent}: in orchestrator mode every agent runs on the "
+                                "flow's provider ({flow}); use the graph engine to mix providers",
+                                agent=repr(name), flow=repr(flow_prov or "default")))
+        sub_models[name] = model if prov is not None else a.model
     for name, a in spec.agents.items():
         if a.runs_itself:  # an action or subflow node: the graph engine runs it (no subagent)
             continue
@@ -705,7 +759,7 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
                     + _connections_section(a, conns) + ctx
                     + _write_section(spec, a, ws) + SUBAGENT_RULES),
             tools=tools,
-            model=a.model,
+            model=sub_models.get(name),
             skills=a.skills or None,
             maxTurns=a.max_turns or DEFAULT_AGENT_TURNS,  # never without a limit
         )
@@ -749,10 +803,19 @@ def compile_flow(spec: FlowSpec, flow_dir: Path, *, resume: str | None = None,
         hooks=make_hooks(make_guard(allowed, agent_tools,
                                     {n: a.connections for n, a in spec.agents.items()}, policy)),
         max_turns=spec.max_turns,
-        model=spec.model or settings.model,
+        model=flow_model,
+        env=flow_env,
         resume=resume,
     )
-    return CompiledFlow(spec, options, agent_tools, policy)
+    return CompiledFlow(spec, options, agent_tools, policy,
+                        priced=flow_prov is None or known[flow_prov].is_priced)
+
+
+def _known_providers() -> dict[str, Any]:
+    try:
+        return providers_mod.load()
+    except providers_mod.ProviderError as e:
+        raise FlowError(*e.msgs) from e
 
 
 def load_flow(name: str, *, resume: str | None = None, base: Path | None = None) -> CompiledFlow:
@@ -898,7 +961,7 @@ def compile_agent(spec: FlowSpec, flow_dir: Path, agent: str, *,
         if any(t.startswith(f"{name}.") for t in a.tools):
             servers[name] = _external_config(name, m) if resolve_secrets else {"type": m.type}
 
-    model = a.model if a.model and a.model != "inherit" else (spec.model or settings.model)
+    _, model, env = _model_on(_agent_model_ref(spec, a), resolve_secrets=resolve_secrets)
     prompt = (body.rstrip() + _io_section(spec, agent) + _artifacts_section(a)
               + _connections_section(a, conns) + _context_section(spec)
               + _write_section(spec, a, ws) + AGENT_RULES)
@@ -916,6 +979,7 @@ def compile_agent(spec: FlowSpec, flow_dir: Path, agent: str, *,
                                     fixed_agent=agent)),
         max_turns=a.max_turns or DEFAULT_AGENT_TURNS,
         model=model,
+        env=env,
         resume=resume,
     )
 
@@ -930,6 +994,7 @@ class CompiledGraph:
     policy: WritePolicy
     workspace: Path | None
     agents: dict[str, ClaudeAgentOptions] = field(default_factory=dict)
+    unpriced: set[str] = field(default_factory=set)  # agents on a provider the CLI cannot price
 
     @property
     def model(self) -> str | None:
@@ -975,6 +1040,7 @@ def compile_graph(spec: FlowSpec, flow_dir: Path, *, resolve_secrets: bool = Tru
     for name in (n for n, a in spec.agents.items() if not a.runs_itself):  # no session
         compiled.agents[name] = compile_agent(spec, flow_dir, name, policy=policy, conns=conns,
                                               workspace=ws, resolve_secrets=resolve_secrets)
+    compiled.unpriced = unpriced(spec)
     if configure_artifacts:
         compiled.activate()
     return compiled

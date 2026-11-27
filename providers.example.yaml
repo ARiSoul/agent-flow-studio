@@ -1,0 +1,36 @@
+# Model providers of this machine. Copy to providers.yaml (outside git) and keep what you use.
+# An agent or flow model written `<provider>/<model>` runs on that provider; a model without a
+# provider prefix runs on the Claude CLI's own sign-in, as before.
+# No secrets here: a key is only ${VAR} (environment / .env) or `keyring`
+# (save it with: agent-flow-studio-flows provider-key <provider>).
+providers:
+  anthropic-team:              # another Anthropic API key (e.g. a team account)
+    kind: anthropic
+    key: keyring
+    models: [claude-sonnet-5-5, claude-opus-5-5]
+
+  bedrock:                     # Amazon Bedrock: AWS credentials from the profile/environment
+    kind: bedrock
+    region: eu-west-1
+    aws_profile: default
+    models: [eu.anthropic.claude-sonnet-4-6]
+    small_model: eu.anthropic.claude-haiku-4-5
+
+  vertex:                      # Google Vertex AI: gcloud application default credentials
+    kind: vertex
+    region: europe-west1
+    project: my-gcp-project
+    models: [claude-sonnet-4-6]
+
+  foundry:                     # Microsoft Foundry: API key, or Entra ID when there is no key
+    kind: foundry
+    resource: my-foundry-resource
+    key: ${FOUNDRY_KEY}
+    models: [claude-sonnet-4-6]
+
+  litellm:                     # any other model through a gateway that speaks the Anthropic API
+    kind: gateway
+    base_url: http://localhost:4000
+    key: ${LITELLM_KEY}
+    models: [gpt-5, gemini-2.5-pro, ollama/qwen3-coder]
+    # priced: false            # default for a gateway: the run shows the cost as unknown

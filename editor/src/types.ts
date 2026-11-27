@@ -214,11 +214,18 @@ export interface ToolInfo {
   kind: "read" | "write_local" | "write";
 }
 
+export interface ProviderInfo {
+  name: string; kind?: string; title?: string; models?: string[];
+  key?: "none" | "set" | "missing"; priced?: boolean; error?: string;
+}
+
 export interface Catalog {
   tools: ToolInfo[];
   servers: string[];
   contracts: Record<string, unknown>;
   models: string[];
+  /** Model providers of this machine (providers.yaml): models are `name/model`. No secrets. */
+  providers?: ProviderInfo[];
   default_model?: string | null;  // the studio's model (AFS_MODEL); null: the Claude CLI default
   mock: boolean;
   connections: Record<string, { type: string; environment: string; description: string; access: string;

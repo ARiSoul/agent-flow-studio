@@ -39,7 +39,7 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
    `access: write` assigned to the agent) — and follows the agent/flow **autonomy** (`approve` ·
    `approve_prod` · `auto`), enforced by `policy.py` in the hook. The orchestrator never writes.
    With no one to approve (CLI), writes that need approval are denied. Drafts live in `runs/<id>/`.
-2. **Secrets** only in environment variables/`.env` or the system keyring (connectors) — never in
+2. **Secrets** only in environment variables/`.env` or the system keyring (connectors, providers) — never in
    code, flows, `connections.yaml`, the UI or logs. In a flow, secrets are always `${VAR}`.
    OAuth tokens from a sign-in on a page live only in the keyring; errors never show them.
    Do not record PII or file contents in `runs/audit.jsonl`.
@@ -221,6 +221,16 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   `Runner.learn_context` runs `context.reader_flow()` per source (no tools) then
   `historian_flow(root)` (read-only tools) and keeps a **draft** in `runs/@<ws>/.context/`; the
   person saves it (`apply_draft`, records the learned sources) or discards it.
+- `providers.py`: model providers as data (`providers.yaml` outside git +
+  `extensions/<name>/providers.yaml`; kinds `anthropic`·`bedrock`·`vertex`·`foundry`·`gateway`).
+  A model `<provider>/<model>` → `compile` sets the session `env` (`session_env`: the CLI's own
+  switches or `ANTHROPIC_BASE_URL` + token; always blanks the other Anthropic keys/switches);
+  keys only `${VAR}`/`keyring`, read only when a session starts (validation never reads them).
+  An unknown provider prefix is a validation error. Orchestrator flows: one provider for all
+  agents. Gateway sessions have `cost: None` (`CompiledGraph.unpriced`, `CompiledFlow.priced`).
+  API `/api/providers` (GET, PUT/DELETE `{name}`, PUT `{name}/key` = keyring value or env name,
+  POST `{name}/test` = `GET /v1/models`, nothing generated); editor `Providers.tsx`, opened from
+  every model field (`openProviders`); the assistant's `view_catalog` lists the providers.
 - `extensions.py`: loads `extensions/<name>/` (TOOL_GROUPS, CONTRACTS, REPORTS).
 - Frontend in `editor/` (Vite + React + @xyflow/react, i18n in `editor/src/i18n/`) → build in
   `src/agent_flow_studio/editor/static/`.

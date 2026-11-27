@@ -35,6 +35,10 @@ def main() -> None:
     sub.add_parser("catalog", help="available tools and contracts (JSON)")
     sub.add_parser("templates", help="list the flow templates and their parameters")
     sub.add_parser("agents", help="list the agent library (copied into flows in the editor)")
+    sub.add_parser("providers", help="list the model providers of this machine (providers.yaml)")
+    k = sub.add_parser("provider-key", help="save a provider's key in the system keyring "
+                       "(asked without echo; for a provider with key: keyring)")
+    k.add_argument("provider")
     n = sub.add_parser("new", help="create a flow from a template")
     n.add_argument("flow", help="name of the new flow (folder in flows/)")
     n.add_argument("--template", required=True)
@@ -64,6 +68,25 @@ def _run(a: argparse.Namespace) -> None:
                 print(f"{name:24} {spec.title}  ({len(spec.agents)} agents, {len(spec.gates)} gates)")
             except FlowError as e:
                 print(f"{name:24} INVALID: {e}")
+    elif a.cmd == "providers":
+        from .providers import summary
+        for pv in summary():
+            if pv.get("error"):
+                raise SystemExit(pv["error"])
+            print(f"{pv['name']:16} {pv['kind']:10} key: {pv['key']:8} "
+                  f"models: {', '.join(pv['models']) or '-'}")
+    elif a.cmd == "provider-key":
+        import getpass
+
+        from .providers import load, set_key
+        found = load()
+        if a.provider not in found or found[a.provider].key != "keyring":
+            raise SystemExit(f"provider {a.provider!r}: not in providers.yaml with key: keyring")
+        value = getpass.getpass(f"Key for provider {a.provider} (not shown): ").strip()
+        if not value:
+            raise SystemExit("no key given: nothing saved")
+        set_key(a.provider, value)
+        print(f"saved in the system keyring for provider {a.provider}")
     elif a.cmd == "catalog":
         json.dump(catalog_dict(), sys.stdout, ensure_ascii=False, indent=2)
     elif a.cmd == "templates":

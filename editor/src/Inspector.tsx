@@ -18,6 +18,8 @@ interface Props {
   select: (s: Selection) => void;
   remove: (s: Selection) => void;
   testAgent?: (id: string) => void;
+  /** Opens the Providers window (on one provider): from every model field. */
+  openProviders?: (focus?: string) => void;
   flows?: string[];  // the other flows of this workspace (subflow nodes)
   library?: {
     state: (id: string) => string; has: (lib: string) => boolean;
@@ -182,7 +184,7 @@ function WritesEditor({ writes, catalog, set }: { writes: ArtifactRaw[]; catalog
   );
 }
 
-function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, library, val, flows }: { id: string; focus?: string } & Omit<Props, "sel" | "remove">) {
+function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, library, val, flows, openProviders }: { id: string; focus?: string } & Omit<Props, "sel" | "remove">) {
   const { t } = useI18n();
   const spec = doc.spec;
   const a = spec.agents[id];
@@ -283,6 +285,7 @@ function AgentPanel({ id, doc, catalog, update, select, testAgent, focus, librar
         <Field label={t("insp.model")}>
           <input list="models" value={a.model ?? ""} placeholder={t("insp.modelFromFlow")}
             onChange={(e) => setA((x) => { x.model = e.target.value || undefined; })} />
+          <ModelNote model={a.model && a.model !== "inherit" ? a.model : doc.spec.model} catalog={catalog} open={openProviders} />
         </Field>
         <Field label={t("insp.agentMaxTurns")} hint={t("insp.agentMaxTurnsHint")}>
           <input type="number" min={1} max={200} value={a.max_turns ?? ""} placeholder="40"
@@ -726,7 +729,31 @@ function McpEditor({ name, m, update }: { name: string; m: McpRaw; update: Updat
   );
 }
 
-function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; update: Update }) {
+/** Where a model runs: its provider (from `name/model`), a key that is missing, an unknown cost. */
+function ProvidersLink({ open }: { open?: (focus?: string) => void }) {
+  const { t } = useI18n();
+  if (!open) return null;
+  return <button type="button" className="link small" title={t("insp.providersTitle")}
+    onClick={() => open()}>{t("insp.providers")}</button>;
+}
+
+function ModelNote({ model, catalog, open }: { model?: string | null; catalog: Catalog; open?: (focus?: string) => void }) {
+  const { t } = useI18n();
+  const head = model && model.includes("/") ? model.split("/", 1)[0] : null;
+  if (!head || !/^[a-z][a-z0-9-]{0,39}$/.test(head)) return <span className="model-note"><ProvidersLink open={open} /></span>;
+  const p = (catalog.providers ?? []).find((x) => x.name === head && !x.error);
+  if (!p) return <span className="field-err">{t("insp.providerUnknown", { name: head })}
+    {open && <> <button type="button" className="link small" onClick={() => open()}>{t("insp.providers")}</button></>}</span>;
+  return <span className="small muted">
+    {open ? <button type="button" className="link small" onClick={() => open(p.name)}>
+      {t("insp.providerRuns", { title: p.title ?? p.name, kind: p.kind ?? "" })}</button>
+      : t("insp.providerRuns", { title: p.title ?? p.name, kind: p.kind ?? "" })}
+    {p.key === "missing" && <span className="field-err"> {t("insp.providerNoKey")}</span>}
+    {p.priced === false && <> · {t("insp.providerNoCost")}</>}
+  </span>;
+}
+
+function FlowPanel({ doc, catalog, update, openProviders }: { doc: Doc; catalog: Catalog; update: Update; openProviders?: (focus?: string) => void }) {
   const { t } = useI18n();
   const s = doc.spec;
   const [newMcp, setNewMcp] = useState("");
@@ -741,8 +768,10 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
         <textarea rows={3} value={s.description ?? ""} onChange={(e) => set((x) => { x.description = e.target.value; })} />
       </Field>
       <div className="grid2">
-        <Field label={t("insp.model")}><input list="models" value={s.model ?? ""} placeholder={t("insp.modelDefault")}
-          onChange={(e) => set((x) => { x.model = e.target.value || undefined; })} /></Field>
+        <Field label={t("insp.model")}>
+          <input list="models" value={s.model ?? ""} placeholder={t("insp.modelDefault")}
+          onChange={(e) => set((x) => { x.model = e.target.value || undefined; })} />
+          <ModelNote model={s.model} catalog={catalog} open={openProviders} /></Field>
         <Field label={t("insp.maxTurns")}><input type="number" min={1} max={500} value={s.max_turns ?? 60}
           onChange={(e) => set((x) => { x.max_turns = Number(e.target.value) || undefined; })} /></Field>
       </div>
@@ -894,7 +923,7 @@ const WRITE_TOOL_NAMES = ["workspace.edit", "workspace.write", "workspace.bash",
 export function Inspector(p: Props) {
   const { t } = useI18n();
   const { doc, sel } = p;
-  let title = t("insp.flow"), body: ReactNode = <FlowPanel doc={doc} catalog={p.catalog} update={p.update} />;
+  let title = t("insp.flow"), body: ReactNode = <FlowPanel doc={doc} catalog={p.catalog} update={p.update} openProviders={p.openProviders} />;
   if (sel?.kind === "node" && sel.id in doc.spec.agents) {
     title = t("insp.agent");
     body = <AgentPanel key={sel.id} id={sel.id} {...p} />;
@@ -925,7 +954,10 @@ export function Inspector(p: Props) {
         </>}
       </div>
       <div className="panel-body">{body}</div>
-      <datalist id="models">{p.catalog.models.map((m) => <option key={m} value={m} />)}</datalist>
+      <datalist id="models">{p.catalog.models.map((m) => {
+        const pv = m.includes("/") ? (p.catalog.providers ?? []).find((x) => x.name === m.split("/", 1)[0]) : undefined;
+        return <option key={m} value={m} label={pv ? `${pv.title ?? pv.name} · ${pv.kind}` : undefined} />;
+      })}</datalist>
       <datalist id="afs-flows">{(p.flows ?? []).filter((f) => f !== doc.spec.name).map((f) => <option key={f} value={f} />)}</datalist>
     </aside>
   );

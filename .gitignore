@@ -9,6 +9,7 @@ __pycache__/
 # Secrets and configuration of this machine
 .env
 connections.yaml
+providers.yaml
 CLAUDE.local.md
 .claude/settings.local.json
 
