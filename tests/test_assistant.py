@@ -244,7 +244,7 @@ def test_action_nodes_and_connectors(draft: Draft, tmp_path, monkeypatch):
     website connector; view_catalog shows the values of the last Test of each action."""
     from agent_flow_studio.connections import store
     from agent_flow_studio.connections.model import Connection
-    from agent_flow_studio.editor import server
+    from agent_flow_studio.editor.api import common as api_common
 
     monkeypatch.setenv("CONNECTIONS_FILE", str(tmp_path / "connections.yaml"))
     monkeypatch.setenv("AFS_PUBLIC_CONNECTIONS_FILE", str(tmp_path / "connections.public.yaml"))
@@ -256,7 +256,7 @@ def test_action_nodes_and_connectors(draft: Draft, tmp_path, monkeypatch):
                 {"goto": "/users"}, {"extract": {"users_range": "span.total"}}]}}}),
         "api": Connection.model_validate({"type": "http_api", "base_url": "https://api.example.com"}),
     })
-    server._write_tests("site", {"count_users": {
+    api_common._write_tests("site", {"count_users": {
         "ok": True, "ts": 1, "params": {},
         "result": {"action": "count_users", "values": {"users_range": "1–14 of 14" + "x" * 200}}}})
     _, text = call(draft, "view_catalog")

@@ -432,8 +432,8 @@ def test_old_and_dismissed_gates(flows, monkeypatch):
     rn.dismiss("d1", True)
     assert rn.waiting()[0]["dismissed"] is True
     rn.dismiss("d1", False)
-    import agent_flow_studio.editor.runner as runner_mod
-    monkeypatch.setattr(runner_mod, "STALE_GATE", -1)
+    from agent_flow_studio.editor.runs import history
+    monkeypatch.setattr(history, "STALE_GATE", -1)  # waiting() lives in the history part
     assert rn.waiting()[0]["stale"] is True
     again = Runner(flows, agent_query())  # saved gate: the same fields
     assert again.waiting()[0]["stale"] is True and again.waiting()[0]["since"]

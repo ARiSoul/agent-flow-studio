@@ -122,6 +122,15 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   a page (authorization code + PKCE, single-use `state`, callback `/api/oauth/callback`, tokens
   only in the keyring); managed identity in `client.py`. Provider presets are data
   (`OAUTH_PRESETS` in `model.py`), never code paths per provider.
+- Module layout of the editor backend (split so no file grows past ~500 lines):
+  `server.py` = the app (`create_app`: middleware, catalog, the runner and its queue clock, static
+  files) + `editor/api/` routers, each a `register(app, ctx)` with its routes (`connectors`,
+  `providers`, `flows`, `runs`, `workspaces`; shared bodies/helpers and `Ctx` in `api/common.py`).
+  `runner.py` = the `Runner` (state, `start`, the event log) built from mixins in `editor/runs/`
+  (`queue`, `history`, `control`, `execution`, `workspace_context`) plus `runs/model.py` (Run,
+  statuses, inputs) and `runs/events.py` (saved events, run files); `runner.py` re-exports the
+  public names (`__all__`). A new route goes in its router; a new runner method in its mixin.
+  Modules that read `settings` are listed in `tests/conftest.py` (the runs-folder safety net).
 - `editor/`: `server.py` (local API, 127.0.0.1, local Hosts, `X-Flow-Editor` header on writes),
   `assistant.py` (chat: only changes an in-memory draft; `view_library`, `add_library_agent`,
   `update_from_library` copy library agents into the draft; `propose_library_agent` checks a new

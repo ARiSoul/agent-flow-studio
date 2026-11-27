@@ -9,6 +9,8 @@ from agent_flow_studio.config import settings
 from agent_flow_studio.editor import chats, uploads
 from agent_flow_studio.editor import runner as runner_mod
 from agent_flow_studio.editor import server as server_mod
+from agent_flow_studio.editor.api import common as api_common
+from agent_flow_studio.editor.runs import control, events, history, queue, workspace_context
 from agent_flow_studio.tools import artifacts
 from agent_flow_studio.tools import io as io_tool
 
@@ -25,7 +27,9 @@ def _runs_dir(tmp_path, monkeypatch):
     """Safety net: no test writes in the real runs/ folder. Fixtures that need the folder use
     the same path (tmp_path / "runs")."""
     s = replace(settings, runs_dir=tmp_path / "runs")
-    for mod in (hooks, engine, runner_mod, artifacts, io_tool, chats, server_mod, uploads):
+    for mod in (hooks, engine, runner_mod, artifacts, io_tool, chats, server_mod, uploads,
+                control, events, history, queue, workspace_context,  # the runner's parts
+                api_common):  # the API helpers that use it
         monkeypatch.setattr(mod, "settings", s)
 
 

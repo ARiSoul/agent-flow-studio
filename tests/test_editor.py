@@ -197,3 +197,10 @@ def test_save_with_problems_only_when_forced_and_never_with_secrets(client: Test
     r = client.put("/api/flows/pipeline", json={"spec": leak, "prompts": {}, "force": True}, headers=H)
     assert r.status_code == 422 and r.json()["blocked_by_secret"] is True
     assert "abc123literal" not in (base / "pipeline" / "flow.yaml").read_text(encoding="utf-8")
+
+
+def test_the_built_editor_is_served_from_editor_static():
+    """The API was split into editor/api/: the built editor stays in editor/static."""
+    from agent_flow_studio.editor import server
+    from agent_flow_studio.editor.api import common
+    assert common.STATIC == Path(server.__file__).parent / "static"

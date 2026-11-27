@@ -5,6 +5,11 @@ update "Current state" and "Next steps", add a line to the "Log" (date, machine/
 terms — no emails —, what was done) and commit + push.
 
 ## Where we stopped (2026-11-27, home machine / account B)
+- **Backend split** (no behaviour change): `editor/server.py` (1895 lines) → the app + routers
+  in `editor/api/`; `editor/runner.py` (2112 lines) → the `Runner` + mixins and helpers in
+  `editor/runs/`. Same 106 API routes; all tests pass; a new test caught and keeps fixed the
+  built editor path (`api/common.STATIC`). Next suggested: CI (GitHub Actions: ruff, pytest, tsc,
+  npm test, build), then Playwright E2E for the main paths, then a real provider check.
 Notes from real use on the work machine (a PBI flow: analyse, plan, implement, test, review),
 three fixed (not committed when this was written; see the Log):
 - **Markdown tables** in the output viewer and on gates: a table right after a line of text (no
@@ -555,3 +560,5 @@ start the editor or the CLI (the studio does not read `.env`).
   CLI providers/provider-key; tests with the fake SDK.
 - 2026-11-27 · home machine (account B) · Providers window in the editor (from every model field), providers API
   (save, delete, key, check), assistant catalog lists the providers.
+- 2026-11-27 · home machine (account B) · Split the editor backend: server.py → app + editor/api/
+  routers; runner.py → Runner + editor/runs/ mixins; no behaviour change, same routes, tests pass.

@@ -398,7 +398,10 @@ src/agent_flow_studio/
   builder/        spec.py (format + validation), catalog.py, compile.py, templates.py, library.py
   templates/      flow templates (code-review, test-runner, fix-and-pr)
   agents/         built-in agent library (repo_explorer, code_reviewer, summarizer)
-  editor/         server.py (API), assistant.py, ws_assistant.py, runner.py, validation.py, yaml_io.py, static/ (build)
+  editor/         server.py (app) + api/ (routers: connectors, providers, flows, runs, workspaces),
+                  runner.py (Runner) + runs/ (model, events, queue, history, control, execution,
+                  workspace_context), assistant.py, ws_assistant.py, validation.py, yaml_io.py, static/
+  providers.py    model providers (providers.yaml)
   connections/    model.py, store.py (keyring/${VAR}), client.py
   tools/          artifacts.py, connections.py, git.py (read-only), guards.py, common.py
   hooks.py        guard (closed list) + audit · policy.py  writes, workspace, autonomy

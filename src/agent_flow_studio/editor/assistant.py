@@ -99,7 +99,7 @@ def _contract_fields(name: str) -> dict[str, Any]:
 def _last_tests(name: str) -> dict[str, Any]:
     """The values each action of a connector returned in its last Test (Connectors window),
     cut short: enough to choose an output's `from` and `match`."""
-    from .server import _read_json_file, _tests_file
+    from .api.common import _read_json_file, _tests_file
 
     out: dict[str, Any] = {}
     for action, t in _read_json_file(_tests_file(name)).items():

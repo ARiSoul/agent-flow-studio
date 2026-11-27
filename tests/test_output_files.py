@@ -52,7 +52,8 @@ def test_reveal_opens_the_run_folder(tmp_path, monkeypatch):
     from agent_flow_studio.editor import server
 
     opened = []
-    monkeypatch.setattr(server, "_open_folder", opened.append)
+    from agent_flow_studio.editor.api import runs as run_routes
+    monkeypatch.setattr(run_routes, "_open_folder", opened.append)  # the runs router opens it
     (tmp_path / "flows").mkdir()
     client = TestClient(server.create_app(tmp_path / "flows", allowed_hosts=["testserver"]))
     h = {"X-Flow-Editor": "1"}
