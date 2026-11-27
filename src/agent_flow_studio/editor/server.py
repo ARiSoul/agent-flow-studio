@@ -128,6 +128,10 @@ class RunBody(BaseModel):
     handoff: dict[str, HandoffRef] = Field(default_factory=dict, max_length=50)
 
 
+class PauseBody(BaseModel):
+    node: str | None = Field(default=None, max_length=64)
+
+
 class RetryBody(BaseModel):
     action: Literal["now", "cancel"]
     node: str | None = Field(default=None, max_length=64)
@@ -1094,6 +1098,14 @@ def create_app(base: Path | None = None, allowed_hosts: list[str] | None = None)
         """While the person changes a recorded decision, its run does not go on (`dismissed`:
         true holds it, false keeps the decision and lets it go on)."""
         return _run_call(runner.hold, run_id, body.dismissed)
+
+    @app.post("/api/runs/{run_id}/pause", dependencies=[Depends(csrf)])
+    async def pause_run(run_id: str, body: PauseBody) -> dict[str, Any]:
+        """Pauses running agents (all, or `node`); Continue goes on in their own sessions."""
+        try:
+            return (await runner.pause(run_id, body.node)).summary()
+        except RunError as e:
+            raise HTTPException(e.status, e.detail) from e
 
     @app.post("/api/runs/{run_id}/retry", dependencies=[Depends(csrf)])
     async def retry_run(run_id: str, body: RetryBody) -> dict[str, Any]:

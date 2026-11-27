@@ -86,6 +86,11 @@ ROUTER_PROMPT = (
 )
 MAX_ROUTER_DATA = 20_000
 MAX_VALUE_IN_PROMPT = 4_000
+AFTER_PAUSE = ("The person paused you in the middle of your step and now lets you go on. "
+               "Continue your step from where you stopped: do not redo work you already finished "
+               "(files you wrote, outputs you saved). The run id is `{run_id}`; before you finish, "
+               "save your outputs with `set_output` (agent `{agent}`).")
+
 FOLLOW_UP = ("You finished without saving these required outputs: {names}. Save each one now "
              "with `set_output` (run_id `{run_id}`, agent `{agent}`), then finish.")
 
@@ -290,6 +295,12 @@ class GraphEngine:
         self.nested = nested  # a subflow: its flow is registered by run id, not made active
         self.retry_waits: dict[str, tuple[asyncio.Event, list[str]]] = {}  # node: (wake, choice)
         self.wrote: set[str] = set()  # agents whose current attempt ran a write tool (not denied)
+        # pause: the session each running agent works in now; the nodes asked to pause; the paused
+        # nodes with the session they go on in (None: it had no session yet, it starts again)
+        self.live_sessions: dict[str, str] = {}
+        self.pausing: set[str] = set()
+        self.paused: dict[str, str | None] = {}
+        self.resuming: dict[str, str | None] = {}  # paused nodes going on now
 
     # --- public
     def set_mode(self, mode: EngineMode) -> None:
@@ -305,6 +316,11 @@ class GraphEngine:
             first = self.target if self.mode == "agent" else self.spec.start
             assert first is not None
             self._make_ready(first)
+        for node in list(self.paused):  # go on after a pause: they resume their own session
+            self.state[node] = "ready"
+            if node not in self.ready:
+                self.ready.insert(0, node)
+        self.resuming, self.paused = dict(self.paused), {}
         try:
             unapplied, self.unapplied = self.unapplied, []
             for n in unapplied:  # see prepare_resume
@@ -318,6 +334,9 @@ class GraphEngine:
                                              return_when=asyncio.FIRST_COMPLETED)
                 for t in done:
                     node = self.tasks.pop(t)
+                    if t.cancelled() and node in self.pausing:
+                        self._pause_node(node)
+                        continue
                     self._finish(node, t.result())
         except asyncio.CancelledError:
             await self.cancel()
@@ -469,6 +488,26 @@ class GraphEngine:
             choice[0] = action
             wake.set()
         return hit
+
+    async def pause(self, nodes: list[str] | None = None) -> list[str]:
+        """Pauses running agents (all, or `nodes`): their sessions stop where they are; the
+        other branches go on, and the run stops `paused` when nothing more runs. Going on
+        (`run()` again) resumes each paused agent in its own session."""
+        hit = [node for t, node in self.tasks.items() if nodes is None or node in nodes]
+        for t, node in list(self.tasks.items()):
+            if node in hit and self.spec.agents.get(node) is not None \
+                    and self.spec.agents[node].action is None and self.spec.agents[node].subflow is None:
+                self.pausing.add(node)
+                t.cancel()
+        return [n for n in hit if n in self.pausing]
+
+    def _pause_node(self, node: str) -> None:
+        self.pausing.discard(node)
+        self.state[node] = "paused"
+        self.runs[node] = max(0, self.runs[node] - 1)  # the attempt is not over: not a run
+        sid = self.live_sessions.get(node)
+        self.paused[node] = sid
+        self.emit({"type": "paused", "agent": node, **({"session": sid} if sid else {})})
 
     async def cancel(self) -> None:
         for t in self.tasks:
@@ -642,6 +681,8 @@ class GraphEngine:
             return Outcome("done", gate=self.stop_gate)
         if self.pending_gates:
             return Outcome("gate", gate=self.pending_gates[0])
+        if self.paused:
+            return Outcome("paused", message="paused by the person: " + ", ".join(sorted(self.paused)))
         if self.mode in ("step", "until") and self.ready:
             return Outcome("paused")
         return Outcome("done")
@@ -649,7 +690,9 @@ class GraphEngine:
     # --- one agent
     async def _agent(self, name: str) -> _Result:
         a = self.spec.agents[name]
-        self.emit({"type": "delegate", "agent": name, "task": a.description[:120]})
+        after_pause = name in self.resuming
+        self.emit({"type": "delegate", "agent": name, "task": a.description[:120],
+                   **({"after_pause": True} if after_pause else {})})
         if a.action is not None:
             return await self._action_node(name)
         if a.subflow is not None:
@@ -689,14 +732,20 @@ class GraphEngine:
     async def _agent_once(self, name: str) -> _Result:
         a = self.spec.agents[name]
         self.wrote.discard(name)
+        resume_sid = self.resuming.pop(name, None)
         try:
             values, missing = io_tool.resolve_inputs(self.spec, self.run_id, name)
             if missing:
                 return self._failed(name, "required inputs without a value: "
                                     + ", ".join(missing))
-            io_tool.clear_outputs(self.run_id, name)
-            sid, error = await self._session(name, self._message(name, values),
-                                             self.compiled.agent_options(name))
+            if resume_sid:  # after a pause: the same session goes on; its outputs so far stay
+                sid, error = await self._session(
+                    name, AFTER_PAUSE.format(run_id=self.run_id, agent=name),
+                    self.compiled.agent_options(name, resume=resume_sid))
+            else:
+                io_tool.clear_outputs(self.run_id, name)
+                sid, error = await self._session(name, self._message(name, values),
+                                                 self.compiled.agent_options(name))
             if error:
                 return self._failed(name, error, transient=is_transient(error))
             lacking = self._missing_outputs(name)
@@ -910,6 +959,9 @@ class GraphEngine:
         seen: set[str] = set()  # API messages already counted
         writes: set[str] = set()  # ids of write tool calls (they count once they ran, not denied)
         async for msg in self._query(prompt=prompt, options=options):
+            msg_sid = getattr(msg, "session_id", None)
+            if isinstance(msg_sid, str) and msg_sid:
+                self.live_sessions[name] = msg_sid  # a pause can go on in this session
             if isinstance(msg, AssistantMessage):
                 for b in msg.content:
                     if isinstance(b, TextBlock) and b.text.strip():

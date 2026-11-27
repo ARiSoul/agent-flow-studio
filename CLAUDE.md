@@ -162,6 +162,11 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   **Retry** (`FlowSpec.retry`, graph): a step whose session ends with a model API error
   (`engine.is_transient`, same regex as `TRANSIENT` in runSteps.ts) runs again after a doubling
   wait, never after a write that ran (`retry_skipped`); `retry_control` = now/cancel.
+  **Pause** (graph, agent nodes): `Runner.pause(run, node?)` → `GraphEngine.pause` cancels the
+  agent tasks, keeps the live session id (`live_sessions`, from the SDK messages), emits `paused`
+  and ends the run `paused`; their waiting write approvals end unanswered. `continue_` runs the
+  paused nodes with `resume=<session>` and `AFTER_PAUSE` (outputs kept, no new attempt; the
+  delegate has `after_pause`); `_restore_engine` restores `engine.paused` after a restart.
   `pricing.py` (list prices) gives a live `est` on `usage` events. The run states are written once
   in `editor/tests/fixtures/run_status.json` (checked against `Status` and the UI texts); the
   shape of `waiting()` in `editor/tests/fixtures/waiting.json`. Editor: `RunPanel.tsx` (header,

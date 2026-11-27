@@ -179,6 +179,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
     });
   };
   const [stopping, setStopping] = useState(false);
+  const [pausing, setPausing] = useState(false);
+  const pauseRun = async (node?: string) => {
+    if (!run) return;
+    setPausing(true); setRunErr(null);
+    try { await ra.pause(run.id, node); } catch (e) { setRunErr(String((e as Error).message)); }
+    finally { setPausing(false); }
+  };
   const stop = async () => {
     if (!run) return;
     setStopping(true); setRunErr(null);
@@ -491,8 +498,9 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
   const openWaiting = (w: Waiting) => { setWaitOpen(false); if (w.flow === flow) openPast(w.input); else onOpenRun?.(w.flow, w.input); };
 
   // ================================================================== header
-  const primary = !run || run.status === "decided" ? null : running ? (
-    <button className="danger" disabled={stopping} onClick={stop}>{stopping ? t("rp.stopping") : t("run.stop")}</button>
+  const primary = !run || run.status === "decided" ? null : running ? (<>
+    {graph && <button disabled={pausing} onClick={() => pauseRun()} title={t("rp.pauseTitle")}>⏸ {t("rp.pause")}</button>}
+    <button className="danger" disabled={stopping} onClick={stop}>{stopping ? t("rp.stopping") : t("run.stop")}</button></>
   ) : gate || paused ? (
     view !== "run" || compact ? <button className="primary" onClick={review}>⏸ {t("rp.review")}</button> : null
   ) : canResume && plan && plan.redo.length > 0 ? (
@@ -628,6 +636,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
         gate={gate} waitedSince={gateStep?.start} now={now} gateOutputs={gateOutputs} typeOf={typeOf}
         note={gateNote} setNote={setGateNote} onDecide={decide} onStop={stop}
         paused={paused} pausedUntil={run.mode === "until" ? run.target : null} onContinue={cont}
+        pausedAgents={steps.filter((s) => s.state === "paused").map((s) => s.node)}
         ctxSuggest={ctxSuggest} onContext={updateContext} onShow={setShown}
         changed={changes?.available ? nChanged : null} onChanges={showChanges} runInput={viewIn} />
       {stopMessage && <div className="ev result-msg">■ {stopMessage.label}: {stopMessage.message}</div>}
@@ -648,6 +657,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
           reveal={reveal} focus={focus} graph={graph} askable={askable} model={modelOf} inputsOf={inputsOf} promptOf={promptOf}
           onToolCall={toolCall} onCanvas={onFocusNode} onRunFrom={running ? undefined : (n) => runFromStep(run.input, n)}
           onAsk={running ? undefined : askStep} onLink={linkTo} onClaude={claudeCode}
+          onPause={running && graph ? (n) => pauseRun(n) : undefined}
           onOutput={(agent, name) => setHighlight({ agent, name, nonce: Date.now() })} />
       ) : (
         <LogView events={events} t0={t0} steps={steps.map((s) => s.node)} fileName={viewIn} onStep={showStep} />)}

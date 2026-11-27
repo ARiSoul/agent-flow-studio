@@ -24,7 +24,8 @@ export function line(e: Ev, i18n: Pick<I18n, "t" | "tOr" | "tn">, self = true): 
       : { kind: e.status === "done" ? "flow" : "errors", cls: e.status === "done" ? "ok" : "err", text: t(e.status === "done" ? "run.ev.contextDone" : "run.ev.contextError",
         { root: String(e.root), detail: String(e.summary ?? e.message ?? "") }) };
     case "subflow": return { kind: "flow", cls: "deleg", text: t("run.ev.subflow", { agent: String(e.agent), flow: String(e.flow), run: String(e.run) }) };
-    case "delegate": return { kind: "flow", cls: "deleg", text: e.task === "follow-up" ? t("rp.ev.askMore")
+    case "paused": return { kind: "flow", cls: "gate", text: t("rp.ev.paused") };
+    case "delegate": return { kind: "flow", cls: "deleg", text: e.after_pause ? t("rp.ev.afterPause") : e.task === "follow-up" ? t("rp.ev.askMore")
       : e.retry ? t("rp.ev.startedAgain", { n: String(Number(e.retry) + 1) }) : t("rp.ev.started", { task: String(e.task ?? "") }) };
     case "retry": return { kind: "flow", cls: "gate", text: t("rp.ev.retry", { wait: duration(Number(e.wait ?? 0)), n: String(Number(e.attempt ?? 1) + 1),
       of: String(Number(e.max ?? 1) + 1) }) };

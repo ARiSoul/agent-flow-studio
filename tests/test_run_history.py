@@ -712,3 +712,84 @@ def test_a_saved_autonomy_reaches_the_runs_in_memory(flows):
         assert any(e["type"] == "approval_result" and "autonomy" in e["comment"] for e in r.events)
 
     run(go())
+
+
+def _pausable_query():
+    """planner saves one output, then works slowly (a pause stops it there); going on resumes its
+    session. Every call is recorded: (agent, resume, prompt)."""
+    calls: list = []
+
+    async def q(prompt, options):
+        found = AGENT.search(prompt)
+        agent, rid = found.group(1) if found else "planner", q.rid
+        calls.append((agent, options.resume, prompt))
+        sid = options.resume or f"s-{agent}-{len(calls)}"
+        yield AssistantMessage(content=[TextBlock("working")], model="m", session_id=sid)
+        if agent == "planner" and not options.resume:
+            io_tool.store_output(io_tool.spec_for(rid), rid, "planner", "question_a", "qa")
+            await asyncio.sleep(10)  # a pause stops it here
+        for k, v in PAR.get(agent, {}).items():
+            io_tool.store_output(io_tool.spec_for(rid), rid, agent, k, v)
+        yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                            num_turns=1, session_id=sid, total_cost_usd=0.01)
+
+    q.calls, q.rid = calls, ""
+    return q
+
+
+def test_pause_an_agent_and_go_on_in_its_session(flows):
+    q = _pausable_query()
+    rn = Runner(flows, q)
+
+    async def go():
+        q.rid = "pz1"
+        r = rn.start("parallel", inputs={"topic": "agents"}, run_id="pz1")
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if r.engine.live_sessions.get("planner"):
+                break
+        await rn.pause(r.id)
+        await wait(r)
+        assert r.status == "paused"
+        ev = next(e for e in r.events if e["type"] == "paused")
+        assert ev["agent"] == "planner" and ev["session"] == "s-planner-1"
+        assert io_tool.outputs("pz1", "planner").get("question_a") == "qa"  # kept
+        with pytest.raises(RunError):
+            await rn.pause(r.id)  # nothing runs now
+        rn.continue_(r.id, "full")
+        await wait(r)
+        assert r.status == "gate"
+        planner = [c for c in q.calls if c[0] == "planner"]
+        assert planner[1][1] == "s-planner-1" and "paused you" in planner[1][2]
+        assert any(e["type"] == "delegate" and e.get("after_pause") for e in r.events)
+        assert r.engine.runs["planner"] == 1  # the pause did not count as a run
+
+    run(go())
+
+
+def test_a_paused_run_goes_on_after_a_restart(flows):
+    q = _pausable_query()
+    rn = Runner(flows, q)
+
+    async def go():
+        q.rid = "pz2"
+        r = rn.start("parallel", inputs={"topic": "agents"}, run_id="pz2")
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if r.engine.live_sessions.get("planner"):
+                break
+        await rn.pause(r.id, "planner")
+        await wait(r)
+
+    run(go())
+    again = Runner(flows, q)
+
+    async def later():
+        r = again.open_past("pz2")
+        assert r.status == "paused" and r.engine.paused == {"planner": "s-planner-1"}
+        again.continue_(r.id, "full")
+        await wait(r)
+        assert r.status == "gate"
+        assert [c[1] for c in q.calls if c[0] == "planner"][-1] == "s-planner-1"
+
+    run(later())

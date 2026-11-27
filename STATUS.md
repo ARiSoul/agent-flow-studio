@@ -19,8 +19,14 @@ three fixed (not committed when this was written; see the Log):
 - **workspace.git** when the workspace folder is not a repository: it uses the repositories one
   level down and the workspace roots that are repositories; `repo` (a root name or a sub-folder)
   chooses when there are several (the error lists them).
-- **Planned, not done** (backlog 13 and 14): pause a running agent and go on from the same place;
-  other models and providers.
+- **Pause** (backlog 14, done): Pause in the Run panel header (all running agents) or "Pause this
+  step" in a running step's ⋯ menu (graph runs). The agent's session stops where it is, its
+  outputs so far stay, the other branches go on, and the run ends `paused` with a "Paused by you"
+  card. Go on resumes each paused agent in its own SDK session (`resume`) with a short "go on from
+  where you stopped" message, with the flow as it is now (autonomy refreshed). Works after an
+  editor restart (`_restore_engine`). Not for action or subflow nodes, nor orchestrator runs.
+  Not tried yet with a real model.
+- **Planned, not done** (backlog 15): other models and providers.
 
 ## Where we stopped earlier (2026-11-26, night, home machine / account B)
 **Reviewing runs like in Claude Code** (on top of the Run panel rewrite, commit `51b16fc`). After
@@ -271,7 +277,7 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
    connection" is refused, name the test path (Azure DevOps tests `/_apis/projects`).
 
 13. [ ] Resume / run from here for orchestrator-mode runs (today graph mode only).
-14. [ ] **Pause a running agent and go on from the same place** (graph mode). Engine `pause(node |
+14. [x] **Pause a running agent and go on from the same place** (graph mode). Engine `pause(node |
     None)`: cancel the running agent tasks, keep each one's live session id (the messages carry
     it), mark the node `paused`, cancel its waiting write approvals; the run ends `paused`. Going
     on: the paused nodes run with `resume=<session>` and a short "you were paused, continue from
@@ -526,3 +532,6 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-27 · home machine (account B) · Notes from real use: Markdown tables after text, saved
   autonomy reaches runs (and a warning for agents with their own), workspace.git finds repos;
   pause and other providers planned (backlog 14, 15).
+- 2026-11-27 · home machine (account B) · Pause a running agent and go on in its own session
+  (graph runs): `POST /api/runs/{id}/pause`, Pause in the header and on a step, "Paused by you"
+  card, `paused` events restored after a restart; tests with the fake SDK.

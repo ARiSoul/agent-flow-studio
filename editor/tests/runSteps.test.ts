@@ -131,3 +131,15 @@ test("word diff keeps, adds and removes words", () => {
     [{ op: "same", text: "the " }, { op: "del", text: "quick" }, { op: "add", text: "slow" }, { op: "same", text: " fox" }]);
   assert.equal(wordDiff("a ".repeat(700), "b"), null);
 });
+
+test("a paused step goes on in the same attempt", () => {
+  i = 0;
+  const paused = [ev("delegate", { agent: "a" }), ev("paused", { agent: "a", session: "s1" }), ev("end", { status: "paused" })];
+  const by = (evs: Ev[]) => Object.fromEntries(stepsOf(spec, evs).map((s) => [s.node, s]));
+  assert.equal(by(paused).a.state, "paused");
+  assert.equal(line(paused[1], i18n)?.text, "rp.ev.paused");
+  assert.equal(line(ev("delegate", { agent: "a", after_pause: true }), i18n)?.text.startsWith("rp.ev.afterPause"), true);
+  const goes = by([...paused, ev("delegate", { agent: "a", after_pause: true })]).a;
+  assert.equal(goes.state, "running");
+  assert.equal(goes.attempts.length, 1);
+});

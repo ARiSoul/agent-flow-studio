@@ -5,7 +5,7 @@ import type { FlowRaw } from "./types";
 
 export type Ev = { i: number; type: string; ts?: number; [k: string]: unknown };
 
-export type StepState = "pending" | "running" | "retrying" | "done" | "failed" | "waiting" | "skipped" | "interrupted";
+export type StepState = "pending" | "running" | "retrying" | "paused" | "done" | "failed" | "waiting" | "skipped" | "interrupted";
 export type StepKind = "agent" | "action" | "subflow" | "human" | "stop" | "decision";
 export type Tokens = { in?: number; out?: number; cache_read?: number; cache_write?: number };
 
@@ -138,6 +138,7 @@ export function stepsOf(spec: FlowRaw, events: Ev[]): Step[] {
     if (e.sub) continue;  // inside a subflow: listed under its node, no state change
     switch (e.type) {
       case "delegate":
+        if (e.after_pause) { s.state = "running"; s.end = undefined; const a = cur(s); if (a) a.state = "running"; break; }  // the same attempt goes on
         if (e.task !== "follow-up") { begin(s, e.ts); s.retry = undefined; s.wroteNoRetry = undefined; }  // "ask for more" is not an attempt
         if (e.retry) s.retries += 1;
         break;
@@ -152,6 +153,7 @@ export function stepsOf(spec: FlowRaw, events: Ev[]): Step[] {
         break;
       case "retry_cancelled": s.retry = undefined; s.state = "failed"; break;
       case "retry_skipped": s.wroteNoRetry = true; break;
+      case "paused": s.state = "paused"; s.live = undefined; { const a = cur(s); if (a) a.state = "paused"; } break;
       case "result": {
         s.live = undefined;  // the session's own totals replace the live count
         const c = Number(e.cost ?? 0);
@@ -215,6 +217,7 @@ export function traceOf(events: Ev[]): Record<string, NodeRun> {
     }
     if (e.type === "agent_done" && a) s[a] = e.error ? "error" : "done";
     if (e.type === "retry" && a) s[a] = "active";  // it runs again by itself
+    if (e.type === "paused" && a) s[a] = "stopped";  // paused by the person: goes on later
     if (e.type === "agent_blocked" && a) delete s[a];  // denied by step-by-step mode
     if (e.type === "skipped" && e.node) s[e.node as string] = "skipped";
     if (e.type === "gate") s[e.gate as string] = "gate";

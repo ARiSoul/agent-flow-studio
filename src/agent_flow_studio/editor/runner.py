@@ -1661,6 +1661,24 @@ class Runner:
             fut.set_result((ok, comment))
         return run
 
+    async def pause(self, run_id: str, node: str | None = None) -> Run:
+        """Pauses the running agents of a graph run (all, or one): their sessions stop where they
+        are, the run stops `paused` once nothing else runs, and Continue goes on in each paused
+        agent's own session. A write approval that waits for a paused agent ends unanswered."""
+        run = self.get(run_id)
+        if run.engine is None or run.status != "running":
+            raise RunError(409, "only a running graph run can be paused")
+        hit = await run.engine.pause([node] if node else None)
+        if not hit:
+            raise RunError(409, "no agent of this run is in a session now (an action or a "
+                                "subflow cannot be paused)")
+        for req_id, (req, fut) in list(run.pending.items()):
+            if req.agent in hit and not fut.done():
+                fut.cancel()
+                self._emit(run, {"type": "approval_result", "id": req_id, "approved": False,
+                                 "summary": req.summary, "comment": "the step was paused"})
+        return run
+
     def refresh_autonomy(self, flow: str) -> list[str]:
         """The flow was saved: its runs in memory that are not over take its autonomy now (the
         flow's and each agent's), also while a step runs. Returns the runs that changed."""
@@ -1978,9 +1996,14 @@ def _restore_engine(engine: GraphEngine, events: list[dict[str, Any]], run: Run)
     for e in events:
         t, node = e.get("type"), e.get("agent") or e.get("node") or e.get("gate")
         if t == "delegate" and node in engine.runs:
-            engine.runs[node] += 0 if e.get("retry") else 1
+            engine.runs[node] += 0 if e.get("retry") or e.get("after_pause") else 1
+            engine.paused.pop(node, None)
             if e.get("task") != "follow-up":  # started: interrupted unless it ends below
                 engine.state[node] = "running"
+        elif t == "paused" and node in engine.state:  # paused by the person: goes on in its session
+            engine.state[node] = "paused"
+            engine.runs[node] = max(0, engine.runs[node] - 1)
+            engine.paused[node] = e.get("session")
         elif t == "agent_done" and node in engine.state:
             engine.state[node] = "failed" if e.get("error") else "done"
         elif t in ("skipped", "decided") and node in engine.state:

@@ -25,7 +25,7 @@ export function readReason(reason: string, t: I18n["t"]): string {
 export type GateInfo = { gate: string; label: string; reason: string };
 
 export function Attention({ refEl, authErr, pending, notes, setNotes, onAnswer, retrying, onRetry, retryPolicy, turn, onChange, changingFrom, onKeep, gate, waitedSince, now, gateOutputs, typeOf,
-  note, setNote, onDecide, onStop, paused, pausedUntil, onContinue, ctxSuggest, onContext, onShow, changed, onChanges, runInput }: {
+  note, setNote, onDecide, onStop, paused, pausedUntil, pausedAgents, onContinue, ctxSuggest, onContext, onShow, changed, onChanges, runInput }: {
   refEl: RefObject<HTMLElement>;
   authErr?: Ev; pending: Ev[]; notes: Record<string, string>; setNotes: (f: (n: Record<string, string>) => Record<string, string>) => void;
   onAnswer: (id: string, ok: boolean) => void;
@@ -40,6 +40,8 @@ export function Attention({ refEl, authErr, pending, notes, setNotes, onAnswer, 
   note: string; setNote: (s: string) => void;
   onDecide: (d: "approve" | "reject" | "answer") => void; onStop: () => void;
   paused: boolean; pausedUntil?: string | null; onContinue: (how: "step" | "full") => void;
+  /** The agents the person paused (they go on in their own sessions). */
+  pausedAgents?: string[];
   /** Decided at its gate while another run went: it goes on when that run ends. */
   turn?: { after: string; decision: string } | null;
   /** Change the decision before the run goes on. */
@@ -152,7 +154,17 @@ export function Attention({ refEl, authErr, pending, notes, setNotes, onAnswer, 
             {changingFrom ? <button className="link small" onClick={onStop} title={t("rp.stopDropsTitle")}>{t("rp.stopDrops")}</button> : <button className="link small" onClick={onStop} title={`${t("rp.gateWaits")} ${t("rp.stopGateTitle")}`}>{t("rp.stopLater")}</button>}
           </div>
         </div>)}
-      {paused && (
+      {paused && pausedAgents && pausedAgents.length > 0 ? (
+        <div className="gate-card step" role="group" aria-label={t("rp.pausedBy", { names: pausedAgents.join(", ") })}>
+          <b>⏸ {t("rp.pausedBy", { names: pausedAgents.join(", ") })}</b>
+          <p className="small muted">{t("rp.pausedByHelp")}</p>
+          <div className="rp-card-actions">
+            <button className="primary small" onClick={() => onContinue("full")}>{t("rp.goOn")}</button>
+            <span className="grow" />
+            <button className="link small" onClick={onStop}>{t("run.stop")}</button>
+          </div>
+        </div>
+      ) : paused && (
         <div className="gate-card step">
           <b>{pausedUntil ? t("run.pausedUntil", { target: pausedUntil }) : t("run.pausedAfter")}</b>
           <p className="small muted">{t("run.pausedHelp")}</p>

@@ -89,7 +89,9 @@ approvals, connectors and writes with controlled autonomy.
   estimate "≈" while sessions go) and the action that matters now. Steps show what each received,
   its attempts, live tokens and each tool call (arguments and result read on demand from the local
   session, never stored). A temporary model API error (busy, rate limit) runs the step again by
-  itself (`retry` in the flow, graph mode; never after a write). One run goes at a time: a new
+  itself (`retry` in the flow, graph mode; never after a write). **Pause** stops the running
+  agents (or one step) where they are; Go on resumes each in its own session, with the flow as it
+  is now (graph mode). One run goes at a time: a new
   run waits in a **queue** (kept across restarts) and starts when no run goes or waits for you. A
   decision at a gate is **never refused**: while another run goes it is kept ("decided — goes on
   next", kept across restarts, can be changed). The open run is in the page address

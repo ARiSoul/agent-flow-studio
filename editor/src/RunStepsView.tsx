@@ -10,7 +10,7 @@ import { Clamp, clock, fullTime, MoreMenu, oneLine, useCopy } from "./RunParts";
 import { count, duration, groups, shortModel, toolOutcome, usd, type Ev, type Step, type StepState } from "./runSteps";
 import type { FlowRaw } from "./types";
 
-const ICON: Record<StepState, string> = { pending: "○", running: "●", retrying: "⟳", done: "✓", failed: "✗", waiting: "⏸", skipped: "–", interrupted: "■" };
+const ICON: Record<StepState, string> = { pending: "○", running: "●", retrying: "⟳", paused: "⏸", done: "✓", failed: "✗", waiting: "⏸", skipped: "–", interrupted: "■" };
 
 /** What a step received: each input with where it comes from and its value (undefined: none saved). */
 export type StepInput = { name: string; from?: string; value: unknown };
@@ -18,7 +18,7 @@ export type StepInput = { name: string; from?: string; value: unknown };
 export type ToolCall = { tool: string; input: string; result: string; result_size: number; cut: boolean; is_error: boolean };
 
 export function StepsList({ spec, steps, events, span, now, running, reveal, focus, graph, askable, model, inputsOf, promptOf,
-  onToolCall, onCanvas, onRunFrom, onAsk, onOutput, onLink, onClaude }: {
+  onToolCall, onCanvas, onRunFrom, onAsk, onOutput, onLink, onClaude, onPause }: {
   spec: FlowRaw; steps: Step[]; events: Ev[]; span: [number, number] | null; now: number; running: boolean;
   /** A step to open and bring into view (a canvas click, a link): its nonce changes each time. */
   reveal: { node: string; nonce: number } | null;
@@ -34,6 +34,8 @@ export function StepsList({ spec, steps, events, span, now, running, reveal, foc
   onLink?: (node: string) => string;
   /** Go on with this step's session in Claude Code: a terminal there, or the command to copy. */
   onClaude?: (node: string, how: "terminal" | "copy") => void;
+  /** Pause this running step (graph runs): it goes on later in its own session. */
+  onPause?: (node: string) => void;
 }) {
   const i18n = useI18n();
   const { t, lang } = i18n;
@@ -73,6 +75,7 @@ export function StepsList({ spec, steps, events, span, now, running, reveal, foc
     const inputs = a ? inputsOf(s.node) : [];
     const prompt = a && !a.action && !a.subflow ? promptOf(s.node) : "";
     const menu = [
+      ...(onPause && s.state === "running" && s.kind === "agent" ? [{ label: t("rp.pauseStep"), title: t("rp.pauseTitle"), onSelect: () => onPause(s.node) }] : []),
       ...(graph && onRunFrom && s.kind !== "stop" ? [{ label: t("rp.runFromStep"), title: t("rp.fromHereTitle"), onSelect: () => onRunFrom(s.node) }] : []),
       ...(onAsk && askable.includes(s.node) ? [{ label: t("rp.askThis"), onSelect: () => onAsk(s.node) }] : []),
       ...(onLink ? [{ label: t(copied === `l-${s.node}` ? "run.outCopied" : "rp.copyStepLink"), onSelect: () => copy(onLink(s.node), `l-${s.node}`) }] : []),

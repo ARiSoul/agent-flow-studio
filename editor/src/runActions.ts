@@ -35,6 +35,8 @@ export function runApi(f: typeof fetch = (...a) => fetch(...a)) {
     startQueued: <T>(item: string) => call<T>(`/api/runs-queue/${enc(item)}/start`),
     open: <T>(input: string) => call<T>("/api/runs/open", "POST", { input }),
     stop: <T>(id: string) => call<T>(`/api/runs/${id}/stop`),
+    /** Pauses the running agents (all, or one): Continue goes on in their own sessions. */
+    pause: <T>(id: string, node?: string) => call<T>(`/api/runs/${id}/pause`, "POST", { node: node ?? null }),
     resume: <T>(id: string, reuseChanged: boolean) => call<T>(`/api/runs/${id}/resume`, "POST", { reuse_changed: reuseChanged }),
     cont: <T>(id: string, how: "step" | "full") => call<T>(`/api/runs/${id}/continue`, "POST", { how }),
     decide: <T>(id: string, decision: "approve" | "reject" | "answer", comment: string) =>
