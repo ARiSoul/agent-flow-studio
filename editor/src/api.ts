@@ -1,5 +1,5 @@
 import type {
-  AgentRaw, BoardFlow, Catalog, ChatSummary, ContextSources, CopyItem, CopyPlan, CopyResult, Doc, FlowSummary, FlowTemplate,
+  FlowError, AgentRaw, BoardFlow, Catalog, ChatSummary, ContextSources, CopyItem, CopyPlan, CopyResult, Doc, FlowSummary, FlowTemplate,
   HandoffRun, LibraryAgent, RunIO, SavedChat, SavedCommand, WorkspaceDetail, WorkspaceItem, WorkspaceNow,
   WorkspaceContext, WorkspaceSpecRaw,
   Validation,
@@ -87,6 +87,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(doc),
     }).then((r) => r.data),
+  /** What converting the draft to the graph engine would change (nothing is saved). */
+  toGraph: (name: string, doc: Doc) =>
+    call<{ spec: Doc["spec"]; errors: FlowError[]; notes: (FlowError & { level: "warn" | "info" })[] }>(
+      `/api/flows/${encodeURIComponent(name)}/to-graph`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(doc),
+      }).then((r) => r.data),
   /** force: save even with problems (after the person confirms); a secret in the flow is never saved. */
   save: (name: string, doc: Doc, force = false, allowPrivate = false) =>
     call<Validation & { saved?: boolean; with_problems?: boolean; blocked_by_secret?: boolean;

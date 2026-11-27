@@ -93,7 +93,12 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
 - Execution per flow (`execution`): `orchestrator` (LLM, `compile_flow`) or `graph` (`engine.py`:
   one session per agent from `compile_agent`, guard with `fixed_agent`, parallel branches, joins,
   `if`/`when`, loops with `max_runs`). Legacy flows (no `inputs`) keep the one `input` that is also
-  the run id.
+  the run id. The orchestrator is for short flows: `builder/convert.py` (`orchestrator_limit` =
+  a validation warning above `ORCH_MAX_AGENTS` = 3; `graph_notes` = what works differently in
+  graph mode; `to_graph` = `execution: graph` + clears go-on `when` texts like "finished", which
+  the graph router would be asked about). `POST /api/flows/{name}/to-graph` plans it (nothing
+  saved); the editor's Flow properties has "Convert to the graph engine…". New features are
+  graph-only; orchestrator resume (old backlog 13) is not planned.
 - Files of a run: `io.read_file` (text), `io.view_image`, `io.view_video` (`tools/media.py`: the
   format comes from the content and is forced on ffmpeg with only the file/pipe protocols; MCP
   image blocks). `compile.file_tools` gives them by the input's `accept`; `MAX_MESSAGE` raises

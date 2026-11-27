@@ -153,3 +153,27 @@ def test_a_new_blank_flow_is_created_and_opened(page):
     page.get_by_role("button", name="Properties", exact=True).click()
     expect(page.get_by_role("combobox", name="Execution")).to_have_value("graph")
     assert page.errors == []
+
+
+def test_a_long_orchestrator_flow_is_converted_to_the_graph_engine(page):
+    page.get_by_role("combobox", name="Flow").select_option("legacy")
+    expect(page.get_by_role("combobox", name="Flow")).to_have_value("legacy")
+    # the warning: longer than the orchestrator is for
+    expect(page.get_by_role("contentinfo")).to_contain_text("the orchestrator is for short flows")
+    page.get_by_role("button", name="Properties", exact=True).click()
+    page.get_by_role("button", name="Convert to the graph engine…").click()
+    dialog = page.get_by_role("dialog", name="Convert to the graph engine")
+    expect(dialog).to_contain_text("Ready to convert. 4 agents need inputs or outputs afterwards.")
+    agents = dialog.get_by_role("region", name="Agents to check")
+    expect(agents).to_contain_text("a2")
+    expect(agents).to_contain_text("Gets only the flow task.")
+    expect(dialog.get_by_role("region", name="Conditions removed")).to_contain_text("was: finished")
+    dialog.get_by_role("button", name="Convert draft").click()
+    expect(dialog).to_be_hidden()
+    expect(page.get_by_role("combobox", name="Execution")).to_have_value("graph")
+    expect(page.get_by_role("button", name="Convert to the graph engine…")).to_have_count(0)
+    expect(page.get_by_role("button", name="Save", exact=True)).to_be_enabled()  # not saved yet
+    expect(page.get_by_role("contentinfo")).not_to_contain_text("the orchestrator is for short flows")
+    page.get_by_role("button", name="Undo").click()
+    expect(page.get_by_role("combobox", name="Execution")).to_have_value("orchestrator")
+    assert page.errors == []

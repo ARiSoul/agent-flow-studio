@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from ..builder.compile import FlowError, compile_flow, flow_section
+from ..builder.convert import orchestrator_limit
 from ..builder.library import origin_status
 from ..builder.spec import FlowSpec
 from ..messages import Msg, MsgError, msg, to_json
@@ -97,7 +98,11 @@ def _check(raw: dict[str, Any], prompts: dict[str, str]) -> dict[str, Any]:
             cf = compile_flow(spec, Path(tmp), resolve_secrets=False, configure_artifacts=False)
     except FlowError as e:
         return {"ok": False, "errors": _structured(e, raw)}
-    return {"ok": True, "errors": [], "warnings": unused_inputs(spec, prompts), "spec": spec,
+    warnings = unused_inputs(spec, prompts)
+    large = orchestrator_limit(spec)
+    if large:
+        warnings.append(_entry("execution", large, []))
+    return {"ok": True, "errors": [], "warnings": warnings, "spec": spec,
             "flow_section": flow_section(spec),
             "allowed_tools": [t for t in cf.options.allowed_tools if t != "Agent"]}
 

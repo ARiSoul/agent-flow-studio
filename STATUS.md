@@ -16,6 +16,15 @@ terms — no emails —, what was done) and commit + push.
   `editor/src/appParts/`), `Inspector.tsx` 964 → 49 (panels in `editor/src/inspectorPanels/`);
   three more E2E tests cover the moved parts (node menu: duplicate, rename, undo; a library
   agent; a new blank flow in graph mode).
+- **Orchestrator limited to short flows** (decision, replaces backlog 13): a warning above 3
+  agents, and "Convert to the graph engine…" in Flow properties shows what works differently
+  (agents with no typed inputs/outputs, conditions in words, the orchestrator prompt) before it
+  changes the draft; go-on conditions like `when: finished` are cleared (the graph router
+  would be asked about them — new blank flows no longer have one).
+  The window (`inspectorPanels/ConvertDialog.tsx`) was reviewed by a strict design critic
+  (subagent) over 4 rounds to 10/10: verdict + gains first, grouped sections, long lists
+  collapse ("Show all"), focus and footer shadow checked with Playwright; the dark theme's
+  `--on-accent` is now dark (#0f1218) for AA contrast on all primary buttons.
 - **E2E for writes**: the agent's Write goes through the real guard hook; the write card shows
   the file and content, Approve writes it, Reject (after a confirmation) never writes and the
   agent gets the comment, and autonomy `auto` saved while a write waits lets it through.
@@ -309,7 +318,9 @@ have English names. No YAML key, enum value, tool id or env var changed, so old 
 12. [ ] Connector `allowed_paths`: refuse `*` (or treat it as one path segment) and, when "Test
    connection" is refused, name the test path (Azure DevOps tests `/_apis/projects`).
 
-13. [ ] Resume / run from here for orchestrator-mode runs (today graph mode only).
+13. [-] ~~Resume / run from here for orchestrator-mode runs~~ — decided not to (2026-11-27):
+    the orchestrator is for short flows; long ones get a warning and "Convert to the graph
+    engine…". New features are graph-only.
 14. [x] **Pause a running agent and go on from the same place** (graph mode). Engine `pause(node |
     None)`: cancel the running agent tasks, keep each one's live session id (the messages carry
     it), mark the node `paused`, cancel its waiting write approvals; the run ends `paused`. Going
@@ -585,3 +596,6 @@ start the editor or the CLI (the studio does not read `.env`).
   Inspector.tsx → inspectorPanels/; 3 more E2E tests (node menu, library, new flow).
 - 2026-11-27 · home machine (account B) · E2E tests for writes (approve, reject, autonomy saved while
   waiting) through the real guard hook; E2E tests wait for the loaded flow (fixes a flaky test).
+- 2026-11-27 · home machine (account B) · Orchestrator limited to short flows: warning above 3
+  agents, Convert to the graph engine (notes first, draft only), go-on `when` cleared; backlog 13
+  dropped.

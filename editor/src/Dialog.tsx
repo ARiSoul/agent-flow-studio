@@ -152,7 +152,7 @@ function DialogBox({ open }: { open: Open }) {
   );
 }
 
-function trapFocus(e: KeyboardEvent, box: HTMLElement | null) {
+export function trapFocus(e: KeyboardEvent, box: HTMLElement | null) {
   const items = [...(box?.querySelectorAll<HTMLElement>("input, select, textarea, button") ?? [])];
   if (!items.length) return;
   const first = items[0], last = items[items.length - 1];

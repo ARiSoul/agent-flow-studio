@@ -26,7 +26,12 @@ approvals, connectors and writes with controlled autonomy.
   instructions and delegates to the agents (as before); `graph` — the studio runs the graph
   itself: each agent is its own session, independent branches run **in parallel** (up to
   `max_parallel`), a node with several incoming links waits for all of them (`join: any` waits
-  for the first), skipped branches propagate, and loops stop at `max_runs`.
+  for the first), skipped branches propagate, and loops stop at `max_runs`. The orchestrator is
+  for **short flows** (up to 3 agents; a longer one gets a warning): resume, run from a step,
+  retry, pause, action and subflow nodes and a provider per agent are graph-only. **Convert to
+  the graph engine…** (Flow properties) shows first what works differently — agents that got
+  context only from the orchestrator's words and need typed inputs/outputs, conditions in words —
+  and then changes the draft (you save it; Undo goes back).
 - **Conditions** on links: `if` — an expression on the inputs and outputs, evaluated by the studio
   without an LLM (`triage.severity == "high"`, `tests.failed > 0`, `len(scan.items) > 0`,
   `approve.decision == "approve"`, `counter.count > previous.counter.count`); `when` — text,

@@ -14,12 +14,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from ... import workspaces
+from ...builder import convert
 from ...builder.compile import find_flow, flow_locations
 from ...builder.library import LibraryError, agents_dict, delete_agent, move_agent, save_local
 from ...builder.spec import FlowSpec
 from ...builder.templates import TemplateError, templates_dict
 from ...builder.templates import render as render_template
 from ...builder.types import IOType
+from ...messages import to_json
 from ...publish import (
     PUBLIC,
     PrivateTermsError,
@@ -97,6 +99,24 @@ def register(app: FastAPI, ctx: Ctx) -> None:
         place = _flow_place(fb(), name)
         return {"spec": raw, "prompts": prompts, "location": place, "public": place == PUBLIC,
                 **_public(_validate(raw, prompts))}
+
+    @app.post("/api/flows/{name}/to-graph")
+    def to_graph_plan(name: str, body: FlowBody) -> dict[str, Any]:
+        """What converting the draft to the graph engine would change (nothing is saved): the
+        converted spec, its validation problems as a graph flow, and notes on what works
+        differently. The editor shows them and, if the person agrees, uses `spec` as the draft."""
+        d = _flow_dir(fb(), name)
+        _check_prompts(body.prompts)
+        raw = convert.to_graph(body.spec)
+        prompts = {**_disk_prompts(d), **body.prompts}
+        checked = _validate(raw, prompts)
+        notes = []
+        try:
+            for level, m, nodes in convert.graph_notes(FlowSpec.model_validate(body.spec)):
+                notes.append({"level": level, "msg": str(m), "nodes": nodes, **(to_json(m) or {})})
+        except ValidationError:
+            pass  # a draft that does not parse: its problems are in `errors`
+        return {"spec": raw, "errors": checked.get("errors", []), "notes": notes}
 
     @app.post("/api/flows/{name}/validate")
     def validate(name: str, body: FlowBody) -> dict[str, Any]:

@@ -39,6 +39,14 @@ OUTPUTS: dict[str, dict[str, Any]] = {
 }
 
 
+def legacy_flow() -> dict[str, Any]:
+    """An orchestrator flow of 4 agents with no typed IO (longer than the orchestrator is for)."""
+    agents = {f"a{i}": {"description": f"Step {i}.", "prompt": f"Do step {i}."} for i in range(1, 5)}
+    return {"version": 1, "name": "legacy", "title": "Legacy (tests)", "task": "Work on {input}.",
+            "start": "a1", "agents": agents,
+            "edges": [{"from": f"a{i}", "to": f"a{i + 1}", "when": "finished"} for i in range(1, 4)]}
+
+
 def dev_flow(workspace: Path) -> dict[str, Any]:
     """A graph flow whose `coder` writes in a workspace, with autonomy `approve` (every write
     waits for the person)."""
@@ -132,6 +140,9 @@ def studio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: FakeModel) ->
     (flows / "dev").mkdir()
     (flows / "dev" / "flow.yaml").write_text(
         yaml.safe_dump(dev_flow(tmp_path / "repo"), sort_keys=False), encoding="utf-8")
+    (flows / "legacy").mkdir()
+    (flows / "legacy" / "flow.yaml").write_text(
+        yaml.safe_dump(legacy_flow(), sort_keys=False), encoding="utf-8")
     monkeypatch.setenv("PROVIDERS_FILE", str(tmp_path / "providers.yaml"))
     monkeypatch.setattr(server_mod, "Runner", lambda base, **k: Runner(base, query_fn=model))
     app = server_mod.create_app(flows, allowed_hosts=["127.0.0.1", "localhost"])

@@ -219,7 +219,7 @@ def _blank(name: str, title: str) -> dict[str, Any]:
                              "prompt": "Describe here what this agent does.",
                              "tools": []}},
         "gates": {"end": {"kind": "human", "label": "Human review"}},
-        "edges": [{"from": "first", "to": "end", "when": "finished"}],
+        "edges": [{"from": "first", "to": "end"}],  # graph: no condition = it always goes on
         "layout": {"first": {"x": 0, "y": 0}, "end": {"x": 0, "y": 160}},
     }
 

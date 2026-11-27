@@ -1,11 +1,40 @@
 /** The Inspector of the flow itself: general fields, execution, autonomy, workspace, MCPs. */
 import { useRef, useState } from "react";
+import { api } from "../api";
+import { ConvertDialog, type ConvertPlan } from "./ConvertDialog";
 import { Field, NumberInput } from "../fields";
 import { IOListEditor } from "../IOEditors";
-import { isTyped, SLUG } from "../model";
+import { isTyped, SLUG, tidy } from "../model";
 import { useI18n } from "../i18n";
 import type { Catalog, Doc, FlowRaw, McpRaw } from "../types";
 import { AUTONOMY, ModelNote, PromptEditor, type Update, VarChips, WRITE_TOOL_NAMES, csv, insertAt, kv, lines, unkv } from "./shared";
+
+/** Converts the draft to the graph engine after showing what works differently (nothing is
+ * saved: the person saves the flow as always). */
+function ConvertToGraph({ doc, update }: { doc: Doc; update: Update }) {
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [plan, setPlan] = useState<(ConvertPlan & { spec: Doc["spec"] }) | null>(null);
+  const open = async () => {
+    setBusy(true); setErr(null);
+    try { setPlan(await api.toGraph(doc.spec.name, tidy(doc))); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    finally { setBusy(false); }
+  };
+  const convert = () => {
+    if (!plan) return;
+    const spec = plan.spec;
+    update((d) => { d.spec = { ...spec, layout: d.spec.layout } as Doc["spec"]; });
+    setPlan(null);
+  };
+  return <div className="warn-box small">
+    <p>{t("insp.convertHint")}</p>
+    <button className="small" disabled={busy} onClick={open}>{t("insp.convertButton")}</button>
+    {err && <p className="field-err">{err}</p>}
+    {plan && <ConvertDialog plan={plan} onCancel={() => setPlan(null)} onConvert={convert} />}
+  </div>;
+}
 
 function McpEditor({ name, m, update }: { name: string; m: McpRaw; update: Update }) {
   const { t } = useI18n();
@@ -91,6 +120,7 @@ export function FlowPanel({ doc, catalog, update, openProviders }: { doc: Doc; c
           <option value="orchestrator">{t("insp.execOrchestrator")}</option>
         </select>
       </Field>
+      {s.execution !== "graph" && <ConvertToGraph doc={doc} update={update} />}
       <div className="exec-modes small" role="note">
         <div className={s.execution === "graph" ? "on" : ""}>
           <b>{t("insp.execGraph")}</b> — {t("insp.executionGraphHint")}

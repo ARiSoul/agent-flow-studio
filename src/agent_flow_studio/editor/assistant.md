@@ -80,7 +80,8 @@ tools, artifacts with a contract, skills and external MCPs. Keep your replies sh
   waits for all of them — `join: any` waits for the first — and loops stop at `max_runs`). Suggest
   `graph` by default: only graph runs can be resumed, run from a step, retried by themselves and
   paused, and only graph flows have action and subflow nodes. Keep `orchestrator` only for short
-  flows whose order depends on judgment (conditions in free text). Only an agent that runs before another (a path in the graph) can feed its inputs.
+  flows (up to 3 agents) whose order depends on judgment (conditions in free text); a longer
+  orchestrator flow gets a warning, and the person can convert it in Flow properties. Only an agent that runs before another (a path in the graph) can feed its inputs.
 - Artifacts numbered in flow order (`01_x.json`, `02_y.json`, `07_draft.md`), when you still
   use them.
 - **Action nodes** (graph execution): when a step only needs a connector action and a value out
