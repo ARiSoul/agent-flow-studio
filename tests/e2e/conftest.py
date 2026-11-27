@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
 from agent_flow_studio.editor.api import common as api_common
@@ -34,7 +35,25 @@ OUTPUTS: dict[str, dict[str, Any]] = {
     "researcher_a": {"answer": "**A** is the first answer.", "confidence": 0.9},
     "researcher_b": {"answer": "**B** is the second answer.", "confidence": 0.8},
     "writer": {"report": "# Report\n\n| part | answer |\n|---|---|\n| A | first |\n| B | second |"},
+    "coder": {"summary": "Wrote the file."},
 }
+
+
+def dev_flow(workspace: Path) -> dict[str, Any]:
+    """A graph flow whose `coder` writes in a workspace, with autonomy `approve` (every write
+    waits for the person)."""
+    return {
+        "version": 1, "name": "dev", "title": "Dev (tests)", "execution": "graph",
+        "autonomy": "approve", "workspace": {"path": str(workspace), "environment": "dev"},
+        "inputs": {"task": {"type": "text", "label": "Task"}},
+        "start": "coder",
+        "agents": {"coder": {
+            "description": "Writes code in the workspace.", "prompt": "Write the code.",
+            "tools": ["workspace.read", "workspace.write"],
+            "inputs": {"task": {"from": "input.task"}},
+            "outputs": {"summary": {"type": "text"}}}},
+        "edges": [],
+    }
 
 pytestmark = pytest.mark.e2e
 
@@ -53,6 +72,11 @@ class FakeModel:
     def __init__(self) -> None:
         self.slow: dict[str, float] = {}
         self.calls: list[dict[str, Any]] = []
+        # agent -> (path, content): the agent writes that file with the Write tool. The studio's
+        # real guard hook decides (allow, ask the person, deny); the file is written only when
+        # the hook lets the call through, as the CLI would.
+        self.writes: dict[str, tuple[str, str]] = {}
+        self.decisions: list[dict[str, Any]] = []
 
     async def __call__(self, prompt: str, options: Any):
         found = AGENT.search(prompt)
@@ -64,6 +88,14 @@ class FakeModel:
                                session_id=sid)
         if self.slow.get(agent) and not options.resume:
             await asyncio.sleep(self.slow[agent])
+        if agent in self.writes:
+            path, content = self.writes[agent]
+            guard = options.hooks["PreToolUse"][0].hooks[0]
+            out = await guard({"tool_name": "Write", "agent_type": agent, "session_id": sid,
+                               "tool_input": {"file_path": path, "content": content}}, "w1", {})
+            self.decisions.append(out)
+            if out.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
+                (Path(options.cwd) / path).write_text(content, encoding="utf-8")
         for k, v in OUTPUTS.get(agent, {}).items():
             io_tool.store_output(io_tool.spec_for(rid), rid, agent, k, v)
         yield ResultMessage(subtype="success", duration_ms=5, duration_api_ms=5, is_error=False,
@@ -96,6 +128,10 @@ def studio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: FakeModel) ->
 
     flows = tmp_path / "flows"
     shutil.copytree(FIX / "parallel", flows / "parallel")
+    (tmp_path / "repo").mkdir()
+    (flows / "dev").mkdir()
+    (flows / "dev" / "flow.yaml").write_text(
+        yaml.safe_dump(dev_flow(tmp_path / "repo"), sort_keys=False), encoding="utf-8")
     monkeypatch.setenv("PROVIDERS_FILE", str(tmp_path / "providers.yaml"))
     monkeypatch.setattr(server_mod, "Runner", lambda base, **k: Runner(base, query_fn=model))
     app = server_mod.create_app(flows, allowed_hosts=["127.0.0.1", "localhost"])
@@ -146,6 +182,10 @@ def page(browser: Any, studio: str, request: pytest.FixtureRequest) -> Iterator[
     errors: list[str] = []
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.goto(studio + "/#flow=parallel")
+    # every test starts on a loaded flow (a click before that would act on nothing, or on
+    # another flow that the editor opens first)
+    p.locator(".react-flow__node[data-id='planner']").wait_for()
+    p.get_by_text("✓ valid").wait_for()
     p.errors = errors  # checked by the tests: no script error on the page
     yield p
     shots = os.getenv("AFS_E2E_SHOTS")

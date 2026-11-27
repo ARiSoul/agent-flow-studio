@@ -269,8 +269,11 @@ Subagents accept MCP tools by their full name `mcp__server__tool`.
 - E2E (`tests/e2e`, marker `e2e`): the real API in a uvicorn thread on a free port + the built
   editor in headless Chromium (Playwright sync API; the browser fixture is module-scoped — its
   event loop must not outlive the module), a `FakeModel` as the SDK `query`, English UI via
-  localStorage. Find elements by role and accessible name (as a person would); a change to the
-  main paths of the UI (run, gate, pause, stop, providers) updates these tests.
+  localStorage; each test starts on the loaded `parallel` flow. Writes go through the real guard
+  hook (`FakeModel.writes`: the hook from the session options decides, the file is written only
+  when it lets the call through), on the `dev` test flow (workspace `tmp_path/repo`). Find
+  elements by role and accessible name (as a person would); a change to the main paths of the UI
+  (run, gate, pause, stop, writes, providers) updates these tests.
 - Website connectors: `pip install -e ".[web]"` (Playwright; uses the installed Edge/Chrome)
 - `agent-flow-studio <input> --flow <flow> [--resume <session_id>] [--workspace <ws>] [--env <env>]`
 - `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog|templates|agents`

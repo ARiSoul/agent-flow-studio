@@ -16,6 +16,10 @@ terms — no emails —, what was done) and commit + push.
   `editor/src/appParts/`), `Inspector.tsx` 964 → 49 (panels in `editor/src/inspectorPanels/`);
   three more E2E tests cover the moved parts (node menu: duplicate, rename, undo; a library
   agent; a new blank flow in graph mode).
+- **E2E for writes**: the agent's Write goes through the real guard hook; the write card shows
+  the file and content, Approve writes it, Reject (after a confirmation) never writes and the
+  agent gets the comment, and autonomy `auto` saved while a write waits lets it through.
+  Every E2E test now starts on a loaded flow (a click before the load was a flaky test).
 - **E2E tests** (`tests/e2e`, Playwright, fake model): open a flow, run to the gate and approve
   (with the Markdown table), pause and go on, stop, add a provider from the model field, change
   the language; a CI job runs them on Linux (required, screenshots on failure). Next suggested:
@@ -579,3 +583,5 @@ start the editor or the CLI (the studio does not read `.env`).
   that runs them on Linux.
 - 2026-11-27 · home machine (account B) · Split the frontend: App.tsx → hooks in appParts/,
   Inspector.tsx → inspectorPanels/; 3 more E2E tests (node menu, library, new flow).
+- 2026-11-27 · home machine (account B) · E2E tests for writes (approve, reject, autonomy saved while
+  waiting) through the real guard hook; E2E tests wait for the loaded flow (fixes a flaky test).

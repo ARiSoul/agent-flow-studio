@@ -48,7 +48,8 @@ Long Windows temp paths can skip some tests: add `--basetemp D:\ptmp` (any short
 
 **E2E tests** (`tests/e2e`): the built editor in a headless browser with Playwright, a fake
 model and temporary folders — open a flow, run it to its gate and approve, pause and go on,
-stop, add a provider from the model field, change the language. They need
+stop, add a provider from the model field, change the language, the node menu, a library
+agent, a new flow, and writes: approve, reject, and autonomy saved while a write waits. They need
 `pip install -e ".[web]"`, a Chromium (an installed Chrome/Edge, or
 `python -m playwright install chromium`) and `npm run build`; otherwise they are skipped.
 ```powershell
