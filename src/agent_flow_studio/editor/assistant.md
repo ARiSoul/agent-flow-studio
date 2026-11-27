@@ -78,8 +78,9 @@ tools, artifacts with a contract, skills and external MCPs. Keep your replies sh
 - **Execution**: `orchestrator` (an LLM follows the graph) or `graph` (the studio runs it:
   independent branches run in parallel up to `max_parallel`, a node with several incoming edges
   waits for all of them — `join: any` waits for the first — and loops stop at `max_runs`). Suggest
-  `graph` when the steps and conditions are clear; keep `orchestrator` when the order depends on
-  judgment. Only an agent that runs before another (a path in the graph) can feed its inputs.
+  `graph` by default: only graph runs can be resumed, run from a step, retried by themselves and
+  paused, and only graph flows have action and subflow nodes. Keep `orchestrator` only for short
+  flows whose order depends on judgment (conditions in free text). Only an agent that runs before another (a path in the graph) can feed its inputs.
 - Artifacts numbered in flow order (`01_x.json`, `02_y.json`, `07_draft.md`), when you still
   use them.
 - **Action nodes** (graph execution): when a step only needs a connector action and a value out

@@ -746,12 +746,22 @@ function FlowPanel({ doc, catalog, update }: { doc: Doc; catalog: Catalog; updat
         <Field label={t("insp.maxTurns")}><input type="number" min={1} max={500} value={s.max_turns ?? 60}
           onChange={(e) => set((x) => { x.max_turns = Number(e.target.value) || undefined; })} /></Field>
       </div>
-      <Field label={t("insp.execution")} hint={t(s.execution === "graph" ? "insp.executionGraphHint" : "insp.executionOrchHint")}>
+      <Field label={t("insp.execution")}>
         <select value={s.execution ?? "orchestrator"} onChange={(e) => set((x) => { x.execution = e.target.value as FlowRaw["execution"]; })}>
+          <option value="graph">{t("insp.execGraph")} — {t("insp.execRecommended")}</option>
           <option value="orchestrator">{t("insp.execOrchestrator")}</option>
-          <option value="graph">{t("insp.execGraph")}</option>
         </select>
       </Field>
+      <div className="exec-modes small" role="note">
+        <div className={s.execution === "graph" ? "on" : ""}>
+          <b>{t("insp.execGraph")}</b> — {t("insp.executionGraphHint")}
+          <div className="muted">{t("insp.execGraphOnly")}</div>
+        </div>
+        <div className={s.execution !== "graph" ? "on" : ""}>
+          <b>{t("insp.execOrchestrator")}</b> — {t("insp.executionOrchHint")}
+          <div className="muted">{t("insp.execOrchWhen")}</div>
+        </div>
+      </div>
       {s.execution === "graph" && (
         <Field label={t("insp.maxParallel")} hint={t("insp.maxParallelHint")}>
           <NumberInput value={s.max_parallel ?? 4} min={1} max={16} step={1}

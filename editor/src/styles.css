@@ -1157,4 +1157,7 @@ button.small.warn { color: var(--human); border-color: var(--human); }
 .rp-preview-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .rp-preview-frame { width: 100%; aspect-ratio: 4 / 3; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); }
 .ws-preview input:last-child { flex: 0 1 160px; }
+.exec-modes { display: grid; gap: 6px; margin: 2px 0 8px; }
+.exec-modes > div { border-left: 3px solid var(--border); padding: 4px 8px; border-radius: 4px; }
+.exec-modes > div.on { border-left-color: var(--accent); background: var(--panel-2); }
 .warn-box { border-left: 3px solid var(--human); background: var(--human-soft); padding: 6px 8px; border-radius: 4px; margin: 4px 0; }

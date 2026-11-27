@@ -26,6 +26,10 @@ three fixed (not committed when this was written; see the Log):
   where you stopped" message, with the flow as it is now (autonomy refreshed). Works after an
   editor restart (`_restore_engine`). Not for action or subflow nodes, nor orchestrator runs.
   Not tried yet with a real model.
+- **Execution modes are explained** in Flow properties: both modes side by side, what only the
+  graph engine has (resume, run from a step, retry, pause, action/subflow nodes) and when the
+  orchestrator fits. New blank flows and the chat assistant now default to `graph` (templates
+  already did); flows without `execution` still mean orchestrator.
 - **Planned, not done** (backlog 15): other models and providers.
 
 ## Where we stopped earlier (2026-11-26, night, home machine / account B)
@@ -535,3 +539,5 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-27 · home machine (account B) · Pause a running agent and go on in its own session
   (graph runs): `POST /api/runs/{id}/pause`, Pause in the header and on a step, "Paused by you"
   card, `paused` events restored after a restart; tests with the fake SDK.
+- 2026-11-27 · home machine (account B) · Flow properties compare the two execution modes; new
+  blank flows and the assistant default to the graph engine.

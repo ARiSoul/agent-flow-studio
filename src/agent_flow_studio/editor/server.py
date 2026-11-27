@@ -255,7 +255,8 @@ class NewFlow(BaseModel):
 def _blank(name: str, title: str) -> dict[str, Any]:
     return {
         # no inputs and no legacy task: a run only needs its id (add typed inputs when needed)
-        "version": 1, "name": name, "title": title,
+        # graph: the studio runs the steps (resume, run from a step, retry, pause need it)
+        "version": 1, "name": name, "title": title, "execution": "graph",
         "start": "first",
         "agents": {"first": {"description": "First step of the flow.",
                              "prompt": "Describe here what this agent does.",
