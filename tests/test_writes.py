@@ -81,7 +81,8 @@ def test_paths_confined_to_workspace(ws: Path, tmp_path: Path):
     assert call(cf, "Read", file_path="sub/a.py") is None  # relative to the workspace
     assert "outside the workspace" in call(cf, "Read", file_path=str(tmp_path / "x"))
     assert "outside the workspace" in call(cf, "Write", file_path="../outside.txt", content="x")
-    assert "outside the workspace" in call(cf, "Grep", pattern="x", path="C:/Windows")
+    system = str(Path(ws.anchor) / "Windows")  # an absolute path outside, on any OS (C:\Windows, /Windows)
+    assert "outside the workspace" in call(cf, "Grep", pattern="x", path=system)
     assert "orchestrator" in call(cf, "Read", agent=None, file_path=str(ws / "a.py"))
     assert "not allowed" in call(cf, "Glob", pattern="*")  # not among the flow tools
 

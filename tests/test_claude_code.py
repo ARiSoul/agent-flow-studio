@@ -69,6 +69,9 @@ def test_a_step_goes_on_in_claude_code(flows, sessions, monkeypatch):
     opened = []
     import subprocess  # open_terminal starts the terminal with subprocess.Popen: record it instead
     monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: opened.append((args, kw)))
+    # a terminal on any OS (Windows Terminal, or a Linux terminal emulator on CI)
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     claude_sessions.open_terminal(SID, str(sessions))
     assert opened and any(f"claude --resume {SID}" in str(a) for a, _ in opened)
     with pytest.raises(ValueError):

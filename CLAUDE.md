@@ -256,6 +256,10 @@ Subagents accept MCP tools by their full name `mcp__server__tool`.
 
 ## Commands
 - `pytest` · `AFS_NO_EXTENSIONS=1 pytest tests` · `ruff check .`
+- CI: `.github/workflows/ci.yml` (push to main, pull requests): ruff + core tests on Linux
+  (Python 3.10, 3.13) and Windows (3.12), editor typecheck + `npm test` + build. Tests never
+  need a real model, secrets or extensions; a test that needs git, ffmpeg or Playwright skips
+  when it is missing.
 - Website connectors: `pip install -e ".[web]"` (Playwright; uses the installed Edge/Chrome)
 - `agent-flow-studio <input> --flow <flow> [--resume <session_id>] [--workspace <ws>] [--env <env>]`
 - `agent-flow-studio-flows list|validate <flow>|show <flow>|catalog|templates|agents`

@@ -1,0 +1,74 @@
+# Checks on every push and pull request: lint and the core tests (no extensions, no real model,
+# no secrets: the tests use a fake SDK, a fake keyring and temporary folders), and the editor
+# (types, unit tests, build).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.10" }  # the oldest supported (requires-python)
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.12" }  # the machines the studio is used on
+    env:
+      AFS_NO_EXTENSIONS: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Git identity (tests make commits in temporary repositories)
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.invalid"
+          git config --global init.defaultBranch main
+      - name: Lint
+        run: ruff check .
+      - name: Tests
+        run: python -m pytest tests -q
+
+  editor:
+    name: Editor (types, tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: editor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"  # runs the .ts tests directly (type stripping)
+          cache: npm
+          cache-dependency-path: editor/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Types
+        run: npm run typecheck
+      - name: Tests
+        run: npm test
+      - name: Build
+        run: npm run build

@@ -46,6 +46,14 @@ cd editor; npx tsc --noEmit -p .; cd ..                   # editor types
 One test file: `.\.venv\Scripts\python -m pytest -q tests\test_run_history.py`.
 Long Windows temp paths can skip some tests: add `--basetemp D:\ptmp` (any short folder).
 
+CI (`.github/workflows/ci.yml`) runs the same on every push to `main` and every pull request:
+ruff + the core tests (Python 3.10 and 3.13 on Linux, 3.12 on Windows) and the editor (types,
+tests, build). See the runs in the repository's **Actions** tab, or:
+```powershell
+gh run list --limit 5
+gh run view --log-failed
+```
+
 ## Editor development
 ```powershell
 cd editor; npm run dev                                    # http://localhost:5173, /api goes to 8765

@@ -8,8 +8,10 @@ terms — no emails —, what was done) and commit + push.
 - **Backend split** (no behaviour change): `editor/server.py` (1895 lines) → the app + routers
   in `editor/api/`; `editor/runner.py` (2112 lines) → the `Runner` + mixins and helpers in
   `editor/runs/`. Same 106 API routes; all tests pass; a new test caught and keeps fixed the
-  built editor path (`api/common.STATIC`). Next suggested: CI (GitHub Actions: ruff, pytest, tsc,
-  npm test, build), then Playwright E2E for the main paths, then a real provider check.
+  built editor path (`api/common.STATIC`).
+- **CI** (GitHub Actions, `.github/workflows/ci.yml`): ruff + core tests on Linux (Python 3.10,
+  3.13) and Windows (3.12), editor typecheck + tests + build, on every push to main and every
+  pull request. Next suggested: Playwright E2E for the main paths, then a real provider check.
 Notes from real use on the work machine (a PBI flow: analyse, plan, implement, test, review),
 three fixed (not committed when this was written; see the Log):
 - **Markdown tables** in the output viewer and on gates: a table right after a line of text (no
@@ -562,3 +564,5 @@ start the editor or the CLI (the studio does not read `.env`).
   (save, delete, key, check), assistant catalog lists the providers.
 - 2026-11-27 · home machine (account B) · Split the editor backend: server.py → app + editor/api/
   routers; runner.py → Runner + editor/runs/ mixins; no behaviour change, same routes, tests pass.
+- 2026-11-27 · home machine (account B) · CI on GitHub Actions: ruff, core tests (Linux 3.10/3.13,
+  Windows 3.12), editor typecheck, tests and build.
