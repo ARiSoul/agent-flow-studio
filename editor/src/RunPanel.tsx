@@ -60,13 +60,15 @@ const typing = () => {
   return !!el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable);
 };
 
-export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFocusNode, onAttention, onOpenRun }: {
+export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFocusNode, onAttention, onOpenRun, onRetrySetting }: {
   flow: string; doc: Doc; dirty: boolean; mock: boolean; onTrace: (t: Trace) => void;
   request?: RunRequest | null;
   /** The node selected on the canvas: its step opens in the Current view. */
   focus?: string | null;
   /** Select a node on the canvas (from a step). */
   onFocusNode?: (node: string) => void;
+  /** Opens the flow's Properties at its Retry setting (the retry card's link). */
+  onRetrySetting?: () => void;
   /** How many things wait for the person in this workspace (gates, write approvals, paused runs). */
   onAttention?: (n: number) => void;
   /** Open a run of another flow (the editor switches to that flow first). */
@@ -631,12 +633,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
   ) : (
     <div className="rp-body" ref={body} onScroll={onScroll}>
       <Attention refEl={attention} authErr={authErr} pending={pending} notes={notes} setNotes={setNotes} onAnswer={answer}
-        retrying={retrying} onRetry={retry} turn={changing ? null : turn} onChange={startChange}
+        retrying={retrying} onRetry={retry} onRetrySetting={onRetrySetting} turn={changing ? null : turn} onChange={startChange}
         changingFrom={changing && turn ? { ...turn, until: run.held_until } : null} onKeep={keepDecision} retryPolicy={{ transient: spec.retry?.transient ?? 2, wait: spec.retry?.wait ?? 15 }}
         gate={gate} waitedSince={gateStep?.start} now={now} gateOutputs={gateOutputs} typeOf={typeOf}
         note={gateNote} setNote={setGateNote} onDecide={decide} onStop={stop}
         paused={paused} pausedUntil={run.mode === "until" ? run.target : null} onContinue={cont}
         pausedAgents={steps.filter((s) => s.state === "paused").map((s) => s.node)}
+        pausedAfter={[...steps].filter((s) => s.state === "done" && s.end).sort((a, b) => (b.end ?? 0) - (a.end ?? 0))[0]?.node ?? null}
         ctxSuggest={ctxSuggest} onContext={updateContext} onShow={setShown}
         changed={changes?.available ? nChanged : null} onChanges={showChanges} runInput={viewIn} />
       {stopMessage && <div className="ev result-msg">■ {stopMessage.label}: {stopMessage.message}</div>}

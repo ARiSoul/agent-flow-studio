@@ -136,7 +136,7 @@ export function FlowPanel({ doc, catalog, update, openProviders }: { doc: Doc; c
           <NumberInput value={s.max_parallel ?? 4} min={1} max={16} step={1}
             onChange={(v) => set((x) => { if (v === null) delete x.max_parallel; else x.max_parallel = v; })} />
         </Field>)}
-      {s.execution === "graph" && (
+      {s.execution === "graph" && (<div id="flow-retry">
         <Field label={t("insp.retry")} hint={`${t("insp.retryHint")}${(() => {
           const writers = Object.entries(s.agents).filter(([, a]) => (a.tools ?? []).some((x) => WRITE_TOOL_NAMES.includes(x))).map(([n]) => n);
           return writers.length ? ` ${t("insp.retryWriters", { names: writers.join(", ") })}` : "";
@@ -148,7 +148,7 @@ export function FlowPanel({ doc, catalog, update, openProviders }: { doc: Doc; c
             <NumberInput value={s.retry?.wait ?? 15} min={1} max={300} step={5} aria-label={t("insp.retryWait")}
               onChange={(v) => set((x) => { x.retry = { ...x.retry, wait: v ?? 15 }; })} />
           </div>
-        </Field>)}
+        </Field></div>)}
       <h3>{t("io.flowInputs")}</h3>
       {isTyped(s)
         ? <p className="muted small">{t("io.flowInputsHint")}</p>

@@ -39,7 +39,7 @@ def test_a_run_reaches_its_gate_shows_the_report_and_ends_when_approved(page, mo
     for agent in ("planner", "researcher_a", "researcher_b", "writer"):
         expect(steps.get_by_role("button", name=f"{agent} done")).to_be_visible()
     expect(steps.get_by_role("button", name="too_small stop skipped")).to_be_visible()
-    gate.get_by_role("textbox", name="Comment or answer (optional for Approve)").fill("looks good")
+    gate.get_by_role("textbox", name="Comment or answer").fill("looks good")
     gate.get_by_role("button", name="Approve").click()
     expect(gate).to_be_hidden()
     expect(page.get_by_role("button", name="approve approval")).to_contain_text("done")
@@ -61,7 +61,7 @@ def test_pause_a_running_step_and_go_on_in_its_session(page, model):
     expect(card).to_be_visible()
     expect(page.get_by_role("list", name="Steps").get_by_role("button", name="planner paused")
            ).to_be_visible()
-    card.get_by_role("button", name="Go on").click()
+    card.get_by_role("button", name="Continue").click()
     expect(page.get_by_role("group", name="Human approval: Check the report")).to_be_visible()
     planner = [c for c in model.calls if c["agent"] == "planner"]
     assert planner[0]["resume"] is None and planner[1]["resume"] == "s-planner-1"
@@ -176,4 +176,17 @@ def test_a_long_orchestrator_flow_is_converted_to_the_graph_engine(page):
     expect(page.get_by_role("contentinfo")).not_to_contain_text("the orchestrator is for short flows")
     page.get_by_role("button", name="Undo").click()
     expect(page.get_by_role("combobox", name="Execution")).to_have_value("orchestrator")
+    assert page.errors == []
+
+
+def test_a_temporary_api_error_retries_by_itself_or_now(page, model):
+    model.fail["planner"] = 1  # its first session ends with "API Error: 529 overloaded"
+    start_run(page)
+    card = page.get_by_role("group", name="planner failed, retrying")
+    expect(card).to_be_visible()
+    expect(card).to_contain_text("The model API is overloaded (529).")
+    expect(card).to_contain_text("you don't need to act")
+    card.get_by_role("button", name="Retry now").click()  # no need to wait for the countdown
+    expect(page.get_by_role("group", name="Human approval: Check the report")).to_be_visible()
+    assert [c["agent"] for c in model.calls].count("planner") == 2
     assert page.errors == []

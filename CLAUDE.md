@@ -185,7 +185,8 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   in `editor/tests/fixtures/run_status.json` (checked against `Status` and the UI texts); the
   shape of `waiting()` in `editor/tests/fixtures/waiting.json`. Editor: `RunPanel.tsx` (header,
   views, actions via `runActions.ts`), `RunSetup`, `RunAttention` (cards: writes, retry, decided,
-  gate, change of decision), `RunStepsView`, `RunLog` + `runLines.ts`, `RunHistory` (totals per
+  gate, change of decision; one `Card` shell whose left border is the tone: --human decide,
+  --bad failed, --accent paused), `RunStepsView`, `RunLog` + `runLines.ts`, `RunHistory` (totals per
   period, Compare), `RunResults`, `attention.ts` (one count of what waits for you), `runSteps.ts`,
   `runLink.ts` (`#flow=&run=&step=`), `useRunStream.ts`; pure parts tested with `npm test`.
 - Reviewing runs. `changes.py`: a `snapshot` of each git root at the start (`start` event `git`:

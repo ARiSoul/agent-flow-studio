@@ -85,6 +85,9 @@ class FakeModel:
         # the hook lets the call through, as the CLI would.
         self.writes: dict[str, tuple[str, str]] = {}
         self.decisions: list[dict[str, Any]] = []
+        # agent -> how many of its first sessions end in a temporary API error (overloaded):
+        # the engine retries it by itself after a wait (the flow's `retry`)
+        self.fail: dict[str, int] = {}
 
     async def __call__(self, prompt: str, options: Any):
         found = AGENT.search(prompt)
@@ -94,6 +97,12 @@ class FakeModel:
         sid = options.resume or f"s-{agent}-{len(self.calls)}"
         yield AssistantMessage(content=[TextBlock(f"{agent} is working")], model="m",
                                session_id=sid)
+        if self.fail.get(agent):
+            self.fail[agent] -= 1
+            yield ResultMessage(subtype="error_during_execution", duration_ms=5, duration_api_ms=5,
+                                is_error=True, num_turns=1, session_id=sid, total_cost_usd=0.0,
+                                result='API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}')
+            return
         if self.slow.get(agent) and not options.resume:
             await asyncio.sleep(self.slow[agent])
         if agent in self.writes:

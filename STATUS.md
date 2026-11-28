@@ -25,6 +25,13 @@ terms — no emails —, what was done) and commit + push.
   (subagent) over 4 rounds to 10/10: verdict + gains first, grouped sections, long lists
   collapse ("Show all"), focus and footer shadow checked with Playwright; the dark theme's
   `--on-accent` is now dark (#0f1218) for AA contrast on all primary buttons.
+- **Run panel cards redesigned** (`RunAttention.tsx`, same design critic, 4 rounds to 10/10): one
+  shell (`Card`) whose left border says what it is (--human your decision, --bad failed,
+  --accent paused), one header row + one "ask" line, one primary, destructive actions on the
+  right; the gate shows its report with a fade and "Open report", Stop is in its More menu; the
+  write card shows the content (6 lines); the retry card says the cause in plain words, that
+  nothing is needed, and links to the Retry setting; a visible "Needs you · N". New E2E test
+  for the retry card (`FakeModel.fail`).
 - **E2E for writes**: the agent's Write goes through the real guard hook; the write card shows
   the file and content, Approve writes it, Reject (after a confirmation) never writes and the
   agent gets the comment, and autonomy `auto` saved while a write waits lets it through.
@@ -599,3 +606,5 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-27 · home machine (account B) · Orchestrator limited to short flows: warning above 3
   agents, Convert to the graph engine (notes first, draft only), go-on `when` cleared; backlog 13
   dropped.
+- 2026-11-27 · home machine (account B) · Run panel cards redesigned with a design critic (10/10);
+  E2E test for the retry card.

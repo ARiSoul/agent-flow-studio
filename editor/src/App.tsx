@@ -585,6 +585,14 @@ function Editor() {
         {doc && current && <div className="right-body" hidden={right !== "run"}>
           <RunPanel key={current} flow={current} doc={doc} dirty={dirty} mock={catalog.mock} onTrace={setTrace} request={runReq}
             focus={sel?.kind === "node" ? sel.id : null} onFocusNode={(id) => setSel({ kind: "node", id })} onAttention={setRunNeeds}
+            onRetrySetting={() => {  // the retry card's link: Properties of the flow, at its Retry field
+              setSel(null); setRight("props");
+              setTimeout(() => {
+                const el = document.getElementById("flow-retry");
+                el?.scrollIntoView({ block: "center" });
+                el?.querySelector<HTMLElement>("input")?.focus();
+              }, 60);
+            }}
             onOpenRun={async (f, input) => {  // a run of another flow that waits: switch to that flow, then open it
               if (f !== current && !(await confirmDiscard())) return;
               setCurrent(f); setRunReq({ mode: "full", open: input, flow: f, nonce: Date.now() }); setRight("run");
