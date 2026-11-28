@@ -665,24 +665,47 @@ textarea.grow { resize: vertical; min-height: 3em; max-height: 70vh; overflow-y:
 .board-canvas { position: relative; min-width: 0; min-height: 0; }
 .board-side { border-left: 1px solid var(--border); background: var(--panel); overflow: auto; padding: 10px 14px; }
 .board-empty { position: absolute; top: 8px; left: 12px; z-index: 5; }
+/* a Board card: the editor's node card (280 px, same head, ports and type tags) plus a last-run footer */
 .board-card { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px;
-  padding: 8px 10px; width: 260px; box-shadow: var(--shadow); font-size: 12px; }
+  padding: 8px 10px; width: 280px; box-shadow: var(--shadow); font-size: 12px; color: var(--text); }
 .board-card.invalid { border-left-color: var(--stop); }
-.board-card .node-name { font-weight: 700; font-size: 13px; }
-.board-io { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.board-io li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.board-io .in { color: var(--accent); } .board-io .out { color: var(--ok); }
+.board-card.waits { border-left-color: var(--human); }
+.board-card .node-head { min-height: 22px; }
+.board-card .node-name { font-family: inherit; font-weight: 600; font-size: 13px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-icon { color: var(--accent); font-size: 14px; width: 16px; text-align: center; flex: none; }
+.board-id { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); min-height: 18px; }
+.board-id .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-id .port-tag { max-width: none; }
+.board-card .node-desc { margin-top: 2px; }
+.board-invalid { margin-top: 4px; font-size: 11px; color: var(--stop); display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.board-ports { margin-top: 6px; }
+.board-more { color: var(--muted); font-size: 11px; }
+.board-run { margin: 6px -10px 0; padding: 6px 10px 0; border-top: 1px dashed var(--border); font-size: 11px; }
+.board-run-info { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 16px; }
+.board-acts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.board-acts button { height: 24px; padding: 0 10px; }
+.board-needs { color: var(--human); background: var(--human-soft); border-radius: 4px; padding: 0 5px; font-weight: 600; }
+.board-acts .board-needs-btn { background: var(--human-soft); color: var(--human); border: 1px solid var(--human); font-weight: 600; }
+.board-acts .board-needs-btn:hover { background: var(--human); color: var(--bg); }
+.board-card .run-dot { flex: none; }
+.board-flow { position: absolute; inset: 0; }
+.board-flow .react-flow__node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.board-flow .react-flow__node.selected .board-card { border-color: var(--accent); }
 .badge.run-done { background: var(--accent-soft); color: var(--ok); }
 .badge.run-error, .badge.run-stopped { background: var(--bad-soft); color: var(--bad); }
-.react-flow__edge.board-hint path { stroke: var(--muted); stroke-dasharray: 5 4; }
-.react-flow__edge.board-handoff path { stroke: var(--ok); stroke-width: 1.6; }
-.react-flow__edge.board-sub path { stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 2 3; }
-.board-legend { position: absolute; right: 10px; top: 8px; z-index: 5; display: flex; gap: 10px; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; color: var(--muted); }
+.react-flow__edge.board-hint path.react-flow__edge-path { stroke: var(--muted); stroke-width: 2; stroke-dasharray: 10 6; }
+.react-flow__edge.board-handoff path.react-flow__edge-path { stroke: var(--ok); stroke-width: 2; }
+.react-flow__edge.board-sub path.react-flow__edge-path { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 0.1 6; stroke-linecap: round; }
+.board-flow .react-flow__edge-text { font: 600 11px/16px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--text); }
+.board-flow .react-flow__edge-textbg { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
+.board-legend { position: absolute; left: 8px; top: 8px; z-index: 5; display: flex; gap: 12px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 4px 8px; font-size: 11px; color: var(--muted); }
 .board-legend .lg::before { content: ""; display: inline-block; width: 18px; height: 0; margin-right: 4px; vertical-align: middle;
   border-top: 2px dashed var(--muted); }
 .board-legend .lg.handoff::before { border-top: 2px solid var(--ok); }
 .board-legend .lg.sub::before { border-top: 2px dotted var(--accent); }
+.board-defs { position: absolute; width: 0; height: 0; }
 .pad { padding: 10px 14px; }
 .ws-settings h3 { margin: 14px 0 4px; }
 .ws-table-wrap { overflow-x: auto; }
@@ -1407,7 +1430,7 @@ button.primary:disabled, button.primary[aria-disabled="true"] { background: var(
 /* the bar never wraps (it would move every button on an edit): the left zone gives way, the flow select first */
 .topbar { flex-wrap: nowrap; }
 .topbar > .grow { flex: 1 1 0; min-width: 0; }
-.topbar > .tb-zone:last-of-type { flex: none; }
+.topbar > .tb-work { flex: none; }
 .tb-zone:first-child { flex: 0 1 auto; min-width: 0; }
 .tb-zone:first-child .tb-flow { flex: 0 1 auto; min-width: 96px; }
 .tb-zone:first-child .tb-flow select { min-width: 96px; width: 100%; }
@@ -1417,7 +1440,7 @@ button.primary:disabled, button.primary[aria-disabled="true"] { background: var(
 .tb-connmenu { display: none; height: 32px; padding: 0 10px; }
 .tb-flowmenu, .prefs-btn, .tb-connmenu { min-width: max-content; }
 .topbar .ws-bar select:not(.env) { max-width: 190px; }
-@media (max-width: 1320px) {
+@media (max-width: 1440px) {
   .tb-conn, .tb-loc { display: none; }
   .tb-connmenu { display: inline-flex; align-items: center; }
   .tb-zone:first-child .tb-flow, .tb-zone:first-child .tb-flow select { min-width: 160px; }
@@ -1443,3 +1466,70 @@ button.primary:disabled, button.primary[aria-disabled="true"] { background: var(
 /* the active view and the location read clearly in every theme */
 .tb-seg button.on { background: var(--accent); color: var(--on-accent); }
 .tb-loc { color: var(--text); }
+/* no button in the bar breaks its label onto two lines (the flow select gives way instead) */
+.topbar button, .topbar .tb-seg button, .topbar select { white-space: nowrap; }
+.topbar .ws-bar { flex: none; }
+/* the Board's side panel: Overview · Settings · Assistant; Ctrl+Alt+B hides it */
+.board-mode.hide-insp .board { grid-template-columns: minmax(0, 1fr) 0; }
+.board-mode.hide-insp .board-side { display: none; }
+.board-overview > p { margin: 0 0 8px; }
+.board-envs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.board-envs .field-label { margin-right: 2px; }
+.env-badge { font-family: ui-monospace, Consolas, monospace; }
+.env-badge.env-prod { color: var(--stop); background: var(--stop-soft); }
+.env-badge.env-staging { color: var(--human); background: var(--human-soft); }
+.env-badge.now { font-weight: 700; }
+.ctx-cost { margin: 4px 0 8px; }
+.ws-place { margin-top: 14px; }
+.ws-place > summary { cursor: pointer; color: var(--muted); }
+.ws-place[open] > summary { margin-bottom: 4px; }
+.ws-place .path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.root-abs { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+/* Board round 2: the last run's tone, ⋯ on each card, readable links, attention first, prod runs */
+.board-run-info { display: flex; align-items: center; gap: 6px; }
+.board-run-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-run-info.none, .board-run-info.ok, .board-run-info.other { color: var(--muted); }
+.board-run-info.bad { background: var(--bad-soft); color: var(--bad); font-weight: 600; margin: 0 -10px; padding: 2px 10px; }
+.board-run-info.warn { background: var(--human-soft); color: var(--human); font-weight: 600; margin: 0 -10px; padding: 2px 10px; }
+.board-run-info.bad .muted, .board-run-info.warn .muted { font-weight: 400; }
+.board-run-info .link { flex: none; color: inherit; text-decoration: underline; padding: 0; height: auto; }
+.board-dots { width: 24px; height: 24px; padding: 0; color: var(--muted); flex: none; margin-right: -4px; }
+.board-dots:hover { color: var(--text); background: var(--panel-2); }
+.board-card .react-flow__handle { opacity: 0; width: 6px; height: 6px; min-width: 0; min-height: 0; border: 0; pointer-events: none; }
+.board-card .react-flow__handle.h-head { top: 19px; }
+.board-card .port { position: relative; }
+.board-row-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.react-flow__node-rowlabel { pointer-events: none; }
+.btn-run.prod { color: var(--stop); border-color: var(--stop); background: var(--stop-soft); }
+.btn-run.prod:hover:not(:disabled) { background: var(--stop); color: var(--bg); }
+.run-prod-note { color: var(--stop); font-weight: 600; }
+.ctx-note { display: block; flex-basis: 100%; font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 1px; }
+.ctx-item:has(.ctx-note) { flex-wrap: wrap; }
+.board-overview h3 { margin: 14px 0 6px; }
+.board-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.board-item { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-left-width: 3px;
+  border-radius: 6px; padding: 2px 6px 2px 0; background: var(--bg); }
+.board-item.bad { border-left-color: var(--bad); }
+.board-item.warn { border-left-color: var(--human); }
+.board-item.broken { border-left-color: var(--stop); }
+.board-item-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; justify-content: flex-start; background: none; border: 0;
+  padding: 4px 6px; text-align: left; height: auto; color: var(--text); }
+.board-item-main:hover { background: var(--panel-2); }
+.board-item-glyph { width: 16px; text-align: center; font-weight: 700; flex: none; }
+.board-item.bad .board-item-glyph { color: var(--bad); }
+.board-item.warn .board-item-glyph { color: var(--human); }
+.board-item.broken .board-item-glyph { color: var(--stop); }
+.board-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.board-item-state { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; flex: none; }
+.board-item > .small { flex: none; }
+.board-item-main .run-dot { margin-left: 0; }
+.board-legend .lg::before { width: 24px; border-top-width: 2px; }
+.board-legend .lg.hint::before { border-top: 2px dashed var(--muted); }
+.board-legend .lg.sub::before { border-top: 3px dotted var(--accent); }
+.board-item-text { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.3; }
+.board-item-text .board-item-state { margin-left: 0; }
+/* a Board card's ports: a long name gives way, its type tag never does (the editor's rule) */
+.board-card .ports .port-tag { flex: none; max-width: none; }
+.board-card .ports .port-name { flex: 0 1 auto; min-width: 3ch; }
+.board-card .ports-col.out { flex: 0 0 auto; max-width: 70%; }
+.board-card .ports-col.in { flex: 1 1 0; min-width: 0; }

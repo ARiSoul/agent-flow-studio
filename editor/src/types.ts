@@ -322,7 +322,9 @@ export interface BoardFlow {
   outputs: { agent: string; name: string; type: string }[];
   subflows: string[];
   handoffs: { flow: string; output: string; input: string }[];
-  last_run?: { input: string; status: string; started: number };
+  last_run?: { input: string; status: string; started: number; waiting?: boolean };
+  /** Why the flow does not load (the first reason; `code` + `params` to translate it). */
+  error?: { msg: string; code?: string; params?: Record<string, string> };
 }
 
 /** The workspace context (GET /api/context). */

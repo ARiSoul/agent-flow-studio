@@ -37,6 +37,10 @@ OUTPUTS: dict[str, dict[str, Any]] = {
     "writer": {"report": "# Report\n\n| part | answer |\n|---|---|\n| A | first |\n| B | second |"},
     "coder": {"summary": "Wrote the file."},
 }
+# the flows whose agents save exactly OUTPUTS; the agents of other flows save a plain value by type
+OWN_FLOWS = {"parallel", "dev", "big", "legacy"}
+# the value an agent saves for an output the test does not name, by its type
+PLAIN: dict[str, Any] = {"number": 1, "integer": 1, "boolean": True, "json": {"ok": True}}
 
 
 def legacy_flow() -> dict[str, Any]:
@@ -113,8 +117,15 @@ class FakeModel:
             self.decisions.append(out)
             if out.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
                 (Path(options.cwd) / path).write_text(content, encoding="utf-8")
-        for k, v in OUTPUTS.get(agent, {}).items():
-            io_tool.store_output(io_tool.spec_for(rid), rid, agent, k, v)
+        spec = io_tool.spec_for(rid)
+        given = OUTPUTS.get(agent, {})
+        declared = spec.agents[agent].outputs if spec and agent in spec.agents else {}
+        if spec is None or spec.name in OWN_FLOWS:  # the values above, strictly (a renamed output fails)
+            for k, v in given.items():
+                io_tool.store_output(spec, rid, agent, k, v)
+        else:  # an agent of another flow (the game workspace): a plain value for each output
+            for k, out in declared.items():
+                io_tool.store_output(spec, rid, agent, k, PLAIN.get(out.type, "done"))
         yield ResultMessage(subtype="success", duration_ms=5, duration_api_ms=5, is_error=False,
                             num_turns=1, session_id=sid, total_cost_usd=0.01)
 
@@ -214,3 +225,68 @@ def page(browser: Any, studio: str, request: pytest.FixtureRequest) -> Iterator[
         Path(shots).mkdir(parents=True, exist_ok=True)
         p.screenshot(path=str(Path(shots) / f"{request.node.name}.png"), full_page=True)
     ctx.close()
+
+
+# --- a realistic project workspace for the Board ----------------------------------------------------
+def game_flows() -> dict[str, dict[str, Any]]:
+    """Four flows of a game project: a plan feeds the implementation (a hand-off hint), the
+    implementation runs the review as a subflow, and a short orchestrator flow writes notes."""
+    ag = lambda d, **k: {"description": d, "prompt": d, **k}
+    return {
+        "plan-feature": {"version": 1, "name": "plan-feature", "title": "Plan a feature", "execution": "graph",
+                         "description": "Turns an idea into a plan and a task list.",
+                         "inputs": {"idea": {"type": "text", "label": "Idea"}}, "start": "planner",
+                         "agents": {"planner": ag("Writes the plan.", inputs={"idea": {"from": "input.idea"}},
+                                                  outputs={"plan": {"type": "markdown"}, "tasks": {"type": "json"}})},
+                         "edges": []},
+        "code-review": {"version": 1, "name": "code-review", "title": "Code review", "execution": "graph",
+                        "inputs": {"diff": {"type": "text", "label": "Changes"}}, "start": "reviewer",
+                        "agents": {"reviewer": ag("Reviews the changes.", inputs={"diff": {"from": "input.diff"}},
+                                                  outputs={"report": {"type": "markdown"}, "score": {"type": "integer"}})},
+                        "edges": []},
+        "implement": {"version": 1, "name": "implement", "title": "Implement the feature", "execution": "graph",
+                      "description": "Codes the plan, then reviews it.",
+                      "inputs": {"plan": {"type": "markdown", "label": "Plan",
+                                          "source": {"flow": "plan-feature", "output": "planner.plan"}}},
+                      "start": "coder",
+                      "agents": {"coder": ag("Writes the code.", inputs={"plan": {"from": "input.plan"}},
+                                             outputs={"summary": {"type": "markdown"}}),
+                                 "review": {"description": "Runs the code review.",
+                                            "inputs": {"summary": {"from": "coder.summary"}},
+                                            "subflow": {"flow": "code-review", "inputs": {"diff": "{coder.summary}"},
+                                                        "outputs": {"report": {"from": "reviewer.report"}}},
+                                            "outputs": {"report": {"type": "markdown"}}}},
+                      "edges": [{"from": "coder", "to": "review"}]},
+        "release-notes": {"version": 1, "name": "release-notes", "title": "Release notes",
+                          "task": "Write the notes for {input}.", "start": "writer",
+                          "agents": {"writer": ag("Writes the notes.")}, "edges": []},
+    }
+
+
+@pytest.fixture
+def game(page: Any, studio: str, tmp_path: Path) -> str:
+    """The open workspace is "game" (roots, vars, dev and prod, a preview, four linked flows);
+    the page shows it. Returns the workspace's name."""
+    h = {"X-Flow-Editor": "1"}
+    r = page.request.post(studio + "/api/workspaces", headers=h, data={"name": "game", "title": "Bug Garden", "where": "local"})
+    assert r.ok, r.text()
+    folder = tmp_path / "workspaces" / "game"
+    (tmp_path / "game-repo").mkdir()
+    spec = yaml.safe_load((folder / "workspace.yaml").read_text(encoding="utf-8"))
+    spec.update({
+        "description": "A web game: bugs live in a garden.",
+        "roots": {"app": {"path": str(tmp_path / "game-repo"), "description": "The game (three.js)"}},
+        "vars": {"engine": "three.js", "branch": "main"},
+        "environments": {"dev": {"kind": "dev"}, "prod": {"kind": "prod", "vars": {"url": "https://example.invalid"}}},
+        "default_environment": "dev",
+        "preview": {"url": "http://localhost:5173", "start": "npm run dev"},
+    })
+    (folder / "workspace.yaml").write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    for name, flow in game_flows().items():
+        (folder / "flows" / name).mkdir(parents=True, exist_ok=True)
+        (folder / "flows" / name / "flow.yaml").write_text(yaml.safe_dump(flow, sort_keys=False), encoding="utf-8")
+    page.context.add_cookies([{"name": "afs_ws", "value": "game", "url": studio},
+                              {"name": "afs_env", "value": "dev", "url": studio}])
+    page.goto(studio + "/")
+    page.locator("header.topbar").wait_for()
+    return "game"

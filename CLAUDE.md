@@ -268,6 +268,14 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   `fitView`): zoom 0.8–1, down to 0.65 to show a slightly wide flow whole, else the start at the
   top. "Start a run" buttons share `.btn-run`; accent primary is for committing (Save, Approve).
   E2E: `tests/e2e/test_layout_e2e.py` (1180 px bar, the 5 themes, a 40-agent flow's timing).
+  The Board (`Board.tsx`, reviewed the same way): one card per flow (the editor's node look, Open,
+  ▶ Run, ⋯; the last run in words with its tone; a broken flow says why, "Fix in editor"); links
+  attach to the rows (`in:`/`out:` handles, `sub` at the head), custom token-colored markers;
+  `layout()` = dagre on linked flows (rows top-aligned) + a "Not linked" grid row; `clearOf` keeps
+  hand-moved cards (`afs.board.<ws>`) uncovered; the first view is computed (no `fitView`). The
+  side panel: Overview (Needs attention: waiting → failed → broken; Other recent runs), Settings &
+  context, Assistant. `envKind.tsx` (`useProd`): every "start a run" button says "Run in prod" in
+  a prod environment (`.btn-run.prod`). E2E: `tests/e2e/test_board_e2e.py` (`game` fixture).
 
 ## Conventions
 - Python ≥ 3.10, typing, `ruff` (line 100). Flow prompts in `flows/<flow>/prompts/*.md`.

@@ -4,7 +4,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 
 export type MenuItem =
   | { kind?: "item"; label: string; onSelect: () => void; disabled?: boolean; danger?: boolean;
-      hint?: string; title?: string }
+      hint?: string; title?: string;
+      /** A short reason shown under the label (a disabled item says why; it has no tooltip on hover). */
+      note?: string }
   | { kind: "sep" }
   | { kind: "label"; label: string }
   /** A row of small buttons (e.g. icons); each one is a menu item for the keyboard. */
@@ -82,6 +84,7 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState; onClose: () =>
             aria-disabled={it.disabled} className={`ctx-item${it.danger ? " danger" : ""}`}
             onClick={() => !it.disabled && run(it.onSelect)}>
             <span>{it.label}</span>{it.hint && <kbd>{it.hint}</kbd>}
+            {it.note && <small className="ctx-note">{it.note}</small>}
           </button>);
       })}
     </div>

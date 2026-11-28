@@ -232,6 +232,8 @@ def register(app: FastAPI, ctx: Ctx) -> None:
         from), outputs, subflows and last run, plus the hand-offs recorded by its runs."""
         out = []
         seen: set[str] = set()
+        waits = {(w["flow"], w["input"]) for w in runner.waiting()
+                 if not w.get("dismissed") and not w.get("stale")}  # as the Run panel counts
         for _, d in flow_locations(fb()):
             for f in sorted(d.glob("*/flow.yaml")):
                 name = f.parent.name
@@ -240,11 +242,15 @@ def register(app: FastAPI, ctx: Ctx) -> None:
                 seen.add(name)
                 item: dict[str, Any] = {"name": name, "title": name, "valid": False, "inputs": {},
                                         "outputs": [], "subflows": [], "handoffs": []}
+                raw: Any = {}
                 try:
                     raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
                     item["title"] = str(raw.get("title") or name)
                     item["description"] = str(raw.get("description") or "")
-                    spec = FlowSpec.model_validate(workspaces.substitute(raw)[0])
+                    data, unknown = workspaces.substitute(raw)
+                    if unknown:
+                        raise workspaces.unknown_error(unknown)
+                    spec = FlowSpec.model_validate(data)
                     item |= {"valid": True, "execution": spec.execution}
                     item["inputs"] = {k: {"type": t.type, "label": t.label or k,
                                           **({"source": t.source.model_dump()} if t.source
@@ -254,11 +260,16 @@ def register(app: FastAPI, ctx: Ctx) -> None:
                                        for on, o in a.outputs.items()]
                     item["subflows"] = sorted({a.subflow.flow for a in spec.agents.values()
                                                if a.subflow})
-                except (yaml.YAMLError, ValidationError, AttributeError, ValueError):
-                    pass
+                except (ValidationError, MsgError) as e:
+                    # the first reason, with its code (the card shows it in the UI language)
+                    first = (_structured(e, raw if isinstance(raw, dict) else {}) or [{}])[0]
+                    item["error"] = {k: first[k] for k in ("msg", "code", "params") if k in first}
+                except (yaml.YAMLError, AttributeError, ValueError) as e:
+                    item["error"] = {"msg": str(e).splitlines()[0][:200] if str(e) else type(e).__name__}
                 runs = runner.past_runs(name, limit=10)
                 if runs:
                     item["last_run"] = {k: runs[0][k] for k in ("input", "status", "started")}
+                    item["last_run"]["waiting"] = (name, runs[0]["input"]) in waits
                 hand: set[tuple[str, str, str]] = set()
                 for r in runs:
                     try:

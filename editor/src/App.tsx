@@ -1,3 +1,4 @@
+import { EnvKindContext } from "./envKind";
 import { localizeServer } from "./i18n/server";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { clampSize, DEFAULT_SIZES, loadSizes, saveSizes, Splitter, type PanelSizes } from "./Splitter";
@@ -497,7 +498,7 @@ function Editor() {
         </>}
       </div>
       <span className="grow" />
-      <div className="tb-zone">
+      <div className="tb-zone tb-work">
         <button onClick={() => createFlow()}>{t("app.new")}</button>
         {!board && <>
           <span className="sep" />
@@ -511,11 +512,11 @@ function Editor() {
             ? <button className="primary tb-save" onClick={save} aria-keyshortcuts="Control+S" title={t("app.saveTitle")}>
                 {t("app.save")}<kbd aria-hidden="true">Ctrl+S</kbd></button>
             : <button className="tb-saved" aria-disabled="true" title={t("app.allSaved")} onClick={() => undefined}>✓ {t("app.saved")}</button>}
-          <button className={`tb-run btn-run ${runShown}`} onClick={runFlow} aria-keyshortcuts="Control+Enter"
-            aria-label={runShown === "running" ? t("app.runningLabel") : runShown === "gate" ? t("app.needsYouLabel") : t("app.runFlow")}
+          <button className={`tb-run btn-run ${runShown}${envKind === "prod" ? " prod" : ""}`} onClick={runFlow} aria-keyshortcuts="Control+Enter"
+            aria-label={runShown === "running" ? t("app.runningLabel") : runShown === "gate" ? t("app.needsYouLabel") : envKind === "prod" ? t("app.runFlowProd") : t("app.runFlow")}
             title={runShown === "idle" ? t("app.runFlowTitle") : t("app.openRun")}>
             <span aria-hidden="true">{runShown === "running" ? "●" : runShown === "gate" ? "?" : "▶"}</span>
-            {runShown === "running" ? t("app.running") : runShown === "gate" ? t("app.needsYou") : t("app.runFlow")}</button>
+            {runShown === "running" ? t("app.running") : runShown === "gate" ? t("app.needsYou") : envKind === "prod" ? t("app.runFlowProd") : t("app.runFlow")}</button>
         </>}
         <button className="tb-connmenu" aria-haspopup="menu" aria-label={t("app.connections")} title={t("app.connectionsTitle")}
           onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenu({ x: r.right - 180, y: r.bottom + 2, title: t("app.connections"), items: [
@@ -534,22 +535,34 @@ function Editor() {
     </header>
   );
   if (view === "board" && catalog.workspace) return (
-    <div className="app board-mode">
+    <EnvKindContext.Provider value={envKind}>
+    <div className={`app board-mode${hidden.insp ? " hide-insp" : ""}`}>
       {header}
       <Board ws={catalog.workspace} flash={flash} onSaved={refreshEnv}
         onConnectors={() => setShowConns(true)}
         onCatalog={() => { api.catalog().then(setCatalog).catch(() => undefined); }}
-        side={sizes.insp ?? DEFAULT_SIZES.insp} onSide={resize("insp")}
+        side={sizes.insp ?? (window.innerWidth < 1320 ? 320 : DEFAULT_SIZES.insp)} onSide={resize("insp")}
         flowsKey={flows.map((f) => f.name).join(",")} onFlowsChanged={refreshFlows} onNewFlow={() => createFlow()}
+        onDuplicate={(name, title) => createFlow(name, title)}
+        onOpenRun={async (name, input) => {  // a run that waits for the person: open it in the Run panel
+          if (name !== current && !(await confirmDiscard())) return;
+          setCurrent(name); setView("flow"); setRunReq({ mode: "full", open: input, flow: name, nonce: Date.now() }); setRight("run");
+        }}
         onOpen={async (name) => { if (name === current || (await confirmDiscard())) { setCurrent(name); setView("flow"); } }}
         onRun={async (name) => {
           if (name !== current && !(await confirmDiscard())) return;
           setCurrent(name); setView("flow"); setRight("run");
+        }}
+        onFix={async (name) => {  // a flow that does not load: open it with its problems in view
+          if (name !== current && !(await confirmDiscard())) return;
+          setCurrent(name); setView("flow"); setTab("problems"); togglePanel("bottom", true);
         }} />
       {windows}
     </div>
+    </EnvKindContext.Provider>
   );
   return (
+    <EnvKindContext.Provider value={envKind}>
     <div className={`app${hidden.pal ? " hide-pal" : ""}${hidden.insp ? " hide-insp" : ""}${hidden.bottom ? " hide-bottom" : ""}`} style={{
       ...(sizes.pal ? { "--pal-w": `${sizes.pal}px` } : {}),
       ...(sizes.insp ? { "--insp-w": `${sizes.insp}px` } : {}),
@@ -686,6 +699,7 @@ function Editor() {
       {windows}
 
     </div>
+    </EnvKindContext.Provider>
   );
 }
 

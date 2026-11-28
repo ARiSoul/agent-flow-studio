@@ -57,7 +57,7 @@ export const typeTag = (k: IOKind, multiple?: boolean) =>
   multiple ? PLURAL[k] ?? `${TYPE_TAG[k] ?? k}[]` : TYPE_TAG[k] ?? k;
 
 /** The run state as a shape, not only a color (✓ done, ✕ error, ? waiting, – skipped, ■ stopped). */
-const RUN_GLYPH: Record<string, string> = { done: "✓", error: "✕", gate: "?", skipped: "–", stopped: "■" };
+export const RUN_GLYPH: Record<string, string> = { done: "✓", error: "✕", gate: "?", skipped: "–", stopped: "■" };
 
 /** Run state of a node: a dot (filled and pulsing while it runs, hollow when it is stopped), a
  * "running" badge and a moving bar. */

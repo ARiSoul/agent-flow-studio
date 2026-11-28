@@ -14,6 +14,17 @@ const WS_NAME = /^[a-z][a-z0-9_-]{0,39}$/;
 const KEY = /^[a-z][a-z0-9_]{0,39}$/;
 const KINDS = ["dev", "staging", "prod"] as const;
 
+/** A long folder as its start and its last two parts ("C:\…\repos\game"); the full path goes in
+ * a title. */
+export function shortPath(p: string | null | undefined): string {
+  if (!p) return "";
+  const sep = p.includes("\\") ? "\\" : "/";
+  const parts = p.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 3) return p;
+  const head = p.startsWith("/") ? `/${parts[0]}` : parts[0];
+  return [head, "…", ...parts.slice(-2)].join(sep);
+}
+
 /** An error in the UI language (workspace and copy errors come with a code). */
 export function wsErrorText(e: unknown, lang: string): string {
   if (e instanceof ServerError && e.code) return localizeServer({ code: e.code, params: e.params }, e.message, lang);
@@ -309,11 +320,6 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
   const pickedEnvs = envs.filter((e) => picked.has(`env:${e}`));
   return (
     <div className="ws-settings">
-      <div className="ws-place">
-        <span className="field-label">{t(place.where === "repo" ? "ws.placeRepo" : "ws.placeLocal")}</span>
-        <code className="path" title={place.folder ?? ""}>{place.where === "repo" ? home : place.folder}</code>
-        <span className="muted small">{t("ws.placeFiles", { folder: place.folder ?? "" })}</span>
-      </div>
       <label className="field"><span className="field-label">{t("ws.title")}</span>
         <input value={spec.title ?? ""} onChange={(e) => set((s) => { s.title = e.target.value; })} /></label>
       <label className="field"><span className="field-label">{t("insp.description")}</span>
@@ -328,7 +334,7 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
               onBlur={(e) => commitName("root", k, e.target)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} /></td>
             <td><input className="mono" value={r.path} aria-label={t("ws.folder")} title={roots[k]}
               onChange={(e) => set((s) => { s.roots[k].path = e.target.value; })} />
-              {roots[k] && <span className="muted small root-abs" title={roots[k]}>→ {roots[k]}</span>}</td>
+              {roots[k] && <span className="muted small root-abs" title={roots[k]}>→ {shortPath(roots[k])}</span>}</td>
             <td className="nowrap">
               <button className="icon" title={t("fb.browse")} aria-expanded={browse === k}
                 onClick={() => setBrowse(browse === k ? null : k)}>📁</button>
@@ -392,6 +398,12 @@ export function WorkspaceSettings({ name, flash, onSaved }: { name: string; flas
       </table></div>
       <button className="small" onClick={() => set((s) => { s.vars[uniq(allVars, "var")] = "value"; })}>{t("ws.addVar")}</button>
       <p className="muted small">{t("ws.noSecrets")}</p>
+      <details className="ws-place">
+        <summary className="small">{t("ws.keptIn")}</summary>
+        <span className="field-label">{t(place.where === "repo" ? "ws.placeRepo" : "ws.placeLocal")}</span>
+        <code className="path" title={(place.where === "repo" ? home : place.folder) ?? ""}>{shortPath(place.where === "repo" ? home : place.folder)}</code>
+        <span className="muted small" title={place.folder ?? ""}>{t("ws.placeFiles", { folder: shortPath(place.folder) })}</span>
+      </details>
       {err && <p className="field-err">{err}</p>}
       <div className="row">
         <button className="primary" disabled={!dirty} onClick={save}>{dirty ? t("app.save") : t("app.saved")}</button>

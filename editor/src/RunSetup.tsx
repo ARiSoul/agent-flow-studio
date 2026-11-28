@@ -1,6 +1,7 @@
 // The New run view: what to run (a mode, and a step or a saved run when the mode needs one), the
 // run id and the inputs; Run stays at the bottom. "Run from step" shows, from the server, the
 // state of each step in the saved run and what the new run keeps and runs again.
+import { useProd } from "./envKind";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { useDialog } from "./Dialog";
@@ -102,6 +103,7 @@ export function SetupView({ flow, doc, dirty, mock, running, past, openRun, pref
 }) {
   const i18n = useI18n();
   const { t, lang } = i18n;
+  const prod = useProd();
   const dialog = useDialog();
   const spec = doc.spec;
   const typed = isTyped(spec);
@@ -430,9 +432,10 @@ export function SetupView({ flow, doc, dirty, mock, running, past, openRun, pref
         {dirty && <span className="field-err small">{t("run.saveFirst")}</span>}
         {running && <span className="muted small">{t("rp.oneAtATime")}</span>}
         {err && <span className="field-err small" role="alert">{err}</span>}
-        <button className="btn-run rp-go" disabled={!canStart} onClick={start}
+        {prod && <span className="run-prod-note small">{t("run.prodNote")}</span>}
+        <button className={`btn-run rp-go${prod ? " prod" : ""}`} disabled={!canStart} onClick={start}
           title={dirty ? t("run.saveFirstTitle") : running ? t("rp.queueTitle") : `${t("rp.go")} (Ctrl+Enter)`}>
-          {running ? `⧗ ${t("rp.queueGo")}` : `▶ ${t(mode === "from" ? "rp.runFromStep" : mode === "agent" ? "rp.goAgent" : "rp.go")}`}</button>
+          {running ? `⧗ ${t("rp.queueGo")}` : `▶ ${t(mode === "from" ? "rp.runFromStep" : mode === "agent" ? "rp.goAgent" : prod ? "board.runProd" : "rp.go")}`}</button>
       </div>
       {(queue.length > 0 || queueLog.length > 0) && (
         <section className="rp-queue small" aria-label={t("rp.queued")}>

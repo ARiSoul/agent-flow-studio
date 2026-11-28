@@ -25,7 +25,13 @@ export function useFlowFiles(c: Pick<EditorCtx, "catalog" | "current" | "dialog"
     window.addEventListener("hashchange", go);
     return () => window.removeEventListener("hashchange", go);
   });
-  const createFlow = async (copyFrom?: string) => {
+  /** A flow name not used yet: base, base-2, base-3… */
+  const freeName = (base: string) => {
+    let n = base, i = 2;
+    while (flows.some((f) => f.name === n)) n = `${base}-${i++}`;
+    return n;
+  };
+  const createFlow = async (copyFrom?: string, copyTitle?: string) => {
     if (!(await confirmDiscard())) return;
     const r = await dialog.form({
       title: copyFrom ? t("app.duplicateTitle") : t("app.newFlowTitle"),
@@ -36,10 +42,11 @@ export function useFlowFiles(c: Pick<EditorCtx, "catalog" | "current" | "dialog"
           options: [{ value: "", label: t("app.blankFlow") },
             ...templates.map((x) => ({ value: x.id, label: t("app.templateOption", { title: x.title }) }))] }]),
         { key: "name", label: t("app.flowName"), hint: t("app.flowNameHint"), placeholder: "my-flow",
+          ...(copyFrom ? { value: freeName(`${copyFrom}-copy`) } : {}),
           validate: (v) => !FLOW_NAME.test(v.trim()) ? t("app.flowNameHint")
             : flows.some((f) => f.name === v.trim()) ? t("app.flowExists") : null },
         { key: "title", label: t("app.flowTitle"),
-          value: copyFrom ? t("app.copySuffix", { title: doc?.spec.title ?? copyFrom }) : "" },
+          value: copyFrom ? t("app.copySuffix", { title: copyTitle ?? (copyFrom === current ? doc?.spec.title : undefined) ?? copyFrom }) : "" },
         ...locationField(catalog?.locations, t),
       ],
     });

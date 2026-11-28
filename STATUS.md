@@ -25,6 +25,19 @@ terms — no emails —, what was done) and commit + push.
   (subagent) over 4 rounds to 10/10: verdict + gains first, grouped sections, long lists
   collapse ("Show all"), focus and footer shadow checked with Playwright; the dark theme's
   `--on-accent` is now dark (#0f1218) for AA contrast on all primary buttons.
+- **Workspace Board redesigned** with the same three reviewers (3 rounds; DevOps 10, end user and
+  designer to 10/10): cards like the editor's nodes (type tags, run state as a shape) with Open,
+  ▶ Run and ⋯ on each; the last run in words with its tone ("✕ Failed 3 minutes ago · View run",
+  "? Waiting for you · Answer"); a flow that does not load says why and offers "Fix in editor"
+  (`/api/board` gives `error` with its code and `last_run.waiting`); links attach to the
+  input/output rows, readable labels, subflow arrows go caller → called; chains laid out with
+  dagre and real card sizes, the other flows in a "Not linked" row, hand-moved cards never covered;
+  a side panel that leads with "Needs attention" and "Other recent runs" (Settings & context and
+  Assistant in the other views); every Run button says "Run in prod" in a prod environment
+  (`envKind.tsx`); Enter / Shift+F10 on a card. Bugs fixed on the way: "Duplicate here" called
+  Copy, the bar's right zone could shrink (a `:last-of-type` rule never matched), unknown
+  `{vars.x}` showed a flow as valid. New E2E: `tests/e2e/test_board_e2e.py` (17 tests, also the
+  widest top bar in en/pt/es).
 - **Whole-editor redesign** with three reviewers (DevOps technical brief → designer spec → end user
   feedback, 6 rounds until all three gave 10/10): a one-row top bar with Undo/Redo next to Save and
   a clear dirty state, "Run flow" in the bar (follows the run: Running / Needs you), one status
@@ -621,3 +634,5 @@ start the editor or the CLI (the studio does not read `.env`).
 - 2026-11-28 · home machine (account B) · Whole-editor redesign reviewed by DevOps, designer and end
   user to 10/10: top bar, Run flow, status words, View popover, sidebar, node cards, first view;
   E2E for layout, themes and a big flow.
+- 2026-11-28 · home machine (account B) · Workspace Board redesigned with DevOps, designer and end
+  user to 10/10: cards, last run, attention list, links, layout, prod runs; 17 Board E2E tests.

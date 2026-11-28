@@ -8,7 +8,7 @@ import { useI18n } from "./i18n";
 import { Markdown } from "./Markdown";
 import { LearnDialog } from "./LearnDialog";
 import type { WorkspaceContext } from "./types";
-import { wsErrorText } from "./Workspaces";
+import { shortPath, wsErrorText } from "./Workspaces";
 
 /** Waits until a run is no longer running (polls the runs list). */
 export async function waitRun(id: string): Promise<string> {
@@ -179,7 +179,7 @@ export function ContextPanel({ flash }: { flash: (text: string, bad?: boolean) =
       <table className="ws-table ctx-roots"><tbody>
         {roots.map(([name, r]) => (
           <tr key={name}>
-            <td className="mono" title={r.path}>{name}<span className="muted small root-abs">{r.path}</span></td>
+            <td className="mono" title={r.path}>{name}<span className="muted small root-abs">{shortPath(r.path)}</span></td>
             <td className={act?.roots[name] === "running" ? "ctx-running" : r.explored && !r.commits_since ? "ok" : "muted"}>
               {act?.roots[name] === "running" ? t(act.mode === "learn" ? "ctx.state.learning" : "ctx.state.running")
                 : act?.roots[name] === "waiting" ? t("ctx.state.waiting") : stateOf(r)}
@@ -194,11 +194,12 @@ export function ContextPanel({ flash }: { flash: (text: string, bad?: boolean) =
           </tr>))}
       </tbody></table>
       <div className="row">
-        <button className="primary small" disabled={!!busy || !roots.length} onClick={() => run("update", null)}
-          title={t("ctx.costHint")}>{t("ctx.updateAll")}</button>
+        <button className="btn-run small" disabled={!!busy || !roots.length} onClick={() => run("update", null)}
+          title={t("ctx.costHint")}>▶ {t("ctx.updateAll")}</button>
         <button className="small" disabled={!!busy || !roots.length} onClick={() => run("explore", null)}
           title={t("ctx.costHint")}>{t("ctx.exploreAll")}</button>
       </div>
+      <p className="muted small ctx-cost">{t("ctx.costHint")}</p>
       {Object.values(drafts).map((d) => (
         <div key={d.root} className="ctx-draft">
           <b>{t("ctx.draftTitle", { root: d.root })}</b>
