@@ -343,7 +343,7 @@ export function Connections({ onClose }: { onClose: () => void }) {
         <div className="panel-head">
           <h2>{t("conn.title")}</h2>
           <span className="muted small">{meta.file} · {t("conn.secretsWhere")}</span>
-          <button className="small" onClick={onClose}>{t("conn.close")}</button>
+          <button className="icon-btn modal-close" onClick={onClose} aria-label={t("conn.close")} title={t("conn.close")}>×</button>
         </div>
         <div className="conns-body">
           <div className="conns-list">

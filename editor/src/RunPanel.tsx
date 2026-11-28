@@ -60,7 +60,7 @@ const typing = () => {
   return !!el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable);
 };
 
-export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFocusNode, onAttention, onOpenRun, onRetrySetting }: {
+export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFocusNode, onAttention, onOpenRun, onRetrySetting, onRunState }: {
   flow: string; doc: Doc; dirty: boolean; mock: boolean; onTrace: (t: Trace) => void;
   request?: RunRequest | null;
   /** The node selected on the canvas: its step opens in the Current view. */
@@ -69,6 +69,8 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
   onFocusNode?: (node: string) => void;
   /** Opens the flow's Properties at its Retry setting (the retry card's link). */
   onRetrySetting?: () => void;
+  /** The run shown here: idle, running, or waiting for the person at a gate. */
+  onRunState?: (s: "idle" | "running" | "gate") => void;
   /** How many things wait for the person in this workspace (gates, write approvals, paused runs). */
   onAttention?: (n: number) => void;
   /** Open a run of another flow (the editor switches to that flow first). */
@@ -91,6 +93,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
   const running = run?.status === "running";
   const [now, setNow] = useState(Date.now());
   const gateWaiting = run?.status === "gate";
+  useEffect(() => { onRunState?.(running ? "running" : gateWaiting ? "gate" : "idle"); }, [running, gateWaiting]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!running && !gateWaiting && run?.status !== "decided") return;
     const h = setInterval(() => setNow(Date.now()), 1000);
@@ -377,7 +380,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
     }
     seen.current = needAll;
   }, [needAll]);  // eslint-disable-line react-hooks/exhaustive-deps -- when the count changes
-  useEffect(() => () => { onAttention?.(0); document.title = document.title.replace(/^\(\d+\) ⏸ /, ""); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { onRunState?.("idle"); onAttention?.(0); document.title = document.title.replace(/^\(\d+\) ⏸ /, ""); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
   const toggleNotify = async () => {
     if (!notify && "Notification" in window && Notification.permission === "default") await Notification.requestPermission();
     setNotify(!notify);
@@ -508,13 +511,13 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
   ) : canResume && plan && plan.redo.length > 0 ? (
     <button className="primary" onClick={resume} title={t("rp.resumeTitle", { run: run.input })}>{t("run.resume")}</button>
   ) : (
-    <button className="primary" onClick={() => rerun(run.input, run.mode, run.target)} title={rerunHint}>{t("rp.rerun")}</button>
+    <button className="btn-run" onClick={() => rerun(run.input, run.mode, run.target)} title={rerunHint}>▶ {t("rp.rerun")}</button>
   );
   const secondary = !run || running || gate || paused || run.status === "decided" ? null : (<>
     {canResume && plan && plan.redo.length > 0 && <>
       <button className="small rp-plan-btn" aria-expanded={planOpen} aria-controls="rp-plan" onClick={() => setPlanOpen(!planOpen)} title={t("rp.planTitle")}>
         <span aria-hidden="true">{planOpen ? "▾" : "▸"}</span> {t("rp.planBtn", { keep: String(plan.reuse.length), redo: String(plan.redo.length) })}</button>
-      <button className="small" onClick={() => rerun(run.input, run.mode, run.target)} title={rerunHint}>{t("rp.rerun")}</button>
+      <button className="small btn-run" onClick={() => rerun(run.input, run.mode, run.target)} title={rerunHint}>▶ {t("rp.rerun")}</button>
     </>}
   </>);
   const runMenu = run && (

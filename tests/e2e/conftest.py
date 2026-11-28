@@ -205,7 +205,7 @@ def page(browser: Any, studio: str, request: pytest.FixtureRequest) -> Iterator[
     # every test starts on a loaded flow (a click before that would act on nothing, or on
     # another flow that the editor opens first)
     p.locator(".react-flow__node[data-id='planner']").wait_for()
-    p.get_by_text("✓ valid").wait_for()
+    p.locator(".tb-status:is([data-status='ok'], [data-status='warn'])").wait_for()  # validated, no errors
     p.errors = errors  # checked by the tests: no script error on the page
     yield p
     shots = os.getenv("AFS_E2E_SHOTS")

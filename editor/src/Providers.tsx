@@ -141,7 +141,7 @@ export function Providers({ onClose, focus }: { onClose: () => void; focus?: str
         <div className="panel-head">
           <h2>{t("prov.title")}</h2>
           <span className="muted small">{meta.file} · {t("prov.secretsWhere")}</span>
-          <button className="small" onClick={onClose}>{t("conn.close")}</button>
+          <button className="icon-btn modal-close" onClick={onClose} aria-label={t("conn.close")} title={t("conn.close")}>×</button>
         </div>
         {meta.error && <p className="field-err" style={{ padding: "0 16px" }}>{meta.error}</p>}
         <div className="conns-body">

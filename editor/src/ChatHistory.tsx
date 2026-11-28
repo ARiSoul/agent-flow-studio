@@ -52,7 +52,7 @@ export function ChatHistory({ flow, current, onOpen, onRenamed, onDeleted, onClo
         <div className="panel-head">
           <h2 id="chat-hist-title">{t("chat.historyTitle")}</h2>
           <span className="grow" />
-          <button className="small" onClick={onClose}>{t("dialog.close")}</button>
+          <button className="icon-btn modal-close" onClick={onClose} aria-label={t("dialog.close")} title={t("dialog.close")}>×</button>
         </div>
         <p className="muted small">{t("chat.historyHint", { flow })}</p>
         {error && <p className="field-err">{error}</p>}

@@ -121,16 +121,17 @@ export function FlowPanel({ doc, catalog, update, openProviders }: { doc: Doc; c
         </select>
       </Field>
       {s.execution !== "graph" && <ConvertToGraph doc={doc} update={update} />}
-      <div className="exec-modes small" role="note">
-        <div className={s.execution === "graph" ? "on" : ""}>
-          <b>{t("insp.execGraph")}</b> — {t("insp.executionGraphHint")}
-          <div className="muted">{t("insp.execGraphOnly")}</div>
-        </div>
-        <div className={s.execution !== "graph" ? "on" : ""}>
-          <b>{t("insp.execOrchestrator")}</b> — {t("insp.executionOrchHint")}
-          <div className="muted">{t("insp.execOrchWhen")}</div>
-        </div>
-      </div>
+      {(() => {
+        const graph = s.execution === "graph";
+        const mode = (g: boolean) => <div className={g === graph ? "on" : ""}>
+          <b>{t(g ? "insp.execGraph" : "insp.execOrchestrator")}</b> — {t(g ? "insp.executionGraphHint" : "insp.executionOrchHint")}
+          <div className="muted">{t(g ? "insp.execGraphOnly" : "insp.execOrchWhen")}</div>
+        </div>;
+        return <div className="exec-modes small" role="note">
+          {mode(graph)}
+          <details className="exec-compare"><summary>{t("insp.compareModes")}</summary>{mode(!graph)}</details>
+        </div>;
+      })()}
       {s.execution === "graph" && (
         <Field label={t("insp.maxParallel")} hint={t("insp.maxParallelHint")}>
           <NumberInput value={s.max_parallel ?? 4} min={1} max={16} step={1}
@@ -141,12 +142,13 @@ export function FlowPanel({ doc, catalog, update, openProviders }: { doc: Doc; c
           const writers = Object.entries(s.agents).filter(([, a]) => (a.tools ?? []).some((x) => WRITE_TOOL_NAMES.includes(x))).map(([n]) => n);
           return writers.length ? ` ${t("insp.retryWriters", { names: writers.join(", ") })}` : "";
         })()}`}>
-          <div className="row">
-            <NumberInput value={s.retry?.transient ?? 2} min={0} max={5} step={1} aria-label={t("insp.retryTimes")}
-              onChange={(v) => set((x) => { x.retry = { ...x.retry, transient: v ?? 2 }; })} />
-            <span className="small muted">{t("insp.retryWait")}</span>
-            <NumberInput value={s.retry?.wait ?? 15} min={1} max={300} step={5} aria-label={t("insp.retryWait")}
-              onChange={(v) => set((x) => { x.retry = { ...x.retry, wait: v ?? 15 }; })} />
+          <div className="grid2 retry-fields">
+            <span className="mini-field"><span className="small muted">{t("insp.retryTimes")}</span>
+              <NumberInput value={s.retry?.transient ?? 2} min={0} max={5} step={1} aria-label={t("insp.retryTimes")}
+                onChange={(v) => set((x) => { x.retry = { ...x.retry, transient: v ?? 2 }; })} /></span>
+            <span className="mini-field"><span className="small muted">{t("insp.retryWait")}</span>
+              <NumberInput value={s.retry?.wait ?? 15} min={1} max={300} step={5} aria-label={t("insp.retryWait")}
+                onChange={(v) => set((x) => { x.retry = { ...x.retry, wait: v ?? 15 }; })} /></span>
           </div>
         </Field></div>)}
       <h3>{t("io.flowInputs")}</h3>

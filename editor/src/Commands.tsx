@@ -77,7 +77,7 @@ export function CommandsManager({ commands, onChange, onUse, onClose }: {
           <h2 id="cmd-title">{t("cmd.manageTitle")}</h2>
           <span className="grow" />
           <button className="small primary" onClick={() => act(() => form({}))}>{t("cmd.new")}</button>
-          <button className="small" onClick={onClose}>{t("dialog.close")}</button>
+          <button className="icon-btn modal-close" onClick={onClose} aria-label={t("dialog.close")} title={t("dialog.close")}>×</button>
         </div>
         <p className="muted small">{t("cmd.manageHint")}</p>
         {error && <p className="field-err">{error}</p>}

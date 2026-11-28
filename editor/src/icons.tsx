@@ -35,9 +35,11 @@ const P: Record<string, string[]> = {
   panelLeft: ["M3 4h18v16H3z", "M9 4v16"],
   panelRight: ["M3 4h18v16H3z", "M15 4v16"],
   panelBottom: ["M3 4h18v16H3z", "M3 14h18"],
+  undo: ["M9 14l-5-5 5-5", "M4 9h10a6 6 0 0 1 0 12h-3"],
+  redo: ["M15 14l5-5-5-5", "M20 9H10a6 6 0 0 0 0 12h3"],
 };
 
-const NOT_AGENT = new Set(["hand", "stop", "panelLeft", "panelRight", "panelBottom"]);
+const NOT_AGENT = new Set(["hand", "stop", "panelLeft", "panelRight", "panelBottom", "undo", "redo"]);
 export const ICON_IDS = Object.keys(P).filter((k) => !NOT_AGENT.has(k));
 
 export function Icon({ id, size = 18, className }: { id: string; size?: number; className?: string }) {

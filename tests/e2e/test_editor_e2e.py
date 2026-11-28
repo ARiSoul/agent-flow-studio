@@ -21,7 +21,7 @@ def start_run(page, topic: str = "agents") -> None:
 
 def test_the_flow_opens_valid_with_its_nodes(page):
     expect(page.get_by_role("combobox", name="Flow")).to_have_value("parallel")
-    expect(page.get_by_text("✓ valid")).to_be_visible()
+    expect(page.locator(".tb-status")).to_have_attribute("data-status", re.compile("^(ok|warn)$"))
     canvas = page.get_by_role("application")
     for node in ("planner", "researcher_a", "researcher_b", "writer", "Check the report"):
         expect(canvas.get_by_text(node, exact=False).first).to_be_visible()
@@ -71,7 +71,7 @@ def test_pause_a_running_step_and_go_on_in_its_session(page, model):
 def test_stop_ends_a_run_and_new_run_is_ready_again(page, model):
     model.slow["planner"] = 60
     start_run(page)
-    page.get_by_role("button", name="Stop", exact=True).click()
+    page.locator("aside.right").get_by_role("button", name="Stop", exact=True).click()  # not the palette tile
     expect(page.get_by_role("list", name="Steps").get_by_role("button", name="planner")
            ).to_contain_text("interrupted")
     page.get_by_role("tab", name="New run").click()
@@ -103,6 +103,7 @@ def test_a_provider_added_from_the_model_field_reaches_the_model_picker(page):
 
 
 def test_the_interface_language_changes(page):
+    page.get_by_role("button", name="View", exact=True).click()  # language, theme and node style live there
     language = page.locator("select:has(option[value='pt'])")  # its label changes with it
     language.select_option("pt")
     expect(page.get_by_role("button", name="Propriedades", exact=True)).to_be_visible()
@@ -137,7 +138,7 @@ def test_a_library_agent_is_copied_into_the_flow(page):
     page.locator(".pal.lib").filter(has_text="Summarizer").click()  # the palette entry
     canvas = page.get_by_role("application")
     expect(canvas.locator(".react-flow__node[data-id='summarizer']")).to_be_visible()
-    expect(page.get_by_text("Summarizer copied from the library.")).to_be_visible()
+    expect(page.locator(".tb-toast")).to_contain_text("Summarizer copied from the library.")  # the visible toast
     assert page.errors == []
 
 
@@ -147,7 +148,7 @@ def test_a_new_blank_flow_is_created_and_opened(page):
     form.get_by_role("textbox", name=re.compile(r"^Name")).fill("e2e-flow")
     form.get_by_role("textbox", name=re.compile(r"^Title")).fill("E2E flow")
     form.get_by_role("button", name="Next").click()
-    expect(page.get_by_text("Flow e2e-flow created.")).to_be_visible()
+    expect(page.locator(".tb-toast")).to_contain_text("Flow e2e-flow created.")  # the visible toast
     expect(page.get_by_role("combobox", name="Flow")).to_have_value("e2e-flow")
     # a new flow runs on the graph engine (the recommended mode)
     page.get_by_role("button", name="Properties", exact=True).click()
@@ -159,7 +160,9 @@ def test_a_long_orchestrator_flow_is_converted_to_the_graph_engine(page):
     page.get_by_role("combobox", name="Flow").select_option("legacy")
     expect(page.get_by_role("combobox", name="Flow")).to_have_value("legacy")
     # the warning: longer than the orchestrator is for
-    expect(page.get_by_role("contentinfo")).to_contain_text("the orchestrator is for short flows")
+    page.locator(".tb-status").click()  # opens the bottom panel at Problems
+    problems = page.get_by_role("contentinfo").locator(".problems")
+    expect(problems).to_contain_text("the orchestrator is for short flows")
     page.get_by_role("button", name="Properties", exact=True).click()
     page.get_by_role("button", name="Convert to the graph engine…").click()
     dialog = page.get_by_role("dialog", name="Convert to the graph engine")
@@ -189,4 +192,33 @@ def test_a_temporary_api_error_retries_by_itself_or_now(page, model):
     card.get_by_role("button", name="Retry now").click()  # no need to wait for the countdown
     expect(page.get_by_role("group", name="Human approval: Check the report")).to_be_visible()
     assert [c["agent"] for c in model.calls].count("planner") == 2
+    assert page.errors == []
+
+
+def test_run_flow_in_the_top_bar_starts_a_run_and_follows_it(page):
+    run = page.get_by_role("button", name="Run flow")
+    expect(run).to_be_visible()
+    run.click()
+    topic = page.get_by_role("textbox", name="Topic *")
+    expect(topic).to_be_focused()  # straight to the first input
+    topic.fill("agents")
+    page.get_by_role("button", name="▶ Run").click()
+    # at the gate the same button says the run needs you, and opens it
+    expect(page.get_by_role("button", name="Needs you: open the run")).to_be_visible()
+    assert page.errors == []
+
+
+def test_the_bar_says_a_run_is_going_and_ctrl_enter_in_a_gate_answers_it(page, model):
+    model.slow["planner"] = 1.5
+    page.get_by_role("button", name="Run flow").click()
+    page.get_by_role("textbox", name="Topic *").fill("agents")
+    page.get_by_role("button", name="▶ Run").click()
+    expect(page.get_by_role("button", name="Running: open the run")).to_be_visible()
+    gate = page.get_by_role("group", name="Human approval: Check the report")
+    expect(gate).to_be_visible()
+    box = gate.get_by_role("textbox", name="Comment or answer")
+    box.fill("shorter, please")
+    box.press("Control+Enter")  # answers the gate: never a second run
+    expect(gate).to_be_hidden()
+    expect(page.get_by_role("tab", name="History 1")).to_be_visible()
     assert page.errors == []

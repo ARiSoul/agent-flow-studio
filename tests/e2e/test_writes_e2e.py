@@ -73,7 +73,7 @@ def test_autonomy_saved_while_a_write_waits_lets_it_through(page, model, repo):
     page.get_by_role("button", name="Properties", exact=True).click()
     page.get_by_role("combobox", name="Autonomy").select_option("auto")
     page.get_by_role("button", name="Save", exact=True).click()
-    expect(page.get_by_text("Saved to flows/dev/flow.yaml")).to_be_visible()
+    expect(page.locator(".tb-toast")).to_contain_text("Saved to flows/dev/flow.yaml")  # the visible toast
     page.get_by_role("button", name="Run", exact=True).click()
     expect(write_card(page)).to_have_count(0)  # approved by the new autonomy, no click
     expect(page.get_by_role("list", name="Steps").get_by_role("button", name="coder")

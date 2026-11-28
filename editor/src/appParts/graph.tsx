@@ -68,7 +68,7 @@ export function useCanvasGraph(c: Pick<EditorCtx, "catalog" | "dims" | "doc" | "
       const mark = run === "followed" ? "✓" : run === "not" ? "✗" : run === "error" ? "!" : "";
       return {
         id: `e${i}`, source: e.from, target: e.to, sourceHandle: "c", targetHandle: "c",  // the control points (not a data port)
-        label: [mark, cond].filter(Boolean).join(" ") || undefined,
+        label: [mark, cond].filter(Boolean).join(" ") || undefined, labelBgPadding: [4, 2] as [number, number], labelBgBorderRadius: 3,
         selected: sel?.kind === "edge" && sel.index === i, type: "smoothstep",
         markerEnd: { type: MarkerType.ArrowClosed },
         animated: run === "followed" && trace.nodes[e.to] === "active",
@@ -91,7 +91,7 @@ export function useCanvasGraph(c: Pick<EditorCtx, "catalog" | "dims" | "doc" | "
           className: "data", type: "default", selected: sel?.kind === "data" && sel.agent === an && sel.input === n,
         });
       }
-    return [...control, ...data];
+    return [...data, ...control];  // labelled links on top: no data link crosses a label
   }, [doc, sel, showData, trace, t]);
   return { errNodes, nodes, edges };
 }

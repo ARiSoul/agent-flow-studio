@@ -3,7 +3,7 @@ import dagre from "@dagrejs/dagre";
 import type { AgentInputRaw, AgentRaw, Doc, FlowRaw, GateRaw, IOKind, IOTypeRaw } from "./types";
 
 export const SLUG = /^[a-z][a-z0-9_]{0,39}$/;
-export const NODE_W = 240;
+export const NODE_W = 280;
 export const NODE_H = 96;
 const MODEL_H = 18;  // the model badge under an agent's name (card style)
 export const PORT_H = 18;  // height of one port row (keep in sync with .port in styles.css)
@@ -187,7 +187,7 @@ export function autoNodeSize(spec: FlowRaw, id: string, style: NodeStyle = "card
   const a = spec.agents[id];
   if (style === "avatar") return a ? { w: 140, h: 130 } : { w: 120, h: 120 };
   const rows = a ? Math.max(Object.keys(a.inputs ?? {}).length + 1, Object.keys(a.outputs ?? {}).length) : 0;
-  if (style === "compact") return a ? { w: 200, h: 46 + rows * PORT_H + 12 } : { w: 200, h: 56 };
+  if (style === "compact") return a ? { w: 220, h: 46 + rows * PORT_H + 12 } : { w: 220, h: 56 };
   return { w: NODE_W, h: a ? NODE_H + MODEL_H + rows * PORT_H + 24 : NODE_H };  // + the ports block's padding
 }
 

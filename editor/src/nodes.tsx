@@ -19,9 +19,10 @@ function ModelBadge({ model }: { model?: AgentModel | null }) {
   const { t } = useI18n();
   if (!model) return null;
   const name = model.name ?? t("node.modelDefault");
+  const short = model.name ?? t("node.modelDefaultShort");
   return (
-    <span className={`badge model from-${model.from}`} title={t(`node.modelFrom.${model.from}`, { model: name })}>
-      {name}
+    <span className={`node-model-text from-${model.from}`} title={t(`node.modelFrom.${model.from}`, { model: name })}>
+      {t("node.modelLabel", { name: short })}
     </span>);
 }
 
@@ -48,10 +49,15 @@ const icon = (s: string) => SERVER_ICON[s] ?? s.slice(0, 3).toUpperCase();
 
 /** Short tag of a type, shown next to a port. */
 export const TYPE_TAG: Record<IOKind, string> = {
-  text: "abc", markdown: "md", number: "1.5", integer: "123", boolean: "y/n", date: "date",
-  datetime: "time", url: "url", path: "path", file: "file", choice: "opt", json: "{}",
+  text: "text", markdown: "md", number: "number", integer: "int", boolean: "y/n", date: "date",
+  datetime: "time", url: "url", path: "path", file: "file", choice: "choice", json: "json",
 };
-export const typeTag = (k: IOKind, multiple?: boolean) => `${TYPE_TAG[k] ?? k}${multiple ? "[]" : ""}`;
+const PLURAL: Partial<Record<IOKind, string>> = { text: "texts", url: "urls", path: "paths", file: "files" };
+export const typeTag = (k: IOKind, multiple?: boolean) =>
+  multiple ? PLURAL[k] ?? `${TYPE_TAG[k] ?? k}[]` : TYPE_TAG[k] ?? k;
+
+/** The run state as a shape, not only a color (✓ done, ✕ error, ? waiting, – skipped, ■ stopped). */
+const RUN_GLYPH: Record<string, string> = { done: "✓", error: "✕", gate: "?", skipped: "–", stopped: "■" };
 
 /** Run state of a node: a dot (filled and pulsing while it runs, hollow when it is stopped), a
  * "running" badge and a moving bar. */
@@ -59,7 +65,7 @@ function RunDot({ run }: { run?: NodeRun }) {
   const { t } = useI18n();
   const state = run ?? "idle";
   return <span className={`run-dot ${state}`} role="img" aria-label={t(`node.state.${state}`)}
-    title={t(`node.state.${state}`)} />;
+    title={t(`node.state.${state}`)}>{RUN_GLYPH[state] ?? ""}</span>;
 }
 
 function RunningBadge({ run }: { run?: NodeRun }) {
@@ -78,7 +84,7 @@ function portTitle(p: Port, t: ReturnType<typeof useI18n>["t"], input: boolean):
 }
 
 /** Avatar style: the port handles sit around the circle (names in the tooltips). */
-function RingPorts({ ins, outs }: { ins: Port[]; outs: Port[] }) {
+function RingPorts({ ins, outs, labels }: { ins: Port[]; outs: Port[]; labels?: boolean }) {
   const { t } = useI18n();
   const at = (i: number, n: number) => ({ top: `${((i + 1) / (n + 1)) * 100}%` });
   const all = [...ins.map((p) => ({ p, add: false })), { p: null as Port | null, add: true }];
@@ -92,6 +98,8 @@ function RingPorts({ ins, outs }: { ins: Port[]; outs: Port[] }) {
       {outs.map((p, i) => (
         <Handle key={p.name} type="source" position={Position.Right} id={`out:${p.name}`}
           className={`h-data ring t-${p.type}`} style={at(i, outs.length)} title={portTitle(p, t, false)} />))}
+      {ins.map((p, i) => <span key={`li:${p.name}`} className={`ring-label in${labels ? " on" : ""}`} style={at(i, all.length)} aria-hidden="true">{p.name}</span>)}
+      {outs.map((p, i) => <span key={`lo:${p.name}`} className={`ring-label out${labels ? " on" : ""}`} style={at(i, outs.length)} aria-hidden="true">{p.name}</span>)}
     </>
   );
 }
@@ -108,9 +116,8 @@ function Ports({ ins, outs, compact }: { ins: Port[]; outs: Port[]; compact?: bo
               ? t("node.fromFlowInput", { name: p.from.slice(6) })
               : p.from ? t("node.fromOutput", { ref: p.from }) : t("node.freeInput")}`}>
             <Handle type="target" position={Position.Left} id={`in:${p.name}`} className={`h-data t-${p.type}`} />
-            {!compact && <span className="port-tag">{typeTag(p.type, p.multiple)}</span>}
+            <span className={`port-tag t-${p.type}`} title={typeName(p)}>{typeTag(p.type, p.multiple)}</span>
             <span className="port-name">{p.name}</span>
-            {!compact && p.from?.startsWith("input.") && <span className="port-src">{p.from}</span>}
           </div>
         ))}
         <div className="port add" title={t("node.newInputTitle")}>
@@ -122,7 +129,7 @@ function Ports({ ins, outs, compact }: { ins: Port[]; outs: Port[]; compact?: bo
         {outs.map((p) => (
           <div key={p.name} className="port" title={`${p.name} · ${typeName(p)}`}>
             <span className="port-name">{p.name}</span>
-            {!compact && <span className="port-tag">{typeTag(p.type, p.multiple)}</span>}
+            <span className={`port-tag t-${p.type}`} title={typeName(p)}>{typeTag(p.type, p.multiple)}</span>
             <Handle type="source" position={Position.Right} id={`out:${p.name}`} className={`h-data t-${p.type}`} />
           </div>
         ))}
@@ -146,18 +153,20 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
   const style = data.style ?? "card";
   const rows = Math.max(data.ins.length + 1, data.outs.length);  // port rows: the minimum height
   const cls = `node agent style-${style}${selected ? " sel" : ""}${data.error ? " err" : ""}${data.run ? ` run-${data.run}` : ""}`;
+  const label = `${data.name}, ${t(`node.state.${data.run ?? "idle"}`)}`;
   if (style === "avatar") {
     return (
-      <div className={cls} title={a.description}>
+      <div className={cls} title={a.description} aria-label={label}>
         <Resizer selected={!!selected} style={style} minWidth={70} minHeight={agentMinHeight(rows, style)} />
         <div className="avatar">
           <Handle type="target" id="c" position={Position.Top} />
           <AgentIcon icon={a.icon} size={34} />
           <RunDot run={data.run} />
-          <RingPorts ins={data.ins} outs={data.outs} />
+          <RingPorts ins={data.ins} outs={data.outs} labels={!!selected} />
           <Handle type="source" id="c" position={Position.Bottom} />
         </div>
-        <div className="avatar-name">{data.name}</div>
+        <div className="avatar-name" title={data.name}>{data.name}</div>
+        <div className="avatar-ports">{t("node.portSummary", { i: String(data.ins.length), o: String(data.outs.length) })}</div>
         <div className="avatar-badges">
           <ModelBadge model={data.model} />
           {data.start && <span className="badge start">{t("node.start")}</span>}
@@ -170,7 +179,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
   }
   if (style === "compact") {
     return (
-      <div className={cls} title={a.description}>
+      <div className={cls} title={a.description} aria-label={label}>
         <Resizer selected={!!selected} style={style} minWidth={140} minHeight={agentMinHeight(rows, style)} />
         <Handle type="target" id="c" position={Position.Top} />
         <div className="node-head">
@@ -191,21 +200,24 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeT>) {
     );
   }
   return (
-    <div className={cls}>
+    <div className={cls} aria-label={label}>
       {/* never smaller than its ports need: a hidden port would leave its data links loose */}
       <Resizer selected={!!selected} style={style} minHeight={agentMinHeight(rows, style)} />
       <Handle type="target" id="c" position={Position.Top} />
       <div className="node-head">
         <span className="node-icon"><AgentIcon icon={a.icon} size={16} /></span>
-        <span className="node-kind">{t(a.action ? "node.action" : a.subflow ? "node.subflow" : "node.agent")}</span>
-        {a.subflow && <span className="badge sub" title={t("node.subflowTitle")}>↳ {a.subflow.flow || "—"}</span>}
-        <RunningBadge run={data.run} />
-        <RunDot run={data.run} />
+        <span className="node-name" title={data.name}>{data.name}</span>
+        <span className="sr-only">{t(a.action ? "node.action" : a.subflow ? "node.subflow" : "node.agent")}</span>
         {data.start && <span className="badge start">{t("node.start")}</span>}
         <LibBadge agent={a} lib={data.lib} />
         {a.join === "any" && <span className="badge" title={t("node.joinAnyTitle")}>{t("node.joinAny")}</span>}
+        <RunningBadge run={data.run} />
+        <RunDot run={data.run} />
       </div>
-      <div className="node-name">{data.name}</div>
+      {(a.action || a.subflow) && <div className="node-sub">
+        <span className="node-kind">{t(a.action ? "node.action" : "node.subflow")}</span>
+        {a.subflow && <span className="badge sub" title={t("node.subflowTitle")}>↳ {a.subflow.flow || "—"}</span>}
+      </div>}
       {data.model && <div className="node-model"><ModelBadge model={data.model} /></div>}
       <div className="node-desc">{a.description}</div>
       <div className="node-foot">

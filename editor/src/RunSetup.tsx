@@ -430,7 +430,7 @@ export function SetupView({ flow, doc, dirty, mock, running, past, openRun, pref
         {dirty && <span className="field-err small">{t("run.saveFirst")}</span>}
         {running && <span className="muted small">{t("rp.oneAtATime")}</span>}
         {err && <span className="field-err small" role="alert">{err}</span>}
-        <button className="primary rp-go" disabled={!canStart} onClick={start}
+        <button className="btn-run rp-go" disabled={!canStart} onClick={start}
           title={dirty ? t("run.saveFirstTitle") : running ? t("rp.queueTitle") : `${t("rp.go")} (Ctrl+Enter)`}>
           {running ? `⧗ ${t("rp.queueGo")}` : `▶ ${t(mode === "from" ? "rp.runFromStep" : mode === "agent" ? "rp.goAgent" : "rp.go")}`}</button>
       </div>

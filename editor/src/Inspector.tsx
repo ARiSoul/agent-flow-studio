@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { useI18n } from "./i18n";
+import { MoreMenu } from "./RunParts";
 import { AgentPanel } from "./inspectorPanels/AgentPanel";
 import { FlowPanel } from "./inspectorPanels/FlowPanel";
 import { EdgePanel, GatePanel } from "./inspectorPanels/GatePanel";
@@ -31,11 +32,12 @@ export function Inspector(p: Props) {
       <div className="panel-head">
         <h2>{title}</h2>
         {sel && <>
-          <button className="small" onClick={() => p.select(null)}>{t("insp.flow")}</button>
-          <button className="danger small" disabled={sel.kind === "node" && sel.id === doc.spec.start}
-            title={sel.kind === "node" && sel.id === doc.spec.start ? t("insp.changeStartFirst")
-              : sel.kind === "data" ? t("insp.deleteLinkTitle") : t("insp.deleteTitle")}
-            onClick={() => p.remove(sel)}>{t("insp.delete")}</button>
+          <button className="small" onClick={() => p.select(null)} title={t("insp.backToFlow")}>← {t("insp.flow")}</button>
+          <MoreMenu label={t("insp.more")} items={[{ label: `${t("insp.delete")}…`, danger: true,
+            disabled: sel.kind === "node" && sel.id === doc.spec.start,
+            title: sel.kind === "node" && sel.id === doc.spec.start ? t("insp.changeStartFirst")
+              : sel.kind === "data" ? t("insp.deleteLinkTitle") : t("insp.deleteTitle"),
+            onSelect: () => p.remove(sel) }]} />
         </>}
       </div>
       <div className="panel-body">{body}</div>

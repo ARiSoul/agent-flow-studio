@@ -198,10 +198,10 @@ export function WorkspaceBar({ current, beforeSwitch, onEnv, flash }: {
   return (
     <span className="ws-bar" role="group" aria-label={t("ws.label")}>
       <label className="bar-label" htmlFor="ws-select">{t("ws.label")}</label>
-      <select id="ws-select" value={name} title={t("ws.selectTitle")} onChange={(e) => choose(e.target.value)}>
+      <select id="ws-select" value={name} title={name === "studio" ? t("ws.studioTitle") : t("ws.selectTitle")} onChange={(e) => choose(e.target.value)}>
         {list.length === 0 && <option value={name}>{current?.title ?? name}</option>}
         {list.map((w) => <option key={w.name} value={w.name} disabled={!w.ok}>
-          {w.name === "studio" ? t("ws.studio") : w.title}{w.ok ? "" : ` (${t("ws.missing")})`}</option>)}
+          {w.name === "studio" ? t("ws.studioShort") : w.title}{w.ok ? "" : ` (${t("ws.missing")})`}</option>)}
       </select>
       {(current?.environments.length ?? 0) > 0 && (
         <select className={`env env-${current?.kind ?? "dev"}`} value={current?.environment ?? ""} title={t("ws.envTitle")}

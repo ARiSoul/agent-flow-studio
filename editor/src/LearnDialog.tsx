@@ -78,7 +78,7 @@ export function LearnDialog({ root, onClose, onStart }: {
         <div className="panel-head">
           <h2 id="learn-title">{t("learn.title", { root })}</h2>
           <span className="grow" />
-          <button className="small" onClick={onClose}>{t("dialog.close")}</button>
+          <button className="icon-btn modal-close" onClick={onClose} aria-label={t("dialog.close")} title={t("dialog.close")}>×</button>
         </div>
         <div className="learn-body">
           <p className="muted small">{t("learn.hint")}</p>

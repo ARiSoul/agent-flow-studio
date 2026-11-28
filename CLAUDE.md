@@ -254,6 +254,20 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   (`appParts/shared.tsx`) of exactly what it uses. `Inspector.tsx` picks the panel; the panels
   are in `editor/src/inspectorPanels/` (`AgentPanel`, `GatePanel`, `FlowPanel`, `shared`). Folder
   names never equal a file name in another case (`App.tsx` vs `app/` look alike on Windows).
+  Editor layout (reviewed by a design critic, a DevOps engineer and an end user to 10/10):
+  the top bar is one row down to 1180 px and never wraps — context on the left (workspace + env
+  pill, Board | Flow editor, Flow select with a dirty dot, "Flow ▾" menu: location, duplicate,
+  copy/move, delete; location chip; status button with `data-status` pending/ok/warn/bad), work on
+  the right (New, Undo/Redo group, Save/✓ Saved, "Run flow" = `.btn-run` with the run state
+  reported by `RunPanel.onRunState`, Connectors + Providers or one "Connections ▾" menu below
+  1320 px, "View" popover `appParts/Prefs.tsx` with language, theme, node style and panels). No
+  bare unique icon in the bar. Arrange/Data links float on the canvas (`.canvas-tools`). The
+  bottom panel is collapsed to its tab bar by default (`hide-bottom`), opened by its tabs, the
+  status button or a Save with errors. The sidebar is `appParts/Palette.tsx` (Add tiles,
+  library, tools; collapsible). The first view is computed from the flow's layout (no React Flow
+  `fitView`): zoom 0.8–1, down to 0.65 to show a slightly wide flow whole, else the start at the
+  top. "Start a run" buttons share `.btn-run`; accent primary is for committing (Save, Approve).
+  E2E: `tests/e2e/test_layout_e2e.py` (1180 px bar, the 5 themes, a 40-agent flow's timing).
 
 ## Conventions
 - Python ≥ 3.10, typing, `ruff` (line 100). Flow prompts in `flows/<flow>/prompts/*.md`.

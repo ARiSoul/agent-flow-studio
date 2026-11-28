@@ -148,7 +148,7 @@ export function AgentPanel({ id, doc, catalog, update, select, testAgent, focus,
         </div>
         <span className="field-hint">{t("insp.iconHint")}</span>
       </div>
-      <Field label={t("insp.description")} hint={t("insp.descriptionHint")}>
+      <Field label={t("insp.description")} hint={t(doc.spec.execution === "graph" ? "insp.descriptionHintGraph" : "insp.descriptionHint")}>
         <textarea rows={3} value={a.description} onChange={(e) => setA((x) => { x.description = e.target.value; })} />
       </Field>
       {a.action

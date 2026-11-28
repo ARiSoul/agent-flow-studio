@@ -104,7 +104,7 @@ export function useCanvasMenus(c: Pick<EditorCtx, "addNode" | "clip" | "copyAgen
       { label: t("menu.flowProperties"), onSelect: () => showProps(null) },
     ] });
   };
-  const arrange = () => { update((d) => autoLayout(d.spec, undefined, nodeStyle)); setTimeout(() => rf.fitView({ padding: 0.15 }), 50); };
+  const arrange = () => { update((d) => autoLayout(d.spec, undefined, nodeStyle)); setTimeout(() => rf.fitView({ padding: 0.15, minZoom: 0.8, maxZoom: 1 }), 50); };
   const fromKeyboard = () => Date.now() - kbMenu.current < 600;
   // Shift+F10 or the context-menu key: the menu of the focused node/link, else of the selection, else the canvas
   const onCanvasKey = (e: ReactKeyboardEvent) => {

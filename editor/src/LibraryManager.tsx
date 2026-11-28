@@ -81,7 +81,7 @@ export function LibraryManager({ library, locations, onChange, onClose }: {
           <span className="grow" />
           <button className="small primary" onClick={() => { setSel(null); setMsg(null);
             setForm({ id: "", title: "", location: "local", yaml: NEW_YAML, prompt: "", isNew: true }); }}>{t("libm.new")}</button>
-          <button className="small" onClick={onClose}>{t("dialog.close")}</button>
+          <button className="icon-btn modal-close" onClick={onClose} aria-label={t("dialog.close")} title={t("dialog.close")}>×</button>
         </div>
         <div className="conns-body">
           <div className="conns-list">

@@ -81,9 +81,9 @@ input.bad { border-color: var(--bad); }
 /* hidden panels (toolbar toggles, Ctrl+B / Ctrl+Alt+B / Ctrl+J): size 0 and not drawn */
 .app.hide-pal { --pal-w: 0px !important; }
 .app.hide-insp { --insp-w: 0px !important; }
-.app.hide-bottom { --bottom-h: 0px !important; }
+.app.hide-bottom { --bottom-h: 34px !important; }
 .app.hide-pal .palette, .app.hide-pal .split-pal, .app.hide-insp .right, .app.hide-insp .split-insp,
-.app.hide-bottom .bottom, .app.hide-bottom .split-bottom { display: none; }
+.app.hide-bottom .bottom .tab-body, .app.hide-bottom .split-bottom { display: none; }
 .app.hide-pal .canvas { border-left: 0; }
 .panel-toggles { display: inline-flex; gap: 2px; }
 .badge.loc { white-space: nowrap; }
@@ -127,11 +127,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .canvas { grid-area: canvas; position: relative; min-height: 0; }
 .react-flow { --xy-background-color: var(--bg); }
 .react-flow__edge.back path { stroke-dasharray: 5 4; }
-.react-flow__edge-textbg { fill: var(--panel); }
+.react-flow__edge-textbg { fill: var(--bg); }
 .react-flow__edge-text { fill: var(--muted); font-size: 11px; }
 
 .node {
-  width: 240px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  width: 280px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 8px 10px; box-shadow: var(--shadow); border-top: 4px solid var(--accent);
 }
 .node.gate.human { border-top-color: var(--human); background: var(--human-soft); }
@@ -210,6 +210,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .tab-body pre { margin: 0; white-space: pre-wrap; }
 .problems { margin: 0; padding-left: 16px; }
 .problems li { color: var(--bad); padding: 2px 0; }
+.problems li.warn-text { color: var(--human); }
 .problems li.link { cursor: pointer; } .problems li.link:hover { text-decoration: underline; }
 .problems code { color: var(--muted); margin-right: 4px; }
 
@@ -309,7 +310,7 @@ button.danger.strong { background: var(--stop); border-color: var(--stop); color
 .react-flow__edge.data path { stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 3 3; opacity: .8; }
 .react-flow__edge.data.selected path { stroke-width: 2.2; opacity: 1; }
 .react-flow__edge.cond .react-flow__edge-text { fill: var(--accent); font-family: ui-monospace, Consolas, monospace; }
-.node.run-skipped { opacity: .5; border-style: dashed; }
+.node.run-skipped { opacity: .6; border-style: dashed; }
 
 /* inspector: typed value editors (IOEditors.tsx) */
 textarea.bad, select.bad { border-color: var(--bad); }
@@ -376,7 +377,7 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 }
 
 /* ---- node styles: compact */
-.node.style-compact { width: 200px; padding: 6px 8px; }
+.node.style-compact { width: 220px; padding: 6px 8px; }
 .node.style-compact .node-head { gap: 6px; }
 .node.style-compact .node-name { margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ports.compact .port { font-size: 10px; }
@@ -1257,3 +1258,188 @@ button[aria-disabled="true"] { color: var(--muted); border-color: var(--border);
 .rp-sum b.mono { font-weight: 600; font-size: 12px; }
 .rp-card.decide .rp-card-icon:not(:empty) { font-weight: 700; }
 .rp-gate-icon { display: inline-grid; place-items: center; width: 14px; height: 14px; border: 1.5px solid currentColor; border-radius: 50%; font-size: 10px; line-height: 1; }
+/* ---- top bar: context on the left, work on the right (App.tsx header) ---- */
+.topbar { min-height: 48px; padding: 6px 12px; gap: 8px; background: var(--panel); border-bottom: 1px solid var(--border); position: relative; }
+.topbar.env-prod { box-shadow: inset 0 3px 0 var(--stop); }
+.tb-zone { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.tb-zone:first-child { flex: 0 1 auto; }
+.tb-zone:first-child .tb-flow { min-width: 0; flex: 0 1 auto; }
+.tb-zone:first-child .tb-flow select { width: 100%; }
+.tb-zone .sep { margin: 0 2px; }
+.tb-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tb-seg button { border: 0; border-radius: 0; height: 30px; padding: 0 10px; }
+.tb-seg button + button { border-left: 1px solid var(--border); }
+.tb-seg button.on { background: var(--accent-soft); color: var(--accent); }
+.tb-flow { display: inline-flex; align-items: center; gap: 6px; }
+.tb-flow select { min-width: 140px; max-width: 260px; }
+.dirty-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+.tb-loc { height: 24px; padding: 0 8px; border: 1px dashed var(--border); border-radius: 999px; background: none; }
+.tb-loc .badge { background: none; padding: 0; font-size: 11px; }
+.tb-loc:hover { border-style: solid; }
+.tb-status { height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 0; }
+.tb-status.ok, .tb-status.warn { color: var(--ok); background: var(--ok-soft); }
+.tb-status.bad { color: var(--bad); background: var(--bad-soft); }
+.tb-warn { color: var(--human); }
+.tb-history { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tb-history button { border: 0; border-radius: 0; width: 32px; height: 30px; padding: 0; display: inline-grid; place-items: center; color: var(--text); background: var(--panel); }
+.tb-history button + button { border-left: 1px solid var(--border); }
+.tb-history button:disabled { color: var(--muted); }
+.tb-save, .tb-saved { height: 32px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; }
+.tb-save kbd { font: inherit; font-size: 11px; font-weight: 500; opacity: .75; }
+.tb-saved { background: transparent; border: 1px solid transparent; color: var(--muted); cursor: default; }
+.tb-more { font-size: 16px; }
+.tb-toast { position: absolute; top: calc(100% + 6px); right: 12px; z-index: 40; max-width: 460px; padding: 6px 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); white-space: normal; }
+.prefs { position: relative; display: inline-flex; }
+.prefs-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 45; width: 260px; display: flex; flex-direction: column; gap: 10px;
+  padding: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.prefs-pop label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.prefs-pop select { width: 100%; max-width: none; }
+.canvas-tools { position: absolute; top: 8px; left: 8px; z-index: 5; display: flex; gap: 4px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.canvas-tools button { height: 28px; padding: 0 10px; }
+.canvas-tools button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+@media (max-width: 1440px) { .tb-save kbd { display: none; } }
+/* a disabled primary looks disabled, not like a pale primary */
+button.primary:disabled, button.primary[aria-disabled="true"] { background: var(--panel-2); color: var(--muted); border-color: var(--border); opacity: 1; }
+/* the environment of a workspace: a pill; production stands out */
+.ws-bar select.env { border-radius: 999px; padding: 2px 10px; font-weight: 600; background: var(--panel-2); color: var(--muted); }
+.ws-bar select.env.env-prod { background: var(--stop-soft); color: var(--stop); border: 1px solid var(--stop); font-weight: 700; text-transform: uppercase; }
+/* ---- left sidebar (appParts/Palette.tsx) ---- */
+.palette .pal-section + .pal-section { margin-top: 10px; }
+.palette .pal-head { display: flex; align-items: center; gap: 6px; margin: 4px 0 6px; }
+.pal-toggle { flex: 1; display: flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; background: none; text-align: left;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.pal-toggle:hover { color: var(--text); }
+.pal-chev { width: 10px; font-size: 10px; }
+.pal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.palette .pal.tile { height: 56px; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  border: 1px solid var(--border); border-left-width: 3px; border-radius: 6px; background: var(--panel); cursor: grab; }
+.palette .pal.tile b { font-size: 12px; font-weight: 600; line-height: 1.2; }
+.palette .pal.tile:hover, .palette .pal.tile:focus-visible { border-color: var(--accent); background: var(--agent-soft); }
+.pal-icon { color: var(--accent); }
+.pal.tile.human .pal-icon { color: var(--human); } .pal.tile.stop .pal-icon { color: var(--stop); }
+.pal.tile.decision .pal-icon { color: var(--human); } .pal.tile.action .pal-icon, .pal.tile.subflow .pal-icon { color: var(--muted); }
+.pal-hint { min-height: 30px; margin: 6px 0 0; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.pal-help { margin-top: 4px; font-size: 11px; color: var(--muted); }
+.pal-help summary { cursor: pointer; color: var(--accent); }
+.pal-help p { margin: 6px 0 0; line-height: 1.45; }
+.pal-search { width: 100%; height: 28px; margin-bottom: 6px; box-sizing: border-box; }
+.pal-lib-list { display: flex; flex-direction: column; gap: 6px; }
+.palette .pal.lib { margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; border-radius: 6px; cursor: grab; }
+.pal-lib-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pal-lib-head b { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal.lib .pal-src { flex: none; font-size: 10px; padding: 0 5px; border-radius: 4px; background: var(--panel-2); color: var(--muted); text-transform: none; letter-spacing: 0; margin: 0; }
+.pal-desc { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ---- node cards (nodes.tsx): the name in the head, readable tags, run state as a shape ---- */
+.node .node-head .node-name { flex: 1; min-width: 0; margin: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-sub { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.node-sub .node-kind { flex: none; }
+.node-model { margin: 2px 0; line-height: 16px; }
+.node-model-text { font-size: 11px; color: var(--muted); }
+.node-model-text.from-agent, .node-model-text.from-flow { color: var(--text); }
+.port-tag { font-size: 10px; line-height: 14px; }
+.port-tag.t-text, .port-tag.t-url, .port-tag.t-path { color: var(--accent); background: var(--accent-soft); }
+.port-tag.t-markdown { color: var(--ok); background: var(--ok-soft); }
+.port-tag.t-number, .port-tag.t-integer, .port-tag.t-boolean { color: var(--human); background: var(--human-soft); }
+.port-tag.t-file { color: var(--stop); background: var(--stop-soft); }
+.react-flow__handle.h-data.t-markdown { border-color: var(--ok); }
+.port.fed .react-flow__handle.h-data.t-markdown, .ports-col.out .react-flow__handle.h-data.t-markdown { background: var(--ok); }
+.react-flow__handle.h-data.t-number, .react-flow__handle.h-data.t-integer, .react-flow__handle.h-data.t-boolean { border-color: var(--human); }
+.port.fed .react-flow__handle.h-data.t-number, .ports-col.out .react-flow__handle.h-data.t-number,
+.port.fed .react-flow__handle.h-data.t-integer, .ports-col.out .react-flow__handle.h-data.t-integer { background: var(--human); }
+.react-flow__handle.h-data.t-file { border-color: var(--stop); }
+.port.fed .react-flow__handle.h-data.t-file, .ports-col.out .react-flow__handle.h-data.t-file { background: var(--stop); }
+.ports.compact .port-tag { font-size: 9px; padding: 0 3px; }
+.run-dot { display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; }
+.run-dot.done, .run-dot.error, .run-dot.gate, .run-dot.skipped, .run-dot.stopped { width: 16px; height: 16px; border-width: 1.5px; }
+.run-dot.done { color: var(--ok); background: var(--ok-soft); }
+.run-dot.error { color: var(--panel); }
+.run-dot.gate { color: var(--panel); }
+.run-dot.skipped, .run-dot.stopped { color: var(--muted); }
+.run-dot.stopped { font-size: 8px; }
+.avatar-name { max-width: 140px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-ports { font-size: 10px; color: var(--muted); }
+.ring-label { position: absolute; transform: translateY(-50%); font-size: 10px; padding: 0 4px; border-radius: 3px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); white-space: nowrap; pointer-events: none; z-index: 3; }
+.ring-label.in { right: calc(100% + 14px); }
+.ring-label.out { left: calc(100% + 14px); }
+.ring-label { visibility: hidden; }
+.ring-label.on, .node:hover .ring-label { visibility: visible; }
+/* ---- properties and windows ---- */
+.exec-compare { margin-top: 2px; }
+.exec-compare summary { cursor: pointer; color: var(--accent); font-size: 11px; padding: 2px 8px; }
+.exec-compare > div { margin-top: 4px; }
+.retry-fields { gap: 8px; }
+.mini-field { display: flex; flex-direction: column; gap: 2px; }
+.modal-box > .panel-head h2 { font-size: 16px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text); }
+.modal-close { font-size: 18px; line-height: 1; }
+/* the bar keeps one row down to 1180 px: the workspace label is for screen readers there */
+.topbar .ws-bar .bar-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.topbar .ws-bar select:not(.env) { max-width: 200px; }
+@media (max-width: 1320px) {
+  .topbar { gap: 6px; padding: 6px 8px; }
+  .tb-zone { gap: 4px; }
+  .tb-seg button { padding: 0 8px; }
+  .tb-flow select { max-width: 200px; }
+}
+.tb-conn { display: inline-flex; align-items: center; gap: 6px; }
+
+.tb-flowmenu { height: 30px; padding: 0 8px; display: inline-flex; align-items: center; gap: 2px; }
+
+.node .badge.start, .badge.start { background: var(--accent); color: var(--on-accent); }
+/* ---- round 2: Run flow, one vocabulary, the View popover, the bottom panel's tab bar ---- */
+.tb-run { height: 32px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; font-weight: 600;
+  background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok); }
+.tb-run.running { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.tb-run.gate { background: var(--human-soft); color: var(--human); border-color: var(--human); }
+.tb-status.warn { color: var(--human); background: var(--human-soft); }
+.bottom .tabs .cnt { margin-left: 6px; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 999px; }
+.bottom .tabs .cnt.bad { color: var(--bad); background: var(--bad-soft); }
+.bottom .tabs .cnt.warn { color: var(--human); background: var(--human-soft); }
+.bottom .tabs { display: flex; align-items: center; }
+.prefs-btn { height: 32px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; }
+
+.prefs-panels { border: 0; border-top: 1px solid var(--border); margin: 2px 0 0; padding: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.prefs-panels legend { padding: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+.prefs-panels label { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; color: var(--text); }
+.prefs-panels kbd { margin-left: auto; font: inherit; font-size: 11px; color: var(--muted); }
+/* the bar never wraps (it would move every button on an edit): the left zone gives way, the flow select first */
+.topbar { flex-wrap: nowrap; }
+.topbar > .grow { flex: 1 1 0; min-width: 0; }
+.topbar > .tb-zone:last-of-type { flex: none; }
+.tb-zone:first-child { flex: 0 1 auto; min-width: 0; }
+.tb-zone:first-child .tb-flow { flex: 0 1 auto; min-width: 96px; }
+.tb-zone:first-child .tb-flow select { min-width: 96px; width: 100%; }
+.tb-status, .tb-loc, .tb-flowmenu, .tb-seg, .ws-bar { flex: none; }
+.tb-status.pending { color: var(--muted); background: var(--panel-2); }
+/* round 4: no bare unique icons in the bar; one look for "start a run"; the collapsed bar's state */
+.tb-connmenu { display: none; height: 32px; padding: 0 10px; }
+.tb-flowmenu, .prefs-btn, .tb-connmenu { min-width: max-content; }
+.topbar .ws-bar select:not(.env) { max-width: 190px; }
+@media (max-width: 1320px) {
+  .tb-conn, .tb-loc { display: none; }
+  .tb-connmenu { display: inline-flex; align-items: center; }
+  .tb-zone:first-child .tb-flow, .tb-zone:first-child .tb-flow select { min-width: 160px; }
+}
+.btn-run { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok); font-weight: 600; }
+.btn-run:hover:not(:disabled) { background: var(--ok); color: var(--bg); }
+.btn-run:disabled { background: var(--panel-2); color: var(--muted); border-color: var(--border); }
+.port-tag { max-width: 44px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bottom.has-warn, .bottom.has-bad { box-shadow: inset 3px 0 0 var(--human); }
+.bottom.has-bad { box-shadow: inset 3px 0 0 var(--bad); }
+.bottom.has-warn .tabs > button:first-child, .bottom.has-bad .tabs > button:first-child { color: var(--text); font-weight: 600; }
+.bottom.has-warn .cnt.warn { background: var(--human); color: var(--bg); }
+.bottom.has-bad .cnt.bad { background: var(--bad); color: var(--bg); }
+.react-flow__edge-text { fill: var(--accent); }
+.prefs-btn:focus:not(:focus-visible) { outline: none; box-shadow: none; }
+.prefs-btn[aria-expanded="true"] { background: var(--panel-2); }
+.topbar button.prefs-btn.on { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+/* a port's name wins over its type tag when space is short */
+.port .port-name { flex: 0 1 auto; min-width: 3ch; }
+.port .port-tag { flex: 0 2 auto; }
+/* library names wrap to two lines rather than being cut (the full name is in the title) */
+.pal-lib-head b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; line-height: 1.25; }
+/* the active view and the location read clearly in every theme */
+.tb-seg button.on { background: var(--accent); color: var(--on-accent); }
+.tb-loc { color: var(--text); }

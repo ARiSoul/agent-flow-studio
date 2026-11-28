@@ -8,16 +8,18 @@ import { Connections } from "./Connections";
 import { Providers } from "./Providers";
 import { ContextMenu, type MenuState } from "./ContextMenu";
 import { useDialog } from "./Dialog";
-import { AgentIcon, Icon } from "./icons";
-import { LibraryManager } from "./LibraryManager";
+import { Icon } from "./icons";
+import { LibraryManager, locLabel } from "./LibraryManager";
 import { parseRunLink } from "./runLink";
 import { CONTEXT_NODE, RunPanel, type RunRequest, type Trace } from "./RunPanel";
 import { Inspector } from "./Inspector";
 import { Board } from "./Board";
 import { useWorkspaceActions, WorkspaceBar } from "./Workspaces";
-import { LANGS, useI18n, type Lang } from "./i18n";
-import { THEMES, useTheme, type Theme } from "./theme";
-import { clone, ensureLayout, NODE_STYLES, type NodeStyle, newAgent, newGate, removeNode, setSavedSize, tidy, uniqueKey, uniqueName } from "./model";
+import { Prefs } from "./appParts/Prefs";
+import { Palette } from "./appParts/Palette";
+import { useI18n } from "./i18n";
+import { useTheme } from "./theme";
+import { clone, ensureLayout, NODE_STYLES, nodeNames, nodeSize, type NodeStyle, newAgent, newGate, removeNode, setSavedSize, tidy, uniqueKey, uniqueName } from "./model";
 import { nodeTypes } from "./nodes";
 import type { Catalog, Doc, FlowSummary, FlowTemplate, LibraryAgent, Selection, Validation } from "./types";
 import { useCanvasGraph } from "./appParts/graph";
@@ -27,9 +29,13 @@ import { useCanvasMenus } from "./appParts/menus";
 import { useFlowFiles } from "./appParts/flowFiles";
 import { type Clip, PALETTE, type PaletteKind, type Panel, DATA_LINKS_KEY, LAST_FLOW_KEY, VIEW_KEY, HIDDEN_KEY, parseDataEdge, LocationBadge } from "./appParts/shared";
 
+/** Fit the flow at a zoom where the cards stay readable (0.8–1). */
+const FIT = { padding: 0.15, minZoom: 0.8, maxZoom: 1 };
+const WIDE_MIN = 0.65;  // the first view may go this low so a slightly wide flow shows whole
+
 function Editor() {
   const rf = useReactFlow();
-  const { t, tn, lang, setLang } = useI18n();
+  const { t, tn, lang } = useI18n();
   const { theme, setTheme, base } = useTheme();
   // node style: a preference of this browser, not part of the flow
   const [nodeStyle, setNodeStyleState] = useState<NodeStyle>(() => {
@@ -39,7 +45,7 @@ function Editor() {
   const setNodeStyle = (s: NodeStyle) => {
     setNodeStyleState(s);
     try { localStorage.setItem("afs.nodeStyle", s); } catch { /* storage not available */ }
-    setTimeout(() => rf.fitView({ padding: 0.15 }), 80);
+    setTimeout(() => rf.fitView(FIT), 80);
   };
   const dialog = useDialog();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -59,18 +65,18 @@ function Editor() {
   const setView = (v: "flow" | "board") => {
     setViewState(v);
     try { localStorage.setItem(VIEW_KEY, v); } catch { /* storage not available */ }
-    if (v === "flow") setTimeout(() => rf.fitView({ padding: 0.15 }), 80);
+    if (v === "flow") setTimeout(() => rf.fitView(FIT), 80);
   };
   // panels hidden by the user (this browser): palette, right panel, bottom panel
   const [hidden, setHidden] = useState<Record<Panel, boolean>>(() => {
-    try { return { pal: false, insp: false, bottom: false, ...JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "{}") }; }
-    catch { return { pal: false, insp: false, bottom: false }; }
+    try { return { pal: false, insp: false, bottom: true, ...JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "{}") }; }
+    catch { return { pal: false, insp: false, bottom: true }; }
   });
   const togglePanel = (p: Panel, show?: boolean) => setHidden((h) => {
     const n = { ...h, [p]: show === undefined ? !h[p] : !show };
     if (n[p] === h[p]) return h;
     try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(n)); } catch { /* storage not available */ }
-    setTimeout(() => rf.fitView({ padding: 0.15, duration: 150 }), 60);
+    setTimeout(() => rf.fitView({ ...FIT, duration: 150 }), 60);
     return n;
   });
   /** Opens a tab of the right panel (and shows the panel when it is hidden). */
@@ -81,7 +87,8 @@ function Editor() {
   const [showProviders, setShowProviders] = useState<{ focus?: string } | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
   const [runReq, setRunReq] = useState<RunRequest | null>(null);
-  const [runNeeds, setRunNeeds] = useState(0);  // gates and approvals that wait in the Run panel
+  const [runNeeds, setRunNeeds] = useState(0);
+  const [runState, setRunState] = useState<"idle" | "running" | "gate">("idle");  // gates and approvals that wait in the Run panel
   const [dims, setDims] = useState<Record<string, { width: number; height: number }>>({});
   const [showData, setShowData] = useState<boolean>(() => {
     try { return localStorage.getItem(DATA_LINKS_KEY) !== "0"; } catch { return true; }
@@ -103,11 +110,15 @@ function Editor() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const clip = useRef<Clip | null>(null);
-  const kbMenu = useRef(0);  // time of the last keyboard-opened menu (ignore the browser's own event)
+  const kbMenu = useRef(0);
+  const runFlowRef = useRef<() => void>(() => undefined);  // time of the last keyboard-opened menu (ignore the browser's own event)
 
   const dirty = doc !== null && JSON.stringify(doc) !== saved;
+  useEffect(() => {
+    document.title = `${dirty ? "• " : ""}${current ? `${current} — ` : ""}Agent Flow Studio`;
+  }, [dirty, current]);
   const flash = useCallback((text: string, bad = false) => {
-    setMsg({ text, bad }); setTimeout(() => setMsg(null), bad ? 8000 : 5000);
+    setMsg({ text, bad }); setTimeout(() => setMsg(null), bad ? 8000 : 6000);
   }, []);
   const wsActs = useWorkspaceActions(catalog?.workspace, flash);
   /** Another environment: the variables and approvals change, the flows stay. */
@@ -125,10 +136,6 @@ function Editor() {
       if (how === "move") { setCurrent(null); setDoc(null); }
     });
   };
-  const flowCopyMenu = (x: number, y: number) => setMenu({ x, y, title: current ?? "", items: [
-    { label: t("copy.button"), title: t("copy.flowTitle"), onSelect: () => copyFlow("copy") },
-    { label: t("copy.moveButton"), title: t("copy.moveFlowTitle"), onSelect: () => copyFlow("move") },
-  ] });
   const copyAgent = (id: string, how: "copy" | "move" = "copy") => {
     if (!current) return;
     if (dirty) return flash(t("copy.saveFirst"), true);
@@ -175,7 +182,24 @@ function Editor() {
       setSel(null);
       past.current = [];
       future.current = [];
-      setTimeout(() => rf.fitView({ padding: 0.15 }), 50);
+      setTimeout(() => {
+        // the first view, from the flow's own layout (React Flow may still hold the previous flow):
+        // all of it at a readable zoom (0.8–1); a flow too big for that shows its start at the top
+        const el = document.querySelector(".canvas"), names = nodeNames(d.spec);
+        const boxes = names.map((n) => { const p = d.spec.layout?.[n] ?? { x: 0, y: 0 }; const z = nodeSize(d.spec, n, nodeStyle); return { x: p.x, y: p.y, w: z.w, h: z.h }; });
+        if (!el || !boxes.length) { rf.fitView(FIT); return; }
+        const x0 = Math.min(...boxes.map((b) => b.x)), x1 = Math.max(...boxes.map((b) => b.x + b.w));
+        const y0 = Math.min(...boxes.map((b) => b.y)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
+        const W = el.clientWidth, H = el.clientHeight, M = 48;  // M: room for the canvas tools and the edges
+        const fitW = (W - M) / (x1 - x0), fitH = (H - M - 56) / (y1 - y0);
+        // readable (≥ 0.8) when it fits; a flow a little too wide still shows all its width, down to
+        // 0.65 (the person sees the whole flow first); wider than that, it starts at its start node
+        const zoom = fitW < FIT.minZoom && fitW >= WIDE_MIN ? fitW : Math.max(FIT.minZoom, Math.min(FIT.maxZoom, fitW, fitH));
+        const start = d.spec.layout?.[d.spec.start];
+        const x = W / 2 - ((x0 + x1) / 2) * zoom;  // centred across (it fits at 0.8 unless it is very wide)
+        const y = fitH >= zoom || !start ? 56 + (H - 56) / 2 - ((y0 + y1) / 2) * zoom : 56 - start.y * zoom;
+        rf.setViewport({ x, y, zoom });
+      }, 50);
     }).catch((e) => flash(String(e), true));
   }, [current, rf]);
 
@@ -223,7 +247,7 @@ function Editor() {
       }
       if (!r.saved && !r.blocked_by_secret && r.errors?.length) {
         // half-done flows can be saved: warn, list the first problems and ask
-        setTab("problems");
+        setTab("problems"); togglePanel("bottom", true);
         const first = r.errors.slice(0, 5).map((e) => `• ${localizeServer(e, e.msg, lang)}`).join("\n");
         const more = r.errors.length > 5 ? `\n${t("app.moreProblems", { n: r.errors.length - 5 })}` : "";
         if (await dialog.confirm({ title: tn("app.saveWithProblemsTitle", r.errors.length),
@@ -237,7 +261,7 @@ function Editor() {
         flash(r.with_problems ? t("app.savedWithProblems", { name: current }) : t("app.savedTo", { name: current }),
           !!r.with_problems);
         refreshFlows();
-      } else { setTab("problems"); flash(r.blocked_by_secret ? t("app.notSavedSecret") : t("app.notSaved"), true); }
+      } else { setTab("problems"); togglePanel("bottom", true); flash(r.blocked_by_secret ? t("app.notSavedSecret") : t("app.notSaved"), true); }
     } catch (e) { flash(String(e), true); }
   }, [doc, current, refreshFlows, t]);
 
@@ -246,6 +270,9 @@ function Editor() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key === "s") { e.preventDefault(); save(); }
+      if (mod && e.key === "Enter" && !(e.target as HTMLElement)?.closest?.("input,textarea,select,.dialog-layer,.ctx-menu,.modal,.right")) {
+        e.preventDefault(); runFlowRef.current();
+      }
       const inField = (e.target as HTMLElement)?.closest("input,textarea,select");
       if (mod && e.key === "z" && !inField) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       if (mod && e.key === "y" && !inField) { e.preventDefault(); redo(); }
@@ -407,62 +434,103 @@ function Editor() {
         if (doc && current) api.validate(current, tidy(doc)).then(setVal).catch(() => undefined);
       }} />}  </>;
   const board = view === "board" && !!catalog.workspace;
+  const envKind = catalog.workspace && (catalog.workspace.environments?.length ?? 0) > 0 ? catalog.workspace.kind ?? "dev" : null;
+  const statusKind = !val ? "pending" : !val.ok ? "bad" : warnings.length ? "warn" : "ok";
+  const runShown = runNeeds > 0 || runState === "gate" ? "gate" : runState;
+  const runFlow = () => {
+    if (runShown === "idle") {
+      setRunReq({ mode: "full", nonce: Date.now() });
+      let tries = 0;  // the form appears a moment later: focus its first input once it is there
+      const focusFirst = () => {
+        const el = document.querySelector<HTMLElement>(
+          "#rp-view-setup fieldset :is(input:not([type=hidden]), textarea, select)");  // the flow's inputs
+        if (el && document.activeElement !== el) el.focus();
+        if ((!el || document.activeElement !== el) && ++tries < 12) setTimeout(focusFirst, 80);
+      };
+      setTimeout(focusFirst, 60);
+    }
+    setRight("run");
+  };
+  const flowMenu = (x: number, y: number) => setMenu({ x, y, title: current ?? "", items: [
+    ...(currentFlow ? [{ label: t("loc.menuItem", { place: currentFlow.public ? t("loc.public") : locLabel(t, currentFlow.location ?? "local") }), onSelect: moveFlow },
+      { kind: "sep" as const }] : []),
+    { label: t("app.duplicate"), onSelect: () => current && createFlow(current) },
+    { label: t("copy.button"), title: t("copy.flowTitle"), onSelect: () => copyFlow("copy") },
+    { label: t("copy.moveButton"), title: t("copy.moveFlowTitle"), onSelect: () => copyFlow("move") },
+    { label: t("loc.moveMenu"), title: t("loc.moveTitle"), onSelect: moveFlow },
+    { kind: "sep" },
+    { label: t("app.deleteFlow"), danger: true, onSelect: deleteFlow },
+  ] });
+  runFlowRef.current = runFlow;
   const header = (
-    <header className="topbar">
-      <WorkspaceBar current={catalog.workspace} beforeSwitch={confirmDiscard} onEnv={refreshEnv} flash={flash} />
-      <button className={view === "board" ? "on" : ""} aria-pressed={view === "board"} title={t("board.toggleTitle")}
-        onClick={() => setView(view === "board" ? "flow" : "board")}>{view === "board" ? t("board.toFlow") : t("board.toBoard")}</button>
-      <span className="sep" />
-      {view !== "board" && <label className="bar-label" htmlFor="flow-select">{t("app.flowLabel")}</label>}
-      <select id="flow-select" value={current ?? ""} onChange={(e) => switchFlow(e.target.value)} hidden={view === "board"}>
-        {flows.map((f) => <option key={f.name} value={f.name}>{f.title} ({f.name}){f.valid ? "" : " ⚠"}
-          {f.public ? ` · ${t("loc.public")}` : f.location && f.location !== "local" && f.location !== "workspace" ? ` · ${f.location}` : ""}</option>)}
-      </select>
-      {currentFlow && !board && <button className="link-btn" title={t("loc.moveTitle")} onClick={moveFlow}>
-        <LocationBadge loc={currentFlow.location} isPublic={currentFlow.public} /></button>}
-      <button onClick={() => createFlow()}>{t("app.new")}</button>
-      {!board && <>
-      <button onClick={() => current && createFlow(current)} disabled={!current}>{t("app.duplicate")}</button>
-      <button disabled={!current} title={t("copy.flowTitle")} aria-haspopup="menu"
-        onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); flowCopyMenu(r.left, r.bottom + 2); }}>
-        {t("copy.short")} ▾</button>
-      <button className="danger" onClick={deleteFlow} disabled={!current}>{t("app.delete")}</button>
-      <span className="sep" />
-      <button onClick={undo} disabled={!past.current.length} title="Ctrl+Z">{t("app.undo")}</button>
-      <button onClick={redo} disabled={!future.current.length} title="Ctrl+Y">{t("app.redo")}</button>
-      <button onClick={arrange}>{t("app.arrange")}</button>
-      <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
-        title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
-      </>}
-      <button onClick={() => setShowConns(true)}>{t("app.connectors")}</button>
+    <header className={`topbar${envKind ? ` env-${envKind}` : ""}`}>
+      <div className="tb-zone">
+        <WorkspaceBar current={catalog.workspace} beforeSwitch={confirmDiscard} onEnv={refreshEnv} flash={flash} />
+        <span className="sep" />
+        <span className="tb-seg" role="group" aria-label={t("board.viewLabel")}>
+          <button className={view === "board" ? "on" : ""} aria-pressed={view === "board"} title={t("board.toggleTitle")}
+            onClick={() => setView("board")}>{t("board.toBoard")}</button>
+          <button className={view !== "board" ? "on" : ""} aria-pressed={view !== "board"} onClick={() => setView("flow")}>{t("board.toFlow")}</button>
+        </span>
+        {!board && <>
+          <span className="sep" />
+          <span className="tb-flow">
+            {dirty && <span className="dirty-dot" aria-hidden="true" title={t("app.unsaved")} />}
+            <select id="flow-select" value={current ?? ""} aria-label={t("app.flowLabel")} aria-describedby={dirty ? "flow-dirty" : undefined}
+              onChange={(e) => switchFlow(e.target.value)}>
+              {flows.map((f) => <option key={f.name} value={f.name} title={f.name}>{f.title}{f.valid ? "" : " ⚠"}
+                {f.public ? ` · ${t("loc.public")}` : f.location && f.location !== "local" && f.location !== "workspace" ? ` · ${f.location}` : ""}</option>)}
+            </select>
+            {dirty && <span id="flow-dirty" className="sr-only">{t("app.unsaved")}</span>}
+          </span>
+          <button className="tb-flowmenu" aria-label={t("app.flowActions")} title={t("app.flowActions")} aria-haspopup="menu" disabled={!current}
+            onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); flowMenu(r.left, r.bottom + 2); }}>
+            <span className="tb-flowmenu-text" aria-hidden="true">{t("app.flowMenu")} </span>▾</button>
+          {currentFlow && <button className="tb-loc" title={t("loc.moveTitle")} onClick={moveFlow}
+            aria-label={t("loc.chipLabel", { place: currentFlow.public ? t("loc.public") : locLabel(t, currentFlow.location ?? "local") })}>
+            <LocationBadge loc={currentFlow.location} isPublic={currentFlow.public} /></button>}
+          <button className={`tb-status ${statusKind}`} data-status={statusKind} onClick={() => { setTab("problems"); togglePanel("bottom", true); }}>
+            {statusKind === "bad" ? <>✕ {tn("app.problems", errors.length)}</>
+              : statusKind === "warn" ? <>⚠ {tn("app.warnings", warnings.length)}</>
+              : statusKind === "pending" ? t("app.checking") : t("app.valid")}
+          </button>
+        </>}
+      </div>
       <span className="grow" />
-      {msg && <span className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</span>}
-      {!board && <span className={`status ${val?.ok ? "ok" : "bad"}`} onClick={() => setTab("problems")}>
-        {val?.ok ? t("app.valid") : tn("app.problems", errors.length)}
-      </span>}
-      {!board && <span className="panel-toggles" role="group" aria-label={t("app.panels")}>
-        {([["pal", "panelLeft", "Ctrl+B"], ["bottom", "panelBottom", "Ctrl+J"], ["insp", "panelRight", "Ctrl+Alt+B"]] as const)
-          .map(([p, icon, keys]) => (
-            <button key={p} className={`icon-btn${hidden[p] ? "" : " on"}`} aria-pressed={!hidden[p]}
-              title={`${t(`app.panel.${p}`)} (${keys})`} aria-label={t(`app.panel.${p}`)} onClick={() => togglePanel(p)}>
-              <Icon id={icon} size={16} />
-            </button>))}
-      </span>}
-      <select className="lang" value={lang} title={t("app.language")} aria-label={t("app.language")}
-        onChange={(e) => setLang(e.target.value as Lang)}>
-        {Object.entries(LANGS).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
-      </select>
-      <select className="node-style" value={nodeStyle} title={t("app.nodeStyle")} aria-label={t("app.nodeStyle")}
-        onChange={(e) => setNodeStyle(e.target.value as NodeStyle)}>
-        {NODE_STYLES.map((k) => <option key={k} value={k}>{t(`app.nodeStyle.${k}`)}</option>)}
-      </select>
-      <select className="theme" value={theme} title={t("app.theme")} aria-label={t("app.theme")}
-        onChange={(e) => setTheme(e.target.value as Theme)}>
-        {(Object.keys(THEMES) as Theme[]).map((k) => <option key={k} value={k}>{t(`theme.${k}`)}</option>)}
-      </select>
-      {!board && <button className="primary" onClick={save} disabled={!dirty} title="Ctrl+S">
-        {dirty ? t("app.save") : t("app.saved")}
-      </button>}
+      <div className="tb-zone">
+        <button onClick={() => createFlow()}>{t("app.new")}</button>
+        {!board && <>
+          <span className="sep" />
+          <span className="tb-history" role="group" aria-label={t("app.history")}>
+            <button onClick={undo} disabled={!past.current.length} aria-label={t("app.undo")} title={t("app.undoTitle")}
+              aria-keyshortcuts="Control+Z"><Icon id="undo" size={16} /></button>
+            <button onClick={redo} disabled={!future.current.length} aria-label={t("app.redo")} title={t("app.redoTitle")}
+              aria-keyshortcuts="Control+Y Control+Shift+Z"><Icon id="redo" size={16} /></button>
+          </span>
+          {dirty
+            ? <button className="primary tb-save" onClick={save} aria-keyshortcuts="Control+S" title={t("app.saveTitle")}>
+                {t("app.save")}<kbd aria-hidden="true">Ctrl+S</kbd></button>
+            : <button className="tb-saved" aria-disabled="true" title={t("app.allSaved")} onClick={() => undefined}>✓ {t("app.saved")}</button>}
+          <button className={`tb-run btn-run ${runShown}`} onClick={runFlow} aria-keyshortcuts="Control+Enter"
+            aria-label={runShown === "running" ? t("app.runningLabel") : runShown === "gate" ? t("app.needsYouLabel") : t("app.runFlow")}
+            title={runShown === "idle" ? t("app.runFlowTitle") : t("app.openRun")}>
+            <span aria-hidden="true">{runShown === "running" ? "●" : runShown === "gate" ? "?" : "▶"}</span>
+            {runShown === "running" ? t("app.running") : runShown === "gate" ? t("app.needsYou") : t("app.runFlow")}</button>
+        </>}
+        <button className="tb-connmenu" aria-haspopup="menu" aria-label={t("app.connections")} title={t("app.connectionsTitle")}
+          onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenu({ x: r.right - 180, y: r.bottom + 2, title: t("app.connections"), items: [
+            { label: `${t("app.connectors")}…`, onSelect: () => setShowConns(true) },
+            { label: `${t("app.providers")}…`, onSelect: () => setShowProviders({}) },
+          ] }); }}>{t("app.connections")} ▾</button>
+        <button className="tb-conn" onClick={() => setShowConns(true)} aria-label={t("app.connectors")} title={t("app.connectors")}>
+          <Icon id="database" size={16} /><span className="tb-conn-text" aria-hidden="true">{t("app.connectors")}</span></button>
+        <button className="tb-conn" onClick={() => setShowProviders({})} aria-label={t("app.providers")} title={t("app.providersTitle")}>
+          <Icon id="cloud" size={16} /><span className="tb-conn-text" aria-hidden="true">{t("app.providers")}</span></button>
+        <Prefs theme={theme} setTheme={setTheme} nodeStyle={nodeStyle} setNodeStyle={setNodeStyle}
+          panels={board ? null : hidden} togglePanel={togglePanel} />
+      </div>
+      <div className="sr-only" role="status" aria-live="polite">{msg?.text ?? ""}</div>
+      {msg && <span className={`msg tb-toast${msg.bad ? " bad" : ""}`} aria-hidden="true">{msg.text}</span>}
     </header>
   );
   if (view === "board" && catalog.workspace) return (
@@ -489,37 +557,8 @@ function Editor() {
     } as CSSProperties}>
       {header}
 
-      <aside className="palette">
-        <h2>{t("palette.add")}</h2>
-        {PALETTE.map((p) => (
-          <div key={p.kind} className={`pal ${p.kind}`} draggable title={t(p.hint)}
-            onDragStart={(e) => { e.dataTransfer.setData("application/x-flow-node", p.kind); e.dataTransfer.effectAllowed = "move"; }}
-            onClick={() => addNode(p.kind)}>
-            <b>{t(p.label)}</b><span>{t(p.hint)}</span>
-          </div>
-        ))}
-        <p className="muted small">{t("palette.help")}</p>
-        <h2 title={t("palette.libraryHint")} className="pal-head">{t("palette.library")}
-          <button className="small" onClick={() => setShowLibrary(true)} title={t("libm.manage")}>{t("libm.manage")}</button></h2>
-        {library.length === 0 && <p className="muted small">{t("palette.libraryEmpty")}</p>}
-        {library.map((l) => (
-          <div key={l.id} className="pal lib" draggable title={`${l.description}\n${t("palette.libraryHint")}`}
-            onDragStart={(e) => { e.dataTransfer.setData("application/x-flow-library", l.id); e.dataTransfer.effectAllowed = "copy"; }}
-            onClick={() => insertLibrary(l)}>
-            <b><AgentIcon icon={l.icon} size={14} /> {l.title}</b>
-            <span>{l.description}</span>
-            <span className="pal-src">{l.source === "core" ? t("palette.libCore") : l.source === "local" ? t("palette.libLocal") : l.source}</span>
-          </div>
-        ))}
-        <h2>{t("palette.tools")}</h2>
-        <ul className="catalog">
-          {catalog.servers.map((s) => (
-            <li key={s}><b>{s}</b>
-              <ul>{catalog.tools.filter((t) => t.server === s).map((t) => <li key={t.id} title={t.description}>{t.name}</li>)}</ul>
-            </li>
-          ))}
-        </ul>
-      </aside>
+      <Palette catalog={catalog} library={library} addNode={(k) => addNode(k)} insertLibrary={(l) => insertLibrary(l)}
+        manage={() => setShowLibrary(true)} />
 
       <main className={`canvas${assistBusy ? " busy" : ""}`} onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}
         onKeyDown={onCanvasKey}>
@@ -545,12 +584,17 @@ function Editor() {
             onBeforeDelete={async ({ nodes: ns, edges: es }) => ({ nodes: ns.filter((n) => n.id !== doc.spec.start), edges: es })}
             onNodeDragStart={() => { if (doc) { past.current.push(doc); future.current = []; } }}
             onPaneClick={() => setSel(null)} deleteKeyCode={["Delete", "Backspace"]}
-            fitView minZoom={0.2} maxZoom={2} proOptions={{ hideAttribution: true }}>
+            minZoom={0.2} maxZoom={2} proOptions={{ hideAttribution: true }}>
             <Background gap={20} />
             <Controls />
             <MiniMap pannable zoomable style={{ width: 160, height: 110 }} />
           </ReactFlow>
         )}
+        {doc && <div className="canvas-tools" role="toolbar" aria-label={t("app.canvasTools")}>
+          <button onClick={arrange}>{t("app.arrange")}</button>
+          <button className={showData ? "on" : ""} aria-pressed={showData} onClick={toggleData}
+            title={t("app.dataLinksTitle")}>{t("app.dataLinks")}</button>
+        </div>}
         {menu && <ContextMenu menu={menu} onClose={closeMenu} />}
       </main>
 
@@ -585,6 +629,7 @@ function Editor() {
         {doc && current && <div className="right-body" hidden={right !== "run"}>
           <RunPanel key={current} flow={current} doc={doc} dirty={dirty} mock={catalog.mock} onTrace={setTrace} request={runReq}
             focus={sel?.kind === "node" ? sel.id : null} onFocusNode={(id) => setSel({ kind: "node", id })} onAttention={setRunNeeds}
+            onRunState={setRunState}
             onRetrySetting={() => {  // the retry card's link: Properties of the flow, at its Retry field
               setSel(null); setRight("props");
               setTimeout(() => {
@@ -600,11 +645,18 @@ function Editor() {
         </div>}
       </aside>
 
-      <footer className="bottom">
+      <footer className={`bottom${hidden.bottom && errors.length ? " has-bad" : hidden.bottom && warnings.length ? " has-warn" : ""}`}>
         <div className="tabs">
-          <button className={tab === "problems" ? "on" : ""} onClick={() => setTab("problems")}>{t("bottom.problems", { n: errors.length })}{warnings.length ? ` · ⚠ ${warnings.length}` : ""}</button>
-          <button className={tab === "flow" ? "on" : ""} onClick={() => setTab("flow")}>{t("bottom.flow")}</button>
-          {val?.allowed_tools && <span className="muted small">{t("bottom.allowedTools", { n: val.allowed_tools.length })}</span>}
+          <button className={tab === "problems" && !hidden.bottom ? "on" : ""} onClick={() => { setTab("problems"); togglePanel("bottom", true); }}>
+            {t("bottom.problemsTab")}
+            {errors.length > 0 && <span className="cnt bad" aria-label={tn("app.problems", errors.length)}>✕ {errors.length}</span>}
+            {warnings.length > 0 && <span className="cnt warn" aria-label={tn("app.warnings", warnings.length)}>⚠ {warnings.length}</span>}</button>
+          {doc?.spec.execution !== "graph" && <button className={tab === "flow" && !hidden.bottom ? "on" : ""} onClick={() => { setTab("flow"); togglePanel("bottom", true); }}>{t("bottom.flow")}</button>}
+          {val?.allowed_tools && <span className="muted small" title={t("bottom.allowedToolsTitle")}>{t("bottom.allowedTools", { n: val.allowed_tools.length })}</span>}
+          <span className="grow" />
+          <button className="icon-btn bottom-toggle" aria-expanded={!hidden.bottom} aria-keyshortcuts="Control+J"
+            aria-label={hidden.bottom ? t("bottom.open") : t("bottom.close")} title={`${hidden.bottom ? t("bottom.open") : t("bottom.close")} (Ctrl+J)`}
+            onClick={() => togglePanel("bottom")}>{hidden.bottom ? "▴" : "▾"}</button>
         </div>
         <div className="tab-body">
           {tab === "problems" && (errors.length === 0 && warnings.length === 0
@@ -619,7 +671,7 @@ function Editor() {
                   ⚠ {e.loc && <code>{e.loc}</code>} {localizeServer(e, e.msg, lang)}
                 </li>))}
             </ul>)}
-          {tab === "flow" && <pre className="mono">{val?.flow_section ?? t("bottom.flowPending")}</pre>}
+          {tab === "flow" && doc?.spec.execution !== "graph" && <pre className="mono">{val?.flow_section ?? t("bottom.flowPending")}</pre>}
         </div>
       </footer>
       <div className="split-host split-pal">

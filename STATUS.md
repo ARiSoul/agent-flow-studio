@@ -25,6 +25,16 @@ terms — no emails —, what was done) and commit + push.
   (subagent) over 4 rounds to 10/10: verdict + gains first, grouped sections, long lists
   collapse ("Show all"), focus and footer shadow checked with Playwright; the dark theme's
   `--on-accent` is now dark (#0f1218) for AA contrast on all primary buttons.
+- **Whole-editor redesign** with three reviewers (DevOps technical brief → designer spec → end user
+  feedback, 6 rounds until all three gave 10/10): a one-row top bar with Undo/Redo next to Save and
+  a clear dirty state, "Run flow" in the bar (follows the run: Running / Needs you), one status
+  vocabulary (✓ valid / ⚠ warnings / ✕ problems), "View" popover (language, theme, node style,
+  panels), Connections menu in small windows, Flow ▾ menu (Delete is there), a tile sidebar,
+  readable node cards (name in the head, type tags in words with colors, run state as a shape),
+  bottom panel collapsed by default, a first view that shows the flow. Bugs found on the way: the
+  status said "valid" before validating, "Needs you" missed write approvals, a big flow could open
+  off-screen (React Flow's fitView ran after ours). New E2E: small window, 5 themes, 40-agent flow
+  (opens in ~0.3 s, an edit in ~50 ms).
 - **Run panel cards redesigned** (`RunAttention.tsx`, same design critic, 4 rounds to 10/10): one
   shell (`Card`) whose left border says what it is (--human your decision, --bad failed,
   --accent paused), one header row + one "ask" line, one primary, destructive actions on the
@@ -608,3 +618,6 @@ start the editor or the CLI (the studio does not read `.env`).
   dropped.
 - 2026-11-27 · home machine (account B) · Run panel cards redesigned with a design critic (10/10);
   E2E test for the retry card.
+- 2026-11-28 · home machine (account B) · Whole-editor redesign reviewed by DevOps, designer and end
+  user to 10/10: top bar, Run flow, status words, View popover, sidebar, node cards, first view;
+  E2E for layout, themes and a big flow.
