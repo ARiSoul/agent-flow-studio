@@ -276,12 +276,26 @@ connectors (Azure, Azure DevOps, GitHub, APIs) and writes with controlled autono
   side panel: Overview (Needs attention: waiting → failed → broken; Other recent runs), Settings &
   context, Assistant. `envKind.tsx` (`useProd`): every "start a run" button says "Run in prod" in
   a prod environment (`.btn-run.prod`). E2E: `tests/e2e/test_board_e2e.py` (`game` fixture).
+  `/api/board` scans the runs once (`Runner.past_by_flow`); a 40-flow board is timed in E2E.
+  Windows use one shell, `Modal.tsx` (role=dialog, focus in/out and trapped, Escape on the page
+  unless a dialog or menu is on top, `dirty` → "Discard your changes?" via `useModalGuard`, also
+  for switching the item in a list; a live region; the editor's own shortcuts are off while a
+  `.modal-shell` is open). Connectors (`Connections.tsx`): list with state and access tags, "+ New
+  connector…" type picker (`conn.type.*`), a status card first (secret by keyring value or env
+  name, sign-in, ▶ Test connection — off without a secret or with unsaved edits), rare settings in
+  `<details>` remembered per type, footer Save · Revert · ⋯. Agent library: Built-in/Local/
+  Workspace/Extension (`libLocLabel`), `POST /api/agents/check` while typing, Save in place then
+  move. History: plain causes (`plainCause`), `unpriced` runs counted ("n runs not priced").
+  E2E: `tests/e2e/test_windows_e2e.py`.
 
 ## Conventions
 - Python ≥ 3.10, typing, `ruff` (line 100). Flow prompts in `flows/<flow>/prompts/*.md`.
 - Tools return `ok(...)`/`err(...)` from `tools/common.py`.
 - Core tests use the generic flow `tests/fixtures/flows/pipeline` and must pass without extensions
   (`AFS_NO_EXTENSIONS=1 pytest tests`). Extension tests live in `extensions/<name>/tests`.
+- Tests never touch the machine: `tests/conftest.py` gives every test temporary connectors
+  (local and public), providers, workspaces, agent library, commands and Claude config, and an
+  in-memory keyring.
 
 ## SDK (verified against claude-agent-sdk 0.2.185 / CLI 2.1.328)
 Delegation: the `Agent` tool (`Task` is an alias). `@tool` returns `{"content": [...], "is_error"?}`.

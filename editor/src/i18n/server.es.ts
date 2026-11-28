@@ -2,6 +2,8 @@
 // shows the server text. tests/test_messages.py checks that every code in the server has a line
 // here with the same {placeholders}. One entry per line.
 export const serverEs: Record<string, string> = {
+  "library.yaml_invalid": "definición: YAML no válido: {reason}",
+  "library.not_mapping": "definición: un mapa (description, tools, inputs…)",
   "compile.action_params": "agente {agent}: parámetros de {action}: desconocidos {extra}; faltan {lacking}",
   "compile.action_unknown": "agente {agent}: el conector {connector} no tiene la acción {action}",
   "compile.action_write": "agente {agent}: {action} es una acción de escritura; un nodo de acción solo ejecuta acciones de lectura (las escrituras pasan por un agente y su autonomía)",

@@ -100,7 +100,9 @@ def _totals(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "failed": sum(1 for r in runs if r["status"] == "error"),
             "lost": sum(1 for r in runs if r["status"] == "lost"),
             "median": took[len(took) // 2] if took else None,
-            "cost": round(sum(r["cost"] for r in runs), 4)}
+            "cost": round(sum(r["cost"] for r in runs), 4),
+            # runs with a step on a gateway: their cost is missing from `cost` (it is lower)
+            "unpriced": sum(1 for r in runs if r.get("unpriced"))}
 
 
 def _restore_engine(engine: GraphEngine, events: list[dict[str, Any]], run: Run) -> None:

@@ -17,11 +17,12 @@ from ... import workspaces
 from ...builder import convert
 from ...builder.compile import find_flow, flow_locations
 from ...builder.library import LibraryError, agents_dict, delete_agent, move_agent, save_local
+from ...builder.library import check as library_check
 from ...builder.spec import FlowSpec
 from ...builder.templates import TemplateError, templates_dict
 from ...builder.templates import render as render_template
 from ...builder.types import IOType
-from ...messages import to_json
+from ...messages import msg, to_json
 from ...publish import (
     PUBLIC,
     PrivateTermsError,
@@ -310,6 +311,25 @@ def register(app: FastAPI, ctx: Ctx) -> None:
         except LibraryError as e:
             raise HTTPException(409 if "already exists" in str(e) else 422, str(e)) from e
         return {"id": a.id, "hash": a.hash, "source": a.source, "notes": notes}
+
+    @app.post("/api/agents/check", dependencies=[Depends(csrf)])
+    def check_library_agent(body: LibraryBody) -> dict[str, Any]:
+        """What Save would refuse, without saving (the library window checks while you type)."""
+        def refused(m: Any) -> dict[str, Any]:  # the text, plus its code when it has one
+            return {"ok": False, "error": str(m), **(to_json(m) or {})}
+        try:
+            raw = yaml.safe_load(body.agent_yaml or "") or {} if body.agent_yaml is not None else body.agent or {}
+        except yaml.YAMLError as e:
+            return refused(msg("library.yaml_invalid", "definition: invalid YAML: {reason}",
+                               reason=str(e).splitlines()[0]))
+        if not isinstance(raw, dict):
+            return refused(msg("library.not_mapping",
+                               "definition: a mapping (description, tools, inputs…)"))
+        try:
+            library_check(body.id, body.title, raw, body.prompt, body.location)
+        except LibraryError as e:
+            return refused(e.args[0] if e.args else str(e))
+        return {"ok": True}
 
     @app.delete("/api/agents/{agent_id}", dependencies=[Depends(csrf)])
     def delete_library_agent(agent_id: str) -> dict[str, Any]:

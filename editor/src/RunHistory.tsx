@@ -2,17 +2,22 @@
 // search and a state filter (on the server), a page at a time, grouped by day; each row opens its
 // run, and its menu re-runs it, edits and runs it, runs it from a step, compares it with another run
 // (Compare), renames or deletes it (to the trash, where it can be restored).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "./api";
 import { useDialog } from "./Dialog";
 import { useI18n } from "./i18n";
 import { fullTime, MoreMenu, oneLine, RUN_ICON, statusText, when } from "./RunParts";
-import { count, duration, parseLines, shortModel, stepsOf, usd, wordDiff, type Step } from "./runSteps";
+import { plainCause } from "./RunAttention";
+import { useProd } from "./envKind";
+import { Modal } from "./Modal";
+import { count, duration, parseLines, shortModel, stepsOf, TRANSIENT, usd, wordDiff, type Step } from "./runSteps";
 import type { FlowRaw, RunIO } from "./types";
 
 export type PastRun = { input: string; run: string; started: number; ended?: number | null; status: string; gate?: string | null;
   failed?: string | null; message?: string | null; cost: number; mode?: string; target?: string | null; execution?: string;
   title?: string; open?: boolean; attempts?: number;
+  /** A step ran on a provider with no list price (a gateway): `cost` leaves it out. */
+  unpriced?: boolean;
   /** Seconds it waited for the person at human gates (part of its time). */
   waited?: number;
   /** It started from the queue (when it was queued). */
@@ -20,7 +25,7 @@ export type PastRun = { input: string; run: string; started: number; ended?: num
   /** A decided run: the decision that waits for its turn. */
   decision?: string | null };
 type Trashed = { name: string; input: string; title?: string; started?: number; deleted: number };
-type Totals = { runs: number; failed: number; lost?: number; median: number | null; cost: number };
+type Totals = { runs: number; failed: number; lost?: number; median: number | null; cost: number; unpriced?: number };
 type Stats = Totals & { days?: number; prev?: Totals };
 const WINDOWS = [7, 30, 0];  // days (0: all)
 
@@ -35,17 +40,21 @@ async function send(url: string, method: string, body?: unknown) {
   return d;
 }
 
-export function HistoryView({ flow, spec, current, refresh, graph, onOpen, onOpenStep, onRerun, onEdit, onFromStep, onChanged }: {
+export function HistoryView({ flow, spec, current, refresh, graph, onOpen, onOpenStep, onRerun, onEdit, onFromStep, onChanged, onRetrySetting }: {
   flow: string; spec: FlowRaw; current?: string; refresh: unknown; graph: boolean;
   onOpen: (input: string) => void; onOpenStep: (input: string, node: string) => void;
   onRerun: (p: PastRun) => void; onEdit: (input: string) => void;
   onFromStep: (input: string) => void;
   /** A run was renamed, deleted or restored (`gone`: the folder no longer exists). */
   onChanged: (input: string, gone: boolean) => void;
+  /** Opens the flow's Retry setting (Properties). */
+  onRetrySetting?: () => void;
 }) {
   const i18n = useI18n();
   const { t, lang } = i18n;
   const dialog = useDialog();
+  const prod = useProd();
+  const retryOff = (spec as { retry?: { transient?: number } }).retry?.transient === 0;
   const [items, setItems] = useState<PastRun[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -122,6 +131,7 @@ export function HistoryView({ flow, spec, current, refresh, graph, onOpen, onOpe
             {stats.median !== null && <span title={t("rp.statMedianTitle")}>{t("rp.statMedian")} <b>{duration(stats.median)}</b></span>}
             <span><b>{usd(stats.cost)}</b> {t("rp.statSpent")} · {t("rp.perRun", { cost: usd(stats.cost / stats.runs) })}
               {stats.prev && stats.prev.runs > 0 && <span className="muted" title={t("rp.trendTitle")}> {t("rp.before", { v: usd(stats.prev.cost / stats.prev.runs) })}</span>}</span>
+            {!!stats.unpriced && <span className="rp-unpriced" title={t("hist.unpricedTitle")}>{i18n.tn("hist.unpriced", stats.unpriced)}</span>}
           </>}
         </div>)}
       <div className="row">
@@ -137,14 +147,16 @@ export function HistoryView({ flow, spec, current, refresh, graph, onOpen, onOpe
         {items.map((p) => {
           const d = day(p.started);
           const head = d !== lastDay ? (lastDay = d) : null;
-          const reason = p.status === "error" ? `${p.failed ? `${p.failed}: ` : ""}${(p.message ?? "").replace(/^agent [^:]+: /, "")}`
+          const raw = p.status === "error" ? `${p.failed ? `${p.failed}: ` : ""}${(p.message ?? "").replace(/^agent [^:]+: /, "")}` : "";
+          const reason = p.status === "error" ? `${p.failed ? `${p.failed}: ` : ""}${plainCause((p.message ?? "").replace(/^agent [^:]+: /, ""), t)}`
             : p.status === "gate" && p.gate ? p.gate : p.status === "lost" ? t("rp.lostWhy")
             : p.status === "decided" ? t("rp.decidedRow", { decision: i18n.tOr(`run.decision.${p.decision ?? ""}`, p.decision ?? "") }) : "";
           const open = why.has(p.input);
           return [
-            head && <li key={`d-${p.input}`} className="rp-day" aria-hidden="true">{head}</li>,
+            head && <li key={`d-${p.input}`} className="rp-day"><h3>{head}</h3></li>,
             <li key={p.input} className={current === p.input ? "on" : undefined}>
-              <button className="rp-h-main" onClick={() => onOpen(p.input)} title={t("run.pastOpenTitle")}>
+              <button className="rp-h-main" onClick={() => onOpen(p.input)} title={t("run.pastOpenTitle")}
+                aria-label={t("hist.rowLabel", { run: p.title || p.input, status: statusText(i18n, p.status), time: when(p.started, lang) })}>
                 <span className={`rp-h-ico st-${p.status}`} aria-hidden="true">{RUN_ICON[p.status] ?? "•"}</span>
                 <span className="rp-h-text">
                   <span className="rp-h-title">{p.title || p.input}</span>
@@ -154,7 +166,8 @@ export function HistoryView({ flow, spec, current, refresh, graph, onOpen, onOpe
                     <span>{when(p.started, lang)}</span>
                     {p.ended && p.started ? <span>⏱ {duration(p.ended - p.started)}{(p.waited ?? 0) >= 1
                       ? <span className="muted"> ({t("rp.waitedYou", { t: duration(p.waited) })})</span> : null}</span> : null}
-                    {p.cost > 0 && <span>{usd(p.cost)}</span>}
+                    {p.unpriced ? <span title={t("hist.unpricedRow")}>{p.cost > 0 ? `${usd(p.cost)} + ?` : "—"}</span>
+                      : p.cost > 0 && <span>{usd(p.cost)}</span>}
                     {p.mode && p.mode !== "full" && <span>{i18n.tOr(`run.mode.${p.mode}`, p.mode)}{p.target ? ` ${p.target}` : ""}</span>}
                     {p.from_queue ? <span title={t("rp.fromQueueTitle", { t: when(p.from_queue, lang) })}>⧗ {t("rp.fromQueue")}</span> : null}
                     {(p.attempts ?? 1) > 1 && <span title={t("rp.attemptsRunTitle")}>{i18n.tn("rp.attempts", p.attempts ?? 1)}</span>}
@@ -173,9 +186,19 @@ export function HistoryView({ flow, spec, current, refresh, graph, onOpen, onOpe
               ]} />
               {reason && (
                 <button className={`rp-h-why${p.status === "gate" ? " wait" : p.status === "lost" ? " lost" : ""}${open ? " open" : ""}`} aria-expanded={open}
-                  title={reason}
+                  title={raw || reason}
                   onClick={() => setWhy((s) => { const n = new Set(s); if (n.has(p.input)) n.delete(p.input); else n.add(p.input); return n; })}>
                   {p.status === "gate" ? "⏸ " : p.status === "lost" ? "? " : "✗ "}{reason}</button>)}
+              {(p.status === "error" || p.status === "lost") && (
+                <div className="rp-h-next">
+                  {graph
+                    ? <button className={`small btn-run${prod ? " prod" : ""}`} aria-label={t("hist.resumeOf", { run: p.title || p.input })}
+                      title={t("hist.resumeTitle")} onClick={() => onOpen(p.input)}>▶ {t(prod ? "hist.resumeProd" : "hist.resume")}</button>
+                    : <button className={`small btn-run${prod ? " prod" : ""}`} aria-label={t("hist.runAgainOf", { run: p.title || p.input })}
+                      onClick={() => onRerun(p)}>▶ {t(prod ? "hist.runAgainProd" : "hist.runAgain")}</button>}
+                  {retryOff && TRANSIENT.test(raw) && <span className="muted small">{t("hist.retryOff")}
+                    {onRetrySetting && <> <button className="link small" onClick={onRetrySetting}>{t("hist.retrySetting")}</button></>}</span>}
+                </div>)}
             </li>];
         })}
       </ul>
@@ -206,7 +229,6 @@ export function Compare({ flow, spec, base, onClose, onOpenStep }: {
   const { t, lang } = i18n;
   const [all, setAll] = useState<PastRun[] | null>(null);
   const [other, setOther] = useState("");
-  const [find, setFind] = useState("");
   const [io, setIo] = useState<[RunIO | null, RunIO | null]>([null, null]);
   const [steps, setSteps] = useState<[Step[], Step[]]>([[], []]);
   const [only, setOnly] = useState(false);
@@ -229,11 +251,6 @@ export function Compare({ flow, spec, base, onClose, onOpenStep }: {
       .then((x) => (x.ok ? x.json() : { text: "" })).then((d: { text: string }) => stepsOf(spec, parseLines(`${d.text}\n`).events))
       .catch(() => [] as Step[]))).then((x) => setSteps([x[0], x[1]]));
   }, [flow, spec, a, b]);
-  useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [onClose]);
   const took = (r: PastRun) => (r.ended ? r.ended - r.started : undefined);
   const delta = (x: number | undefined, y: number | undefined, f: (n: number) => string) => {
     if (x === undefined || y === undefined) return "";
@@ -266,19 +283,13 @@ export function Compare({ flow, spec, base, onClose, onOpenStep }: {
   const stepCell = (r: PastRun, x: Step | undefined) => x
     ? <button className="rp-cmp-step" title={t("rp.openStepIn", { run: r.title || r.input })} onClick={() => onOpenStep(r.input, x.node)}>{stepText(x)}</button>
     : <span className="muted">—</span>;
-  const shownRuns = (all ?? []).filter((x) => !find.trim() || `${x.title ?? ""} ${x.input}`.toLowerCase().includes(find.trim().toLowerCase()));
   return (
-    <div className="modal" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box out-viewer" role="dialog" aria-label={t("rp.compare")}>
-        <div className="panel-head"><h2>{t("rp.compare")}</h2><span className="grow" />
-          <label className="small row"><input type="checkbox" checked={only} onChange={(e) => setOnly(e.target.checked)} /> {t("rp.cmpOnly")}</label>
-          <button className="small" onClick={onClose}>{t("conn.close")}</button></div>
+    <Modal title={t("rp.compare")} onClose={onClose} wide className="out-viewer"
+      head={<label className="small row"><input type="checkbox" checked={only} onChange={(e) => setOnly(e.target.checked)} /> {t("rp.cmpOnly")}</label>}>
         <div className="row small rp-cmp-pick">
           <span className="muted">{t("rp.cmpWith", { name: a.title || a.input })}</span>
-          <input type="search" placeholder={t("rp.searchRuns")} aria-label={t("rp.searchRuns")} value={find} onChange={(e) => setFind(e.target.value)} />
-          <select value={other} onChange={(e) => setOther(e.target.value)} aria-label={t("rp.compareWith")}>
-            {shownRuns.map((x) => <option key={x.input} value={x.input}>{`${x.title || x.input} · ${statusText(i18n, x.status)} · ${when(x.started, lang)}`}</option>)}
-          </select>
+          <RunPicker runs={all ?? []} value={other} onPick={setOther}
+            label={(x) => `${x.title || x.input} · ${statusText(i18n, x.status)} · ${when(x.started, lang)}`} />
         </div>
         <div className="out-viewer-body">
           {all && !all.length && <p className="muted">{t("rp.compareNone")}</p>}
@@ -301,6 +312,44 @@ export function Compare({ flow, spec, base, onClose, onOpenStep }: {
           </table>}
           <p className="muted small">{t("rp.cmpHint")}</p>
         </div>
-      </div>
-    </div>);
+    </Modal>);
+}
+
+/** One field to pick the other run of Compare: type to filter (name, state, date), arrows move,
+ * Enter picks, Escape closes the list (the window stays). */
+function RunPicker({ runs, value, onPick, label }: {
+  runs: PastRun[]; value: string; onPick: (input: string) => void; label: (r: PastRun) => string;
+}) {
+  const { t } = useI18n();
+  const [text, setText] = useState<string | null>(null);  // null: shows the picked run
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState(0);
+  const id = useId();
+  const picked = runs.find((x) => x.input === value);
+  const words = (text ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = runs.filter((x) => words.every((w) => label(x).toLowerCase().includes(w)));
+  const pick = (r?: PastRun) => { if (r) onPick(r.input); setText(null); setOpen(false); };
+  return (
+    <div className="run-picker">
+      <input role="combobox" aria-expanded={open} aria-controls={`${id}-list`} aria-autocomplete="list"
+        aria-activedescendant={open && shown[at] ? `${id}-${at}` : undefined} aria-label={t("cmp.with")}
+        value={text ?? (picked ? label(picked) : "")} placeholder={t("rp.searchRuns")}
+        onFocus={(e) => e.currentTarget.select()} onClick={() => setOpen(true)}
+        onBlur={() => setTimeout(() => { setOpen(false); setText(null); }, 120)}
+        onChange={(e) => { setText(e.target.value); setAt(0); setOpen(true); }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setAt((i) => Math.min(i + 1, shown.length - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setAt((i) => Math.max(i - 1, 0)); }
+          else if (e.key === "Enter" && open) { e.preventDefault(); pick(shown[at]); }
+          else if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); setOpen(false); setText(null); }
+        }} />
+      {open && <ul id={`${id}-list`} role="listbox" className="run-picker-list" aria-label={t("cmp.with")}>
+        {shown.length === 0 && <li className="muted small">{t("rp.noMatch")}</li>}
+        {shown.map((x, i) => (
+          <li key={x.input} id={`${id}-${i}`} role="option" aria-selected={x.input === value}
+            className={`${i === at ? "at" : ""}${x.input === value ? " on" : ""}`}
+            onMouseDown={(e) => { e.preventDefault(); pick(x); }}>{label(x)}</li>))}
+      </ul>}
+    </div>
+  );
 }

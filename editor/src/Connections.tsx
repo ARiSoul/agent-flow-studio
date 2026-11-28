@@ -1,9 +1,16 @@
-import { useEffect, useState } from "react";
+// The Connectors window: the list (name, type, environment, state), one "+ New connector…" with
+// a type picker, and the selected connector with what people do most first (secret, sign-in,
+// Test connection) and the rare settings in folded sections (remembered per type). The shared
+// Modal shell asks before unsaved edits are lost (Escape, backdrop, ×, another connector).
+import { useEffect, useState, type ReactNode } from "react";
 import { errorText, PRIVATE_TERMS } from "./api";
 import { useDialog } from "./Dialog";
 import { LANGS, useI18n } from "./i18n";
 import { localizeServer, type ServerMsg } from "./i18n/server";
 import { locLabel } from "./LibraryManager";
+import { Modal, useModalGuard } from "./Modal";
+import { MoreMenu } from "./RunParts";
+import { shortPath } from "./Workspaces";
 import { useWorkspaceActions } from "./Workspaces";
 
 const MUTATE = { "Content-Type": "application/json", "X-Flow-Editor": "1" };
@@ -112,6 +119,24 @@ search_user:
     - extract_table: "table.results"
 `;
 
+/** A folded part of the form; whether it is open is kept per connector type (on this machine). */
+function Section({ id, type, title, open: first, children }: { id: string; type: string; title: string; open?: boolean; children: ReactNode }) {
+  const key = `afs.conn.open.${type}.${id}`;
+  const [open, setOpen] = useState(() => { try { const v = localStorage.getItem(key); return v === null ? !!first : v === "1"; } catch { return !!first; } });
+  return (
+    <details className="conn-sec" open={open} onToggle={(e) => {
+      const o = (e.currentTarget as HTMLDetailsElement).open; setOpen(o);
+      try { localStorage.setItem(key, o ? "1" : "0"); } catch { /* no storage */ }
+    }}>
+      <summary>{title}</summary>
+      <div className="conn-sec-body">{children}</div>
+    </details>
+  );
+}
+
+/** The type picker's groups: services, then websites (the apps with a sign-in come after). */
+const typeGroup = (k: string) => (k === "website" ? "web" : "service");
+
 const blank = (type: string, meta: Meta): Conn => ({ type, environment: "dev", auth: { method: meta.types[type].methods[0] } });
 const lines = (o?: Record<string, string>) => Object.entries(o ?? {}).map(([k, v]) => `${k}=${v}`).join("\n");
 const unlines = (s: string) => Object.fromEntries(s.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
@@ -148,20 +173,20 @@ export function Connections({ onClose }: { onClose: () => void }) {
     action, ok: x.ok, text: x.ok ? JSON.stringify(x.result, null, 2) : String(x.error),
     blocked: x.blocked, params: x.params ?? {}, ts: x.ts });
   const [allowPost, setAllowPost] = useState(false);  // the recorded draft lets the page POST
+  const [picking, setPicking] = useState(false);  // the type picker of a new connector
+  const [testOut, setTestOut] = useState<{ ok: boolean; text: string } | null>(null);
+  const [base, setBase] = useState("null");  // the form as saved (unsaved edits differ)
+  const dirty = form !== null && (sel === "" || JSON.stringify(form) !== base);
+  const guard = useModalGuard(dirty);
 
   const reload = async (pick?: string | null) => {
     const r = await fetch("/api/connections");
     const m = (await r.json()) as Meta;
     setMeta(m);
     const p = pick === undefined ? sel : pick;
-    if (p && m.connections[p]) { setSel(p); setName(p); setForm(structuredClone(m.connections[p])); }
+    if (p && m.connections[p]) { setSel(p); setName(p); setForm(structuredClone(m.connections[p])); setBase(JSON.stringify(m.connections[p])); }
   };
   useEffect(() => { reload().catch((e) => setMsg({ text: String(e), bad: true })); }, []); // eslint-disable-line
-  useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [onClose]);
   // back from the provider's sign-in tab: refresh only the sign-in state (keeps unsaved edits)
   useEffect(() => {
     const onFocus = () => {
@@ -185,7 +210,7 @@ export function Connections({ onClose }: { onClose: () => void }) {
     return () => window.clearInterval(id);
   }, [rec?.recording, rec?.name]);
 
-  if (!meta) return <div className="modal"><div className="modal-box">{t("conn.loading")}</div></div>;
+  if (!meta) return <Modal title={t("conn.title")} onClose={onClose}><p className="muted pad">{t("conn.loading")}</p></Modal>;
   const isNew = sel === "";
   const set = (p: Partial<Conn>) => setForm((f) => (f ? { ...f, ...p } : f));
   const setAuth = (p: Partial<Auth>) => setForm((f) => (f ? { ...f, auth: { ...f.auth, ...p } } : f));
@@ -226,13 +251,13 @@ export function Connections({ onClose }: { onClose: () => void }) {
   const test = () => run(async () => {
     if (!sel) return;
     const r = await req<{ ok: boolean; status?: number; elapsed_ms?: number; detail: string }>(`/api/connections/${sel}/test`, "POST");
-    setMsg({ text: `${r.ok ? "✓" : "✗"} ${r.status ? `HTTP ${r.status} · ` : ""}${r.elapsed_ms ? `${r.elapsed_ms} ms · ` : ""}${r.detail}`, bad: !r.ok });
+    setTestOut({ ok: r.ok, text: `${r.ok ? t("conn.testOk") : t("conn.testFailed")} · ${r.status ? `HTTP ${r.status} · ` : ""}${r.elapsed_ms ? `${r.elapsed_ms} ms · ` : ""}${r.detail}` });
   });
   const remove = () => run(async () => {
     if (!sel || !(await dialog.confirm({ title: t("conn.deleteTitle"), message: t("conn.confirmDelete", { name: sel }),
       ok: t("conn.delete"), danger: true }))) return;
     await req(`/api/connections/${sel}`, "DELETE");
-    setSel(null); setForm(null);
+    setSel(null); setForm(null); setBase("null");
     await reload(null);
   });
   const startSignIn = () => run(async () => {
@@ -333,44 +358,196 @@ export function Connections({ onClose }: { onClose: () => void }) {
     setForm(withPreset(form, key));
     if (isNew && !name) setName(key);
   };
-  const newFromPreset = (key: string) => {
-    setSel(""); setName(key); setForm(withPreset(blank("http_api", meta), key)); setMsg(null);
+  /** Shows another connector, the type picker or a new one, after asking about unsaved edits. */
+  const show = async (next: { sel: string | null; name: string; form: Conn | null; picking?: boolean }) => {
+    if (!(await guard())) return;
+    setSel(next.sel); setName(next.name); setForm(next.form); setBase(JSON.stringify(next.form));
+    setPicking(!!next.picking); setMsg(null); setTestOut(null);
   };
+  const newFromPreset = (key: string) => show({ sel: "", name: key, form: withPreset(blank("http_api", meta), key) });
+  const newOfType = (k: string) => show({ sel: "", name: "", form: blank(k, meta) });
+  const revert = () => { if (saved) { setForm(structuredClone(saved)); setBase(JSON.stringify(saved)); } setMsg(null); };
+  const typeLabel = (k: string) => tOr(`conn.type.${k}`, meta.types[k]?.label ?? k);
+  /** What a list row says about a connector: ready, no secret, not signed in. */
+  const stateOf = (c: Conn): { key: string; tone: string } =>
+    c.secret && !c.secret.set && !c.secret.optional ? { key: "conn.state.noSecret", tone: "warn" }
+      : c.oauth && !c.oauth.signed_in ? { key: "conn.state.signedOut", tone: "warn" }
+      : c.type === "website" && !c.web_session?.profile ? { key: "conn.state.signedOut", tone: "warn" }
+      : { key: "conn.state.ready", tone: "ok" };
+
+  const noSecret = !!(m?.secret && !m.optional && !savedSecret?.set);
+  // a website is tested with its browser session: none yet, nothing to test
+  const noSession = form?.type === "website" && !saved?.web_session?.profile;
+  const secretCard = form && m?.secret && (
+    <div className="conn-status-row">
+      <span className="conn-status-label">{t("conn.secret", { name: m.secret })}</span>
+      {isNew ? <span className="muted small">{t("conn.saveFirst")}</span>
+        : savedSecret?.set ? <span className="tag ok">{t("conn.secretSet", { source: savedSecret.source ?? "" })}</span>
+          : m.optional ? <span className="tag">{t("conn.secretOptional")}</span>
+            : <span className="tag warn">{t("conn.secretMissing")}</span>}
+      {!isNew && <div className="conn-secret-set">
+        <div className="row">
+          <input type="password" autoComplete="new-password" placeholder={t("conn.secretValue")} aria-label={t("conn.secretValue")}
+            value={secret} onChange={(e) => setSecret(e.target.value)} />
+          <button className="small" disabled={!secret || busy} onClick={() => saveSecret(false)}>{t("conn.keepSecret")}</button>
+        </div>
+        <div className="row">
+          <input placeholder={t("conn.envVar")} aria-label={t("conn.envVar")} value={envVar} onChange={(e) => setEnvVar(e.target.value.toUpperCase())} />
+          <button className="small" disabled={!/^[A-Z_][A-Z0-9_]*$/.test(envVar) || busy} onClick={() => saveSecret(true)}>{t("conn.use")}</button>
+        </div>
+        <span className="field-hint">{t("conn.secretNever")}</span>
+      </div>}
+    </div>);
+  const oauthCard = form && method === "oauth_browser" && (
+    <div className="conn-status-row">
+      <span className="conn-status-label">{t("conn.signin")}</span>
+      {signIn?.signed_in
+        ? <span className="tag ok">{signIn.expires_at ? t("conn.signedInUntil", { date: fmtDate(signIn.expires_at) }) : t("conn.signedIn")}
+          {signIn.refreshable ? ` · ${t("conn.renews")}` : ""}</span>
+        : <span className="tag warn">{t("conn.notSignedIn")}</span>}
+      {isNew || saved?.auth.method !== "oauth_browser"
+        ? <span className="field-hint">{t("conn.signInSaveFirst")}</span>
+        : <span className="row">
+          <button className="small btn-run" disabled={busy || dirty} title={dirty ? t("conn.saveFirstTest") : undefined} onClick={startSignIn}>{t("conn.signInBtn")}</button>
+          {signIn?.signed_in && <button className="small" disabled={busy} onClick={signOut}>{t("conn.signOut")}</button>}
+        </span>}
+    </div>);
+  const webCard = form?.type === "website" && (
+    <div className="conn-status-row">
+      <span className="conn-status-label">{t("conn.webSession")}</span>
+      {saved?.web_session?.signing_in ? <span className="tag">{t("conn.webSigningIn")}</span>
+        : saved?.web_session?.profile ? <span className="tag ok">{t("conn.webHasSession")}</span>
+          : <span className="tag warn">{t("conn.notSignedIn")}</span>}
+      {isNew ? <span className="field-hint">{t("conn.signInSaveFirst")}</span>
+        : <span className="row">
+          <button className="small btn-run" disabled={busy || dirty || !!saved?.web_session?.signing_in} title={dirty ? t("conn.saveFirstTest") : undefined} onClick={webSignIn}>{t("conn.signInBtn")}</button>
+          {saved?.web_session?.signing_in && <button className="small" onClick={() => reload(sel)}>{t("conn.webRefresh")}</button>}
+          {saved?.web_session?.profile && <button className="small" disabled={busy} onClick={webSignOut}>{t("conn.signOut")}</button>}
+        </span>}
+      <span className="field-hint">{t("conn.webSessionHint")}</span>
+    </div>);
+
+  const foot = form && <>
+    <button className="primary" disabled={busy || !dirty} aria-disabled={!dirty} onClick={save}>{t("conn.save")}</button>
+    {!isNew && <button disabled={busy || !dirty} onClick={revert}>{t("modal.revert")}</button>}
+    {msg && <span className={`msg${msg.bad ? " bad" : ""}`} title={msg.text}>{msg.text}</span>}
+    <span className="grow" />
+    {!isNew && sel && <MoreMenu label={t("conn.moreFor", { name: sel })} className="lib-more" items={[
+      { label: t("copy.button"), title: t("copy.connectorTitle"), onSelect: () => acts.copyTo({ kind: "connector", name: sel }, sel) },
+      { label: t("copy.moveButton"), title: t("copy.moveConnectorTitle"),
+        onSelect: () => acts.copyTo({ kind: "connector", name: sel }, sel, "move").then((r) => r && reload()) },
+      { kind: "sep" },
+      { label: t("conn.deleteConnector"), danger: true, onSelect: remove },
+    ]}>⋯ {t("libm.more")}</MoreMenu>}
+  </>;
+  const groups: [string, string[]][] = [
+    ["conn.groupServices", Object.keys(meta.types).filter((k) => typeGroup(k) === "service")],
+    ["conn.groupWeb", Object.keys(meta.types).filter((k) => typeGroup(k) === "web")],
+  ];
 
   return (
-    <div className="modal" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box conns">
-        <div className="panel-head">
-          <h2>{t("conn.title")}</h2>
-          <span className="muted small">{meta.file} · {t("conn.secretsWhere")}</span>
-          <button className="icon-btn modal-close" onClick={onClose} aria-label={t("conn.close")} title={t("conn.close")}>×</button>
-        </div>
-        <div className="conns-body">
-          <div className="conns-list">
-            {Object.entries(meta.connections).map(([n, c]) => (
-              <button key={n} className={`conn-item${sel === n ? " on" : ""}`}
-                onClick={() => { setSel(n); setName(n); setForm(structuredClone(c)); setMsg(null); }}>
+    <Modal title={t("conn.title")} meta={t("conn.meta")} metaTitle={`${shortPath(meta.file)}\n${meta.file}`} onClose={onClose}
+      dirty={dirty} className="conns" foot={foot} live={testOut?.text ?? msg?.text ?? ""}>
+      <div className="conns-body">
+        <div className="conns-list">
+          <button className="small conn-new" onClick={() => show({ sel: null, name: "", form: null, picking: true })}>+ {t("conn.new")}</button>
+          {Object.entries(meta.connections).map(([n, c]) => {
+            const st = stateOf(c);
+            return (
+              <button key={n} className={`conn-item${sel === n ? " on" : ""}`} aria-current={sel === n}
+                onClick={() => { if (n !== sel) show({ sel: n, name: n, form: structuredClone(c) }); }}>
                 <b>{n}</b>
-                <span className="muted small">{meta.types[c.type]?.label} · {c.environment ?? "dev"}
-                  {c.location && c.location !== "local" ? ` · ${locLabel(t, c.location)}` : ""}
-                  {c.secret && !c.secret.set && !c.secret.optional ? t("conn.noSecret") : ""}
-                  {c.oauth && !c.oauth.signed_in ? t("conn.notSignedInList") : ""}</span>
-              </button>
-            ))}
-            <div className="new-conn">
-              {Object.keys(meta.types).map((k) => (
-                <button key={k} className="small" onClick={() => { setSel(""); setName(""); setForm(blank(k, meta)); setMsg(null); }}>
-                  + {meta.types[k].label}</button>
-              ))}
-              <span className="muted small new-conn-group">{t("conn.appsSignIn")}</span>
-              {Object.entries(meta.oauth_presets).map(([k, p]) => (
-                <button key={k} className="small" onClick={() => newFromPreset(k)}>+ {p.label}</button>
-              ))}
-            </div>
-          </div>
+                <span className="conn-item-meta">{typeLabel(c.type)} · {c.environment ?? "dev"}
+                  {c.location && c.location !== "local" ? ` · ${locLabel(t, c.location)}` : ""}</span>
+                <span className="conn-item-tags"><span className={`tag ${st.tone}`}>{tOr(st.key, st.key)}</span>
+                  <span className={`tag${c.access === "write" ? " warn" : ""}`}>{t(c.access === "write" ? "conn.tagWrite" : "conn.tagRead")}</span></span>
+              </button>);
+          })}
+        </div>
 
-          {form && tp && m ? (
-            <div className="conns-form">
+        {picking ? (
+          <div className="conns-form">
+            <h3 className="conn-pick-title">{t("conn.pickType")}</h3>
+            {groups.map(([g, keys]) => keys.length > 0 && <div key={g}>
+              <span className="field-label">{tOr(g, g)}</span>
+              <div className="conn-types">{keys.map((k) => (
+                <button key={k} className="conn-type" onClick={() => newOfType(k)}>
+                  <b>{typeLabel(k)}</b><span className="muted small">{tOr(`conn.typeHint.${k}`, "")}</span></button>))}</div>
+            </div>)}
+            <span className="field-label">{t("conn.appsSignIn")}</span>
+            <div className="conn-types">{Object.entries(meta.oauth_presets).map(([k, p]) => (
+              <button key={k} className="conn-type" onClick={() => newFromPreset(k)}><b>{p.label}</b>
+                <span className="muted small">{t("conn.presetTile")}</span></button>))}</div>
+          </div>
+        ) : form && tp && m ? (
+          <div className="conns-form">
+            <div className="conn-head">
+              {isNew
+                ? <label className="field grow"><span className="field-label">{t("conn.name")}</span>
+                  <input value={name} placeholder={t("conn.namePlaceholder")} onChange={(e) => setName(e.target.value)} /></label>
+                : <h3 className="conn-name">{name}</h3>}
+              <span className="tag">{typeLabel(form.type)}</span>
+              <span className={`tag env-${form.environment ?? "dev"}`}>{form.environment ?? "dev"}</span>
+              <span className={`tag${form.access === "write" ? " warn" : ""}`} title={t("conn.access")}>
+                {t(form.access === "write" ? "conn.tagWrite" : "conn.tagRead")}</span>
+            </div>
+
+            <div className="conn-status" role="group" aria-label={t("conn.statusTitle")}>
+              {secretCard}{oauthCard}{webCard}
+              <div className="conn-status-row">
+                <button className="small btn-run" disabled={busy || isNew || noSecret || noSession || dirty} onClick={test}
+                  title={isNew || dirty ? t("conn.saveFirstTest") : noSecret ? t("conn.secretFirst") : noSession ? t("conn.signInFirst") : undefined}>▶ {t("conn.test")}</button>
+                {!isNew && (dirty ? <span className="muted small">{t("conn.saveFirstTest")}</span>
+                  : noSecret ? <span className="muted small">{t("conn.secretFirst")}</span>
+                  : noSession && <span className="muted small">{t("conn.signInFirst")}</span>)}
+                {testOut && <span className={`conn-test-line ${testOut.ok ? "ok" : "bad"}`}>{testOut.text}</span>}
+              </div>
+            </div>
+
+            <label className="field"><span className="field-label">{t("conn.description")}</span>
+              <input value={form.description ?? ""} placeholder={t("conn.descriptionPlaceholder")} onChange={(e) => set({ description: e.target.value })} /></label>
+            <div className="grid2">
+              <label className="field"><span className="field-label">{t("conn.baseUrl")}</span>
+                <input value={form.base_url ?? ""} placeholder={tp.base_url ?? "https://api.example.com"} onChange={(e) => set({ base_url: e.target.value || null })} /></label>
+              {form.type !== "website"
+                ? <label className="field"><span className="field-label">{t("conn.testPath")}</span>
+                  <input value={form.test_path ?? ""} placeholder={tp.test_path} onChange={(e) => set({ test_path: e.target.value || null })} /></label>
+                : <span />}
+            </div>
+            <div className="grid2">
+              <label className="field"><span className="field-label">{t("conn.environment")}</span>
+                <select value={form.environment ?? "dev"} onChange={(e) => set({ environment: e.target.value })}>
+                  {meta.environments.map((x) => <option key={x}>{x}</option>)}</select></label>
+              {form.type === "azure_devops" ? (
+                <label className="field"><span className="field-label">{t("conn.organization")}</span>
+                  <input value={form.organization ?? ""} placeholder={t("conn.organizationPlaceholder")} onChange={(e) => set({ organization: e.target.value || null })} /></label>
+              ) : form.type === "atlassian" ? (
+                <label className="field"><span className="field-label">{t("conn.atlassianSite")}</span>
+                  <input value={form.organization ?? ""} placeholder={t("conn.atlassianSitePlaceholder")} onChange={(e) => set({ organization: e.target.value || null })} /></label>
+              ) : <span />}
+            </div>
+
+            <Section id="access" type={form.type} title={t("conn.secAccess")} open={isNew}>
+              <label className="field"><span className="field-label">{t("conn.access")}</span>
+                <select value={form.access ?? "read"} onChange={(e) => set({ access: e.target.value })}>
+                  <option value="read">{t("conn.accessRead")}</option>
+                  <option value="write">{t("conn.accessWrite")}</option>
+                </select>
+                {form.access === "write" && <span className="field-hint">{t("conn.accessWriteHint")}</span>}</label>
+              <label className="field"><span className="field-label">{t("conn.allowedPaths")}</span>
+                <textarea className="mono" rows={2} defaultValue={(form.allowed_paths ?? []).join("\n")} key={`${sel}-paths`}
+                  placeholder={t("conn.allowedPathsPlaceholder")}
+                  onBlur={(e) => set({ allowed_paths: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} />
+                <span className="field-hint">{t("conn.allowedPathsHint")}</span></label>
+              {(meta.locations ?? ["local"]).length > 1 && (
+                <label className="field"><span className="field-label">{t("loc.where")}</span>
+                  <select value={form.location ?? meta.locations?.[0] ?? "local"} onChange={(e) => set({ location: e.target.value })}>
+                    {meta.locations!.map((l) => <option key={l} value={l}>{locLabel(t, l)}</option>)}
+                  </select>
+                  <span className="field-hint">{t("loc.connWhereHint")}</span></label>)}
+            </Section>
+
+            <Section id="auth" type={form.type} title={t("conn.secAuth")} open={isNew}>
               {generic && (
                 <label className="field"><span className="field-label">{t("conn.preset")}</span>
                   <select value="" onChange={(e) => applyPreset(e.target.value)}>
@@ -378,42 +555,77 @@ export function Connections({ onClose }: { onClose: () => void }) {
                     {Object.entries(meta.oauth_presets).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}
                   </select>
                   <span className="field-hint">{t("conn.presetHint")}</span></label>)}
-              <div className="grid2">
-                <label className="field"><span className="field-label">{t("conn.name")}</span>
-                  <input value={name} disabled={!isNew} placeholder={t("conn.namePlaceholder")} onChange={(e) => setName(e.target.value)} /></label>
-                <label className="field"><span className="field-label">{t("conn.environment")}</span>
-                  <select value={form.environment ?? "dev"} onChange={(e) => set({ environment: e.target.value })}>
-                    {meta.environments.map((x) => <option key={x}>{x}</option>)}</select></label>
-              </div>
-              {(meta.locations ?? ["local"]).length > 1 && (
-                <label className="field"><span className="field-label">{t("loc.where")}</span>
-                  <select value={form.location ?? meta.locations?.[0] ?? "local"} onChange={(e) => set({ location: e.target.value })}>
-                    {meta.locations!.map((l) => <option key={l} value={l}>{locLabel(t, l)}</option>)}
-                  </select>
-                  <span className="field-hint">{t("loc.connWhereHint")}</span></label>)}
-              <label className="field"><span className="field-label">{t("conn.access")}</span>
-                <select value={form.access ?? "read"} onChange={(e) => set({ access: e.target.value })}>
-                  <option value="read">{t("conn.accessRead")}</option>
-                  <option value="write">{t("conn.accessWrite")}</option>
-                </select>
-                {form.access === "write" && <span className="field-hint">{t("conn.accessWriteHint")}</span>}</label>
-              <label className="field"><span className="field-label">{t("conn.description")}</span>
-                <input value={form.description ?? ""} placeholder={t("conn.descriptionPlaceholder")} onChange={(e) => set({ description: e.target.value })} /></label>
-              {form.type === "azure_devops" && (
-                <label className="field"><span className="field-label">{t("conn.organization")}</span>
-                  <input value={form.organization ?? ""} placeholder={t("conn.organizationPlaceholder")} onChange={(e) => set({ organization: e.target.value || null })} /></label>
-              )}
-              {form.type === "atlassian" && (
-                <label className="field"><span className="field-label">{t("conn.atlassianSite")}</span>
-                  <input value={form.organization ?? ""} placeholder={t("conn.atlassianSitePlaceholder")} onChange={(e) => set({ organization: e.target.value || null })} /></label>
-              )}
-              <div className="grid2">
-                <label className="field"><span className="field-label">{t("conn.baseUrl")}</span>
-                  <input value={form.base_url ?? ""} placeholder={tp.base_url ?? "https://api.example.com"} onChange={(e) => set({ base_url: e.target.value || null })} /></label>
-                {form.type !== "website" && (
-                  <label className="field"><span className="field-label">{t("conn.testPath")}</span>
-                    <input value={form.test_path ?? ""} placeholder={tp.test_path} onChange={(e) => set({ test_path: e.target.value || null })} /></label>)}
-              </div>
+              <label className="field"><span className="field-label">{t("conn.method")}</span>
+                <select value={form.auth.method} onChange={(e) => setAuth({ method: e.target.value,
+                  // these two only exist for sign-in on a page; the server refuses them otherwise
+                  ...(e.target.value !== "oauth_browser" ? { token_in: "header", exchange: null } : {}) })}>
+                  {tp.methods.map((x) => <option key={x} value={x}>{tOr(`conn.methodLabel.${x}`, meta.methods[x].label)}</option>)}</select></label>
+              {method === "api_key" && (
+                <label className="field"><span className="field-label">{t("conn.header")}</span>
+                  <input value={form.auth.header ?? "X-API-Key"} onChange={(e) => setAuth({ header: e.target.value })} /></label>)}
+              {method === "basic" && (
+                <label className="field"><span className="field-label">{form.type === "atlassian" ? t("conn.email") : t("conn.username")}</span>
+                  <input value={form.auth.username ?? ""} onChange={(e) => setAuth({ username: e.target.value })} />
+                  {form.type === "atlassian" && <span className="field-hint">{t("conn.atlassianHint")}</span>}</label>)}
+              {method === "client_credentials" && (
+                <div className="grid2">
+                  {generic
+                    ? <label className="field"><span className="field-label">{t("conn.tokenUrl")}</span>
+                      <input value={form.auth.token_url ?? ""} placeholder="https://…/oauth2/token" onChange={(e) => setAuth({ token_url: e.target.value })} /></label>
+                    : <label className="field"><span className="field-label">Tenant ID</span>
+                      <input value={form.auth.tenant_id ?? ""} onChange={(e) => setAuth({ tenant_id: e.target.value })} /></label>}
+                  <label className="field"><span className="field-label">Client ID</span>
+                    <input value={form.auth.client_id ?? ""} onChange={(e) => setAuth({ client_id: e.target.value })} /></label>
+                </div>)}
+              {(method === "client_credentials" || method === "azure_cli" || method === "managed_identity") && (
+                <label className="field"><span className="field-label">Scope</span>
+                  <input value={form.auth.scope ?? ""} placeholder={t("conn.scopeDefault")} onChange={(e) => setAuth({ scope: e.target.value || null })} /></label>)}
+              {(method === "azure_cli" || method === "gh_cli") && (
+                <p className="muted small">{t("conn.cliSession", { cmd: method === "azure_cli" ? "az login" : "gh auth login" })}</p>)}
+              {method === "managed_identity" && <>
+                <label className="field"><span className="field-label">{t("conn.miClientId")}</span>
+                  <input value={form.auth.client_id ?? ""} onChange={(e) => setAuth({ client_id: e.target.value || null })} /></label>
+                <p className="muted small">{t("conn.miHint")}</p>
+              </>}
+              {method === "oauth_browser" && <>
+                <div className="grid2">
+                  <label className="field"><span className="field-label">{t("conn.clientIdOauth")}</span>
+                    <input value={form.auth.client_id ?? ""} onChange={(e) => setAuth({ client_id: e.target.value })} /></label>
+                  {ENTRA_TYPES.has(form.type) && (
+                    <label className="field"><span className="field-label">Tenant ID</span>
+                      <input value={form.auth.tenant_id ?? ""} placeholder={t("conn.tenantOptional")} onChange={(e) => setAuth({ tenant_id: e.target.value || null })} /></label>)}
+                </div>
+                <div className="grid2">
+                  <label className="field"><span className="field-label">{t("conn.authorizeUrl")}</span>
+                    <input value={form.auth.authorize_url ?? ""} placeholder={tp.oauth?.authorize_url ?? "https://…/authorize"} onChange={(e) => setAuth({ authorize_url: e.target.value || null })} /></label>
+                  <label className="field"><span className="field-label">{t("conn.tokenUrl")}</span>
+                    <input value={form.auth.token_url ?? ""} placeholder={tp.oauth?.token_url ?? "https://…/token"} onChange={(e) => setAuth({ token_url: e.target.value || null })} /></label>
+                </div>
+                <label className="field"><span className="field-label">Scope</span>
+                  <input value={form.auth.scope ?? ""} placeholder={tp.oauth?.scope ?? ""} onChange={(e) => setAuth({ scope: e.target.value || null })} /></label>
+                {generic && <>
+                  <div className="grid2">
+                    <label className="field"><span className="field-label">{t("conn.tokenIn")}</span>
+                      <select value={form.auth.token_in ?? "header"} onChange={(e) => setAuth({ token_in: e.target.value as Auth["token_in"] })}>
+                        <option value="header">{t("conn.tokenInHeader")}</option>
+                        <option value="query">{t("conn.tokenInQuery")}</option>
+                      </select></label>
+                    <label className="field"><span className="field-label">{t("conn.tokenAuth")}</span>
+                      <select value={form.auth.token_auth ?? "body"} onChange={(e) => setAuth({ token_auth: e.target.value as Auth["token_auth"] })}>
+                        <option value="body">{t("conn.tokenAuthBody")}</option>
+                        <option value="basic">{t("conn.tokenAuthBasic")}</option>
+                      </select></label>
+                  </div>
+                  <label className="field"><span className="field-label">{t("conn.extraParams")}</span>
+                    <textarea className="mono" rows={2} defaultValue={lines(form.auth.authorize_params)} key={`${sel}-${form.auth.authorize_url}-params`}
+                      onBlur={(e) => setAuth({ authorize_params: unlines(e.target.value) })} />
+                    <span className="field-hint">{t("conn.extraParamsHint")}</span></label>
+                  {form.auth.exchange && <p className="muted small">{t("conn.exchange", { grant: form.auth.exchange.grant_type, url: form.auth.exchange.url })}</p>}
+                </>}
+                <label className="field"><span className="field-label">{t("conn.redirectUri")}</span>
+                  <code className="redirect">{meta.oauth_redirect_uri}</code>
+                  <span className="field-hint">{t("conn.redirectHint")}</span></label>
+              </>}
               {form.type === "website" && <>
                 <p className="muted small">{t("conn.webHint")}</p>
                 <div className="grid2">
@@ -437,13 +649,9 @@ export function Connections({ onClose }: { onClose: () => void }) {
                     <span className="field-hint">{t("conn.webSignedOutHint")}</span></label>
                 </div>
               </>}
-              <label className="field"><span className="field-label">{t("conn.allowedPaths")}</span>
-                <textarea className="mono" rows={2} defaultValue={(form.allowed_paths ?? []).join("\n")} key={`${sel}-paths`}
-                  placeholder={t("conn.allowedPathsPlaceholder")}
-                  onBlur={(e) => set({ allowed_paths: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} />
-                <span className="field-hint">{t("conn.allowedPathsHint")}</span></label>
+            </Section>
 
-              <h3>{t("conn.instructions")}</h3>
+            <Section id="instructions" type={form.type} title={t("conn.secInstructions")}>
               <p className="muted small">{t("conn.instructionsHint")}</p>
               <div className="field">
                 <textarea className="conn-instructions" rows={10} value={form.instructions ?? ""}
@@ -456,19 +664,20 @@ export function Connections({ onClose }: { onClose: () => void }) {
                   <span className="muted small">{t("conn.instructionsChars", { n: (form.instructions ?? "").length })}</span>
                 </div>
               </div>
+            </Section>
 
-              <h3>{t("conn.actions")}</h3>
+            <Section id="actions" type={form.type} title={t("conn.secActions")}>
               <p className="muted small">{t("conn.actionsHint")}</p>
               {Object.keys(saved?.actions ?? {}).length > 0 && (
                 <ul className="conn-actions">
                   {Object.entries(saved!.actions!).map(([n, a]) => (
                     <li key={n}><code>{n}</code>
-                      <span className={`badge${a.access === "write" ? " warn" : ""}`}>{t(a.access === "write" ? "conn.accessWrite" : "conn.accessRead")}</span>
+                      <span className={`tag${a.access === "write" ? " warn" : ""}`}>{t(a.access === "write" ? "conn.accessWrite" : "conn.accessRead")}</span>
                       {a.path && <code className="muted">{a.method ?? "GET"} {a.path}</code>}
                       <span className="muted small">{a.description}</span>
                       {a.access !== "write" && (
-                        <button className="small" disabled={busy} title={t("conn.actionTestHint")}
-                          onClick={() => testAction(n)}>{t("conn.actionTest")}</button>)}
+                        <button className="small btn-run" disabled={busy} title={t("conn.actionTestHint")}
+                          onClick={() => testAction(n)}>▶ {t("conn.actionTest")}</button>)}
                       {lastTests[n] && tested?.action !== n && (
                         <button className="small link" onClick={() => showTest(n, lastTests[n])}>
                           {t(lastTests[n].ok ? "conn.lastTestOk" : "conn.lastTestFailed")}</button>)}</li>))}
@@ -482,7 +691,7 @@ export function Connections({ onClose }: { onClose: () => void }) {
                   <pre>{tested.text}</pre>
                   {!tested.ok && (tested.blocked?.length ?? 0) > 0 && saved?.type === "website" && <>
                     <span className="field-hint">{t("conn.allowPostHint")}</span>
-                    <div className="row"><button className="small primary" disabled={busy} onClick={allowPostAndRetest}>
+                    <div className="row"><button className="small btn-run" disabled={busy} onClick={allowPostAndRetest}>
                       {t("conn.allowPostRetest")}</button></div>
                   </>}
                 </div>)}
@@ -506,11 +715,11 @@ export function Connections({ onClose }: { onClose: () => void }) {
                   {isNew ? <span className="field-hint">{t("conn.signInSaveFirst")}</span>
                     : !recHere ? (
                       <div className="row">
-                        <button className="small primary" disabled={busy || !!saved?.web_session?.signing_in} onClick={startRecord}>
-                          {t("conn.recordBtn")}</button>
+                        <button className="small btn-run" disabled={busy || dirty || !!saved?.web_session?.signing_in} title={dirty ? t("conn.saveFirstTest") : undefined} onClick={startRecord}>
+                          ● {t("conn.recordBtn")}</button>
                       </div>)
                     : <>
-                      <span className="badge">{t(recHere.recording ? "conn.recording" : "conn.recordDone", { n: recHere.steps.length })}</span>
+                      <span className="tag">{t(recHere.recording ? "conn.recording" : "conn.recordDone", { n: recHere.steps.length })}</span>
                       {recHere.steps.length > 0 && (
                         <ol className="rec-steps">
                           {recHere.steps.map((s, i) => <li key={i}><code>{stepLine(s)}</code></li>)}
@@ -555,154 +764,15 @@ export function Connections({ onClose }: { onClose: () => void }) {
                       </div>
                     </>}
                 </div>)}
-
-              <h3>{t("conn.auth")}</h3>
-              <label className="field"><span className="field-label">{t("conn.method")}</span>
-                <select value={form.auth.method} onChange={(e) => setAuth({ method: e.target.value,
-                  // these two only exist for sign-in on a page; the server refuses them otherwise
-                  ...(e.target.value !== "oauth_browser" ? { token_in: "header", exchange: null } : {}) })}>
-                  {tp.methods.map((x) => <option key={x} value={x}>{tOr(`conn.methodLabel.${x}`, meta.methods[x].label)}</option>)}</select></label>
-              {method === "api_key" && (
-                <label className="field"><span className="field-label">{t("conn.header")}</span>
-                  <input value={form.auth.header ?? "X-API-Key"} onChange={(e) => setAuth({ header: e.target.value })} /></label>)}
-              {method === "basic" && (
-                <label className="field"><span className="field-label">{form.type === "atlassian" ? t("conn.email") : t("conn.username")}</span>
-                  <input value={form.auth.username ?? ""} onChange={(e) => setAuth({ username: e.target.value })} />
-                  {form.type === "atlassian" && <span className="field-hint">{t("conn.atlassianHint")}</span>}</label>)}
-              {method === "client_credentials" && (
-                <div className="grid2">
-                  {generic
-                    ? <label className="field"><span className="field-label">{t("conn.tokenUrl")}</span>
-                      <input value={form.auth.token_url ?? ""} placeholder="https://…/oauth2/token" onChange={(e) => setAuth({ token_url: e.target.value })} /></label>
-                    : <label className="field"><span className="field-label">Tenant ID</span>
-                      <input value={form.auth.tenant_id ?? ""} onChange={(e) => setAuth({ tenant_id: e.target.value })} /></label>}
-                  <label className="field"><span className="field-label">Client ID</span>
-                    <input value={form.auth.client_id ?? ""} onChange={(e) => setAuth({ client_id: e.target.value })} /></label>
-                </div>)}
-              {(method === "client_credentials" || method === "azure_cli" || method === "managed_identity") && (
-                <label className="field"><span className="field-label">Scope</span>
-                  <input value={form.auth.scope ?? ""} placeholder={t("conn.scopeDefault")} onChange={(e) => setAuth({ scope: e.target.value || null })} /></label>)}
-              {(method === "azure_cli" || method === "gh_cli") && (
-                <p className="muted small">{t("conn.cliSession", { cmd: method === "azure_cli" ? "az login" : "gh auth login" })}</p>)}
-              {method === "managed_identity" && <>
-                <label className="field"><span className="field-label">{t("conn.miClientId")}</span>
-                  <input value={form.auth.client_id ?? ""} onChange={(e) => setAuth({ client_id: e.target.value || null })} /></label>
-                <p className="muted small">{t("conn.miHint")}</p>
-              </>}
-
-              {method === "oauth_browser" && <>
-                <div className="grid2">
-                  <label className="field"><span className="field-label">{t("conn.clientIdOauth")}</span>
-                    <input value={form.auth.client_id ?? ""} onChange={(e) => setAuth({ client_id: e.target.value })} /></label>
-                  {ENTRA_TYPES.has(form.type) && (
-                    <label className="field"><span className="field-label">Tenant ID</span>
-                      <input value={form.auth.tenant_id ?? ""} placeholder={t("conn.tenantOptional")} onChange={(e) => setAuth({ tenant_id: e.target.value || null })} /></label>)}
-                </div>
-                <div className="grid2">
-                  <label className="field"><span className="field-label">{t("conn.authorizeUrl")}</span>
-                    <input value={form.auth.authorize_url ?? ""} placeholder={tp.oauth?.authorize_url ?? "https://…/authorize"} onChange={(e) => setAuth({ authorize_url: e.target.value || null })} /></label>
-                  <label className="field"><span className="field-label">{t("conn.tokenUrl")}</span>
-                    <input value={form.auth.token_url ?? ""} placeholder={tp.oauth?.token_url ?? "https://…/token"} onChange={(e) => setAuth({ token_url: e.target.value || null })} /></label>
-                </div>
-                <label className="field"><span className="field-label">Scope</span>
-                  <input value={form.auth.scope ?? ""} placeholder={tp.oauth?.scope ?? ""} onChange={(e) => setAuth({ scope: e.target.value || null })} /></label>
-                {generic && <>
-                  <div className="grid2">
-                    <label className="field"><span className="field-label">{t("conn.tokenIn")}</span>
-                      <select value={form.auth.token_in ?? "header"} onChange={(e) => setAuth({ token_in: e.target.value as Auth["token_in"] })}>
-                        <option value="header">{t("conn.tokenInHeader")}</option>
-                        <option value="query">{t("conn.tokenInQuery")}</option>
-                      </select></label>
-                    <label className="field"><span className="field-label">{t("conn.tokenAuth")}</span>
-                      <select value={form.auth.token_auth ?? "body"} onChange={(e) => setAuth({ token_auth: e.target.value as Auth["token_auth"] })}>
-                        <option value="body">{t("conn.tokenAuthBody")}</option>
-                        <option value="basic">{t("conn.tokenAuthBasic")}</option>
-                      </select></label>
-                  </div>
-                  <label className="field"><span className="field-label">{t("conn.extraParams")}</span>
-                    <textarea className="mono" rows={2} defaultValue={lines(form.auth.authorize_params)} key={`${sel}-${form.auth.authorize_url}-params`}
-                      onBlur={(e) => setAuth({ authorize_params: unlines(e.target.value) })} />
-                    <span className="field-hint">{t("conn.extraParamsHint")}</span></label>
-                  {form.auth.exchange && <p className="muted small">{t("conn.exchange", { grant: form.auth.exchange.grant_type, url: form.auth.exchange.url })}</p>}
-                </>}
-                <label className="field"><span className="field-label">{t("conn.redirectUri")}</span>
-                  <code className="redirect">{meta.oauth_redirect_uri}</code>
-                  <span className="field-hint">{t("conn.redirectHint")}</span></label>
-              </>}
-
-              {m.secret && (
-                <div className="secret-box">
-                  <b>{t("conn.secret", { name: m.secret })}</b>{" "}
-                  {isNew ? <span className="muted small">{t("conn.saveFirst")}</span>
-                    : savedSecret?.set ? <span className="badge">{t("conn.secretSet", { source: savedSecret.source ?? "" })}</span>
-                      : m.optional ? <span className="badge">{t("conn.secretOptional")}</span>
-                        : <span className="badge warn">{t("conn.secretMissing")}</span>}
-                  {m.optional && <span className="field-hint">{t("conn.clientSecretHint")}</span>}
-                  {!isNew && <>
-                    <div className="row">
-                      <input type="password" autoComplete="new-password" placeholder={t("conn.secretValue")} value={secret} onChange={(e) => setSecret(e.target.value)} />
-                      <button className="small" disabled={!secret || busy} onClick={() => saveSecret(false)}>{t("conn.save")}</button>
-                    </div>
-                    <div className="row">
-                      <input placeholder={t("conn.envVar")} value={envVar} onChange={(e) => setEnvVar(e.target.value.toUpperCase())} />
-                      <button className="small" disabled={!/^[A-Z_][A-Z0-9_]*$/.test(envVar) || busy} onClick={() => saveSecret(true)}>{t("conn.use")}</button>
-                    </div>
-                    <span className="field-hint">{t("conn.secretNever")}</span>
-                  </>}
-                </div>
-              )}
-
-              {method === "oauth_browser" && (
-                <div className="secret-box">
-                  <b>{t("conn.signin")}</b>{" "}
-                  {signIn?.signed_in
-                    ? <span className="badge">{signIn.expires_at ? t("conn.signedInUntil", { date: fmtDate(signIn.expires_at) }) : t("conn.signedIn")}
-                      {signIn.refreshable ? ` · ${t("conn.renews")}` : ""}</span>
-                    : <span className="badge warn">{t("conn.notSignedIn")}</span>}
-                  {isNew || saved?.auth.method !== "oauth_browser"
-                    ? <span className="field-hint">{t("conn.signInSaveFirst")}</span>
-                    : <div className="row">
-                      <button className="small primary" disabled={busy} onClick={startSignIn}>{t("conn.signInBtn")}</button>
-                      {signIn?.signed_in && <button className="small danger" disabled={busy} onClick={signOut}>{t("conn.signOut")}</button>}
-                    </div>}
-                </div>
-              )}
-
-              {form.type === "website" && (
-                <div className="secret-box">
-                  <b>{t("conn.webSession")}</b>{" "}
-                  {saved?.web_session?.signing_in ? <span className="badge">{t("conn.webSigningIn")}</span>
-                    : saved?.web_session?.profile ? <span className="badge">{t("conn.webHasSession")}</span>
-                      : <span className="badge warn">{t("conn.notSignedIn")}</span>}
-                  <span className="field-hint">{t("conn.webSessionHint")}</span>
-                  {isNew ? <span className="field-hint">{t("conn.signInSaveFirst")}</span>
-                    : <div className="row">
-                      <button className="small primary" disabled={busy || !!saved?.web_session?.signing_in} onClick={webSignIn}>{t("conn.signInBtn")}</button>
-                      {saved?.web_session?.signing_in && <button className="small" onClick={() => reload(sel)}>{t("conn.webRefresh")}</button>}
-                      {saved?.web_session?.profile && <button className="small danger" disabled={busy} onClick={webSignOut}>{t("conn.signOut")}</button>}
-                    </div>}
-                </div>
-              )}
-
-              <div className="row actions">
-                <button className="primary" disabled={busy} onClick={save}>{t("conn.save")}</button>
-                <button disabled={busy || isNew} onClick={test}>{t("conn.test")}</button>
-                {!isNew && sel && <button disabled={busy} title={t("copy.connectorTitle")}
-                  onClick={() => acts.copyTo({ kind: "connector", name: sel }, sel)}>{t("copy.button")}</button>}
-                {!isNew && sel && <button disabled={busy} title={t("copy.moveConnectorTitle")}
-                  onClick={() => acts.copyTo({ kind: "connector", name: sel }, sel, "move").then((r) => r && reload())}>{t("copy.moveButton")}</button>}
-                {!isNew && <button className="danger" disabled={busy} onClick={remove}>{t("conn.delete")}</button>}
-                {msg && <span className={`msg${msg.bad ? " bad" : ""}`} title={msg.text}>{msg.text}</span>}
-              </div>
-            </div>
-          ) : (
-            <div className="conns-form muted">
-              <p>{t("conn.empty")} <code>connections.http_get</code> {t("conn.emptyEnd")}</p>
-              {msg && <p className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</p>}
-            </div>
-          )}
-        </div>
+            </Section>
+          </div>
+        ) : (
+          <div className="conns-form muted">
+            <p>{t("conn.empty")} <code>connections.http_get</code> {t("conn.emptyEnd")}</p>
+            {msg && <p className={`msg${msg.bad ? " bad" : ""}`}>{msg.text}</p>}
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }

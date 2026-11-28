@@ -3,6 +3,7 @@ Open and Run buttons, the keyboard, the card menu, the layout and a flow that do
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -236,4 +237,35 @@ def test_the_cards_of_a_chain_line_up_and_tags_are_whole(page, game):
     cut = page.evaluate("""() => [...document.querySelectorAll('.board-card .port-tag')]
       .filter(t => t.scrollWidth > t.clientWidth + 1).map(t => t.textContent)""")
     assert cut == []
+    assert page.errors == []
+
+
+def test_a_board_of_40_flows_with_runs_opens_quickly(page, game, studio, tmp_path: Path):
+    """The Board scans the runs once for every card (not once per flow)."""
+    flows = tmp_path / "workspaces" / "game" / "flows"
+    for i in range(40):
+        src = {"source": {"flow": f"f{i - 1:02d}", "output": "a.out"}} if i % 4 else {}
+        (flows / f"f{i:02d}").mkdir()
+        (flows / f"f{i:02d}" / "flow.yaml").write_text(yaml.safe_dump({
+            "version": 1, "name": f"f{i:02d}", "title": f"Flow {i}", "execution": "graph",
+            "inputs": {"x": {"type": "text", "label": "X", **src}}, "start": "a",
+            "agents": {"a": {"description": "x", "prompt": "x", "inputs": {"x": {"from": "input.x"}},
+                             "outputs": {"out": {"type": "text"}}}}, "edges": []}), "utf-8")
+    h = {"X-Flow-Editor": "1"}
+    for k in range(40):  # one run at a time
+        assert page.request.post(studio + "/api/runs", headers=h, data={"flow": f"f{k % 20:02d}", "inputs": {"x": str(k)}}).ok
+        for _ in range(200):
+            if not any(x.get("status") == "running" for x in page.request.get(studio + "/api/runs").json()):
+                break
+            time.sleep(0.05)
+    page.request.get(studio + "/api/board")  # the run summaries are cached once
+    t0 = time.perf_counter()
+    assert page.request.get(studio + "/api/board").ok
+    api = time.perf_counter() - t0
+    t1 = time.perf_counter()
+    page.get_by_role("button", name="Board", exact=True).click()
+    page.locator(".react-flow__node[data-id='f39']").wait_for()
+    opened = time.perf_counter() - t1
+    print(f"board of 44 flows, 40 runs: /api/board {api * 1000:.0f} ms, opened in {opened * 1000:.0f} ms")
+    assert api < 2 and opened < 4  # generous bounds for CI machines
     assert page.errors == []

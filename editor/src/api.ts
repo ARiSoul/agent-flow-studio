@@ -160,6 +160,9 @@ export const api = {
       if (r.status === 422) throw new Error(String((r.data as { detail?: unknown }).detail ?? "invalid"));
       return r.data;
     }),
+  checkLibraryAgent: (body: { id: string; title: string; agent_yaml: string; prompt: string; location: string }) =>
+    call<{ ok: boolean; error?: string; code?: string; params?: Record<string, string> }>("/api/agents/check", {
+      method: "POST", headers: MUTATE, body: JSON.stringify(body) }).then((r) => r.data),
   deleteLibraryAgent: (id: string) =>
     call<{ deleted: string }>(`/api/agents/${id}`, { method: "DELETE", headers: MUTATE }).then((r) => r.data),
   moveLibraryAgent: (id: string, location: string) =>

@@ -234,6 +234,7 @@ def register(app: FastAPI, ctx: Ctx) -> None:
         seen: set[str] = set()
         waits = {(w["flow"], w["input"]) for w in runner.waiting()
                  if not w.get("dismissed") and not w.get("stale")}  # as the Run panel counts
+        past = runner.past_by_flow()  # one scan of the runs folder for every card
         for _, d in flow_locations(fb()):
             for f in sorted(d.glob("*/flow.yaml")):
                 name = f.parent.name
@@ -266,7 +267,7 @@ def register(app: FastAPI, ctx: Ctx) -> None:
                     item["error"] = {k: first[k] for k in ("msg", "code", "params") if k in first}
                 except (yaml.YAMLError, AttributeError, ValueError) as e:
                     item["error"] = {"msg": str(e).splitlines()[0][:200] if str(e) else type(e).__name__}
-                runs = runner.past_runs(name, limit=10)
+                runs = past.get(name, [])[:10]
                 if runs:
                     item["last_run"] = {k: runs[0][k] for k in ("input", "status", "started")}
                     item["last_run"]["waiting"] = (name, runs[0]["input"]) in waits

@@ -1533,3 +1533,77 @@ button.primary:disabled, button.primary[aria-disabled="true"] { background: var(
 .board-card .ports .port-name { flex: 0 1 auto; min-width: 3ch; }
 .board-card .ports-col.out { flex: 0 0 auto; max-width: 70%; }
 .board-card .ports-col.in { flex: 1 1 0; min-width: 0; }
+/* the shared window shell (Modal.tsx): Connectors, Agent library, Compare */
+.modal-shell { overflow: hidden; }
+.modal-shell:focus { outline: none; }
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.modal-titles { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.modal-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); text-transform: none; letter-spacing: 0; white-space: nowrap; }
+.modal-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.modal-x { font-size: 18px; line-height: 1; width: 30px; height: 30px; padding: 0; flex: none; }
+.modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.modal-body > .conns-body { flex: 1; }
+.modal-shell.out-viewer .modal-body { overflow: auto; }
+.modal-foot { position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+  border-top: 1px solid var(--border); background: var(--panel); }
+.modal-foot .msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-foot .lib-more { flex: none; }
+/* a small state word, the same in every window */
+.tag { display: inline-flex; align-items: center; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px;
+  background: var(--panel-2); color: var(--muted); white-space: nowrap; width: fit-content; }
+.tag.ok { background: var(--ok-soft); color: var(--ok); }
+.tag.warn { background: var(--human-soft); color: var(--human); }
+.tag.env-prod { background: var(--stop-soft); color: var(--stop); font-weight: 600; }
+.tag.env-staging { background: var(--human-soft); color: var(--human); }
+/* Connectors */
+.conn-new { width: 100%; justify-content: flex-start; font-weight: 600; }
+.conn-item { gap: 2px; align-items: flex-start; }
+.conn-item > b { font-size: 13px; font-weight: 600; }
+.conn-item-meta { font-size: 11px; color: var(--muted); }
+.conn-head { display: flex; align-items: center; gap: 8px; margin: 8px 0 10px; }
+.conn-head .field { margin: 0; }
+.conn-name { margin: 0; font-size: 16px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.conn-status { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.conn-status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.conn-status-label { font-weight: 600; font-size: 12px; min-width: 140px; }
+.conn-secret-set { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
+.conn-secret-set .row input { flex: 1; min-width: 0; }
+.conn-test-line { font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.conn-test-line.ok { color: var(--ok); }
+.conn-test-line.bad { color: var(--bad); }
+.conn-sec { border-top: 1px solid var(--border); padding: 8px 0; }
+.conn-sec > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--text); padding: 2px 0; }
+.conn-sec[open] > summary { margin-bottom: 6px; }
+.conn-pick-title { margin: 8px 0 10px; font-size: 15px; }
+.conn-types { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 4px 0 14px; }
+.conn-type { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; height: auto;
+  padding: 8px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.conn-type:hover { border-color: var(--accent); background: var(--accent-soft); }
+.conn-type b { font-size: 13px; }
+/* Agent library */
+.lib-note { background: var(--accent-soft); color: var(--text); border-left: 3px solid var(--accent); padding: 6px 10px;
+  border-radius: 0 6px 6px 0; font-size: 12px; margin: 8px 0; }
+.lib-code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; resize: vertical; }
+textarea.bad { border-color: var(--bad); }
+/* History */
+.rp-unpriced { color: var(--human); }
+.rp-day h3 { margin: 0; font: inherit; }
+.modal-head label { white-space: nowrap; }
+.modal-dirty { flex: none; }
+.conn-item-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.conn-item:focus:not(:focus-visible) { outline: none; box-shadow: none; }
+.conn-item:not(.on) { border-color: var(--border); }
+.modal-foot button:disabled { opacity: .55; }
+/* History: the next step of a failed run; Compare's run picker */
+.rp-h-next { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 8px 6px 30px; }
+.run-picker { position: relative; flex: 1; min-width: 220px; }
+.run-picker input { width: 100%; }
+.run-picker-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 2px); max-height: 260px; overflow: auto;
+  margin: 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.run-picker-list li { padding: 4px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-picker-list li.at { background: var(--accent-soft); }
+.run-picker-list li.on { font-weight: 600; }
+/* a turned-off footer button looks off; a focused row keeps its own border (only "on" is selected) */
+.modal-foot button:disabled { opacity: 1; color: var(--muted); background: var(--panel-2); border-color: var(--border); cursor: not-allowed; }
+.conn-item:focus:not(.on), .conn-item:hover:not(.on) { border-color: var(--border); }
+.conn-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

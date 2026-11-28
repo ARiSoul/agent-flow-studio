@@ -25,6 +25,19 @@ terms — no emails —, what was done) and commit + push.
   (subagent) over 4 rounds to 10/10: verdict + gains first, grouped sections, long lists
   collapse ("Show all"), focus and footer shadow checked with Playwright; the dark theme's
   `--on-accent` is now dark (#0f1218) for AA contrast on all primary buttons.
+- **Connectors, Agent library and Run history redone** with the three reviewers (DevOps brief →
+  designer spec → end user, 2 rounds): one window shell (`Modal.tsx`: focus, Escape, "Discard
+  your changes?" for unsaved edits, the editor's shortcuts off behind it). Connectors: state and
+  access tags, a type picker, a status card first (secret, sign-in, Test — off without a secret
+  or with unsaved edits), rare settings folded. Library: palette words (Built-in/Local…), the
+  definition checked while typing (`POST /api/agents/check`, translated), Save in place then
+  move, built-in agents say why Delete is off. History: plain causes, "Resume…/Run again" and
+  "Automatic retry is off" on failed rows, unpriced runs counted, Compare with one run picker.
+  Also: `/api/board` scans the runs once (a 44-flow board with 40 runs opens in ~0.2 s; E2E
+  timing test); the tests no longer touch the machine (temporary local/public connectors and
+  providers, in-memory keyring — a screenshot script had written test connectors into the local
+  `connections.yaml`; removed). README rewritten short (ASD-STE100); the full reference moved to
+  `docs/guide.md`. New E2E: `tests/e2e/test_windows_e2e.py`.
 - **Workspace Board redesigned** with the same three reviewers (3 rounds; DevOps 10, end user and
   designer to 10/10): cards like the editor's nodes (type tags, run state as a shape) with Open,
   ▶ Run and ⋯ on each; the last run in words with its tone ("✕ Failed 3 minutes ago · View run",
@@ -636,3 +649,6 @@ start the editor or the CLI (the studio does not read `.env`).
   E2E for layout, themes and a big flow.
 - 2026-11-28 · home machine (account B) · Workspace Board redesigned with DevOps, designer and end
   user to 10/10: cards, last run, attention list, links, layout, prod runs; 17 Board E2E tests.
+- 2026-11-28 · home machine (account B) · Connectors, Agent library and Run history redone with
+  DevOps, designer and end user; Board measured with 40 flows (one runs scan); tests isolated from
+  the machine; README rewritten, full guide in docs/guide.md.

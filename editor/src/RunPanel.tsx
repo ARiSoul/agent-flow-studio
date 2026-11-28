@@ -727,7 +727,7 @@ export function RunPanel({ flow, doc, dirty, mock, onTrace, request, focus, onFo
         <div className="rp-body">
           <HistoryView flow={flow} spec={spec} current={run?.input} refresh={histKey} graph={graph}
             onOpen={(inp) => openPast(inp)} onOpenStep={openStep} onRerun={(p) => rerun(p.input, p.mode, p.target)} onEdit={(inp) => editRun(inp)}
-            onFromStep={(inp) => runFromStep(inp)}
+            onFromStep={(inp) => runFromStep(inp)} onRetrySetting={onRetrySetting}
             onChanged={(inp, gone) => { loadPast(); if (gone && run?.input === inp) clear(); }} />
         </div>
       </div>

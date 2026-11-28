@@ -269,6 +269,7 @@ function Editor() {
   // ---- shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (document.querySelector(".modal-shell")) return;  // a window is open: its keys only
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key === "s") { e.preventDefault(); save(); }
       if (mod && e.key === "Enter" && !(e.target as HTMLElement)?.closest?.("input,textarea,select,.dialog-layer,.ctx-menu,.modal,.right")) {

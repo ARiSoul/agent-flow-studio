@@ -793,3 +793,18 @@ def test_a_paused_run_goes_on_after_a_restart(flows):
         assert [c[1] for c in q.calls if c[0] == "planner"][-1] == "s-planner-1"
 
     run(later())
+
+
+def test_a_run_with_an_unpriced_step_says_so(flows, tmp_path):
+    """A step on a gateway has no list price (cost None): the run and the totals say so, so the
+    total spent is never read as exact."""
+    rn = Runner(flows, agent_query())
+    run(_start(rn, "u1"))
+    run(_start(rn, "u2"))
+    f = tmp_path / "runs" / "u1" / "events.jsonl"
+    with f.open("a", encoding="utf-8") as out:
+        out.write(json.dumps({"type": "result", "agent": "writer", "cost": None}) + "\n")
+    again = Runner(flows, agent_query())
+    runs = {r["input"]: r for r in again.past_runs("parallel")}
+    assert runs["u1"]["unpriced"] is True and runs["u2"]["unpriced"] is False
+    assert again.past_stats("parallel")["unpriced"] == 1

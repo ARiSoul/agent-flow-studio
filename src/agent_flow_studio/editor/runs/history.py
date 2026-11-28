@@ -178,6 +178,9 @@ class HistoryMixin:
             "cost": round(sum(float(e.get("cost") or 0) for e in every  # all attempts
                               if e.get("type") == "result"), 4),
             "attempts": max(1, attempts),
+            # a step on a provider with no list price (a gateway): its cost is not in `cost`
+            "unpriced": any(e.get("type") == "result" and "cost" in e and e["cost"] is None
+                            for e in every),
         }
         if status == "gate":  # since when it waits
             out["since"] = (end or {}).get("ts")
@@ -358,23 +361,30 @@ class HistoryMixin:
 
     def _all_past(self, flow: str) -> list[dict[str, Any]]:
         """Every saved run of a flow in this workspace, newest first."""
-        out = []
+        return self.past_by_flow(flow).get(flow, [])
+
+    def past_by_flow(self, only: str | None = None) -> dict[str, list[dict[str, Any]]]:
+        """The saved runs of this workspace grouped by flow (of one flow if given), newest
+        first: one scan of the runs folder (the Board asks for every flow at once)."""
+        out: dict[str, list[dict[str, Any]]] = {}
         root = workspaces.scoped(settings.runs_dir)  # the runs of this workspace
         if not root.is_dir():
-            return []
+            return out
         here = workspaces.current().name
+        live = {r.id: r for r in self.runs.values()}
         for d in root.iterdir():
             if not d.is_dir() or d.name.startswith((".", "@")) or d.name == "chats":
                 continue
             s = self._run_summary(d)
-            if s is None or s["flow"] != flow or s["workspace"] != here:
+            if s is None or s["workspace"] != here or (only is not None and s["flow"] != only):
                 continue
-            live = next((r for r in self.runs.values() if r.id == s["run"]), None)
-            item = {**s, "open": live is not None, "title": self._title_of(d)}
-            if live is not None and live.status == "running":
+            r = live.get(s["run"])
+            item = {**s, "open": r is not None, "title": self._title_of(d)}
+            if r is not None and r.status == "running":
                 item |= {"status": "running", "ended": None}
-            out.append(item)
-        out.sort(key=lambda x: -(x["started"] or 0))
+            out.setdefault(str(s["flow"]), []).append(item)
+        for runs in out.values():
+            runs.sort(key=lambda x: -(x["started"] or 0))
         return out
 
     def trash(self, flow: str | None = None) -> list[dict[str, Any]]:

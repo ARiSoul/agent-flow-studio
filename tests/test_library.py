@@ -134,3 +134,14 @@ def test_api_list_save_and_validate(client: TestClient):
     raw = _flow_with("summary", s["agent"] | {"origin": {"agent": "summarizer", "hash": s["hash"]}})
     v = client.post("/api/flows/pipeline/validate", json={"spec": raw, "prompts": {}}).json()
     assert v["origins"]["summary"]["changed"] is False
+
+
+def test_api_check_says_what_save_would_refuse(client: TestClient):
+    """The library window checks while you type: nothing is saved."""
+    ok = {"id": "notes", "title": "Notes", "agent_yaml": "description: Takes notes.\n", "prompt": "Write notes."}
+    assert client.post("/api/agents/check", json=ok, headers=H).json() == {"ok": True}
+    bad_yaml = client.post("/api/agents/check", json=ok | {"agent_yaml": "description: [unclosed"}, headers=H).json()
+    assert bad_yaml["ok"] is False and "invalid YAML" in bad_yaml["error"]
+    bad_id = client.post("/api/agents/check", json=ok | {"id": "Notes!"}, headers=H).json()
+    assert bad_id["ok"] is False and "invalid library agent id" in bad_id["error"]
+    assert not any(x["id"] == "notes" for x in client.get("/api/agents").json())  # nothing saved

@@ -55,6 +55,40 @@ def _workspaces(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _connection_files(tmp_path, monkeypatch):
+    """Safety net: the local and public connectors and the model providers of the tests are
+    temporary files (a test that saves a connector never writes the machine's connections.yaml
+    or the repository's connections.public.yaml)."""
+    monkeypatch.setenv("CONNECTIONS_FILE", str(tmp_path / "connections.yaml"))
+    monkeypatch.setenv("PROVIDERS_FILE", str(tmp_path / "providers.yaml"))
+    monkeypatch.setenv("AFS_PUBLIC_CONNECTIONS_FILE", str(tmp_path / "connections.public.yaml"))
+
+
+@pytest.fixture(autouse=True)
+def _memory_keyring(monkeypatch):
+    """Safety net: secrets and sign-in tokens saved by a test go to a dictionary, never to the
+    machine's keyring (a test may still put its own fake in place)."""
+    from agent_flow_studio import providers
+    from agent_flow_studio.connections import store
+    vault: dict = {}
+
+    class Memory:
+        set_password = staticmethod(lambda s, u, v: vault.__setitem__((s, u), v))
+        get_password = staticmethod(lambda s, u: vault.get((s, u)))
+
+        @staticmethod
+        def delete_password(s, u):
+            if (s, u) not in vault:
+                import keyring.errors
+                raise keyring.errors.PasswordDeleteError(u)
+            vault.pop((s, u))
+
+    monkeypatch.setattr(store, "_keyring", lambda: Memory)
+    if hasattr(providers, "_keyring"):
+        monkeypatch.setattr(providers, "_keyring", lambda: Memory)
+
+
+@pytest.fixture(autouse=True)
 def _claude_config(tmp_path, monkeypatch):
     """Safety net: Claude Code sessions and memory notes of the tests are a temporary folder."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
